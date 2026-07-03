@@ -95,64 +95,94 @@ def resolve_key(key_name: str):
 class RecordingWidget:
     """Floating Wispr-style pill shown while dictating.
 
-    Mirrors Wispr Flow's mini window: frameless, transparent, always on
-    top, never takes focus. States are driven via setState() in widget.html.
+    Built as a native, non-activating NSPanel hosting a WKWebView (which
+    renders web/widget.html). A plain NSWindow — which is all pywebview can
+    create — will NOT appear over another app's native-fullscreen Space, no
+    matter the level or collection behavior. Only a panel with the
+    NSWindowStyleMaskNonactivating style crosses onto a fullscreen Space,
+    which is how Wispr's pill floats over everything. It never takes focus,
+    so paste-at-cursor is undisturbed.
     """
 
     WIDTH, HEIGHT = 232, 52
-    BOTTOM_MARGIN = 80
+    BOTTOM_MARGIN = 72
+
+    # AppKit constants (stable ABI values)
+    _STYLE_NONACTIVATING = 1 << 7
+    _CB_CAN_JOIN_ALL_SPACES = 1 << 0
+    _CB_STATIONARY = 1 << 4
+    _CB_FULLSCREEN_AUX = 1 << 8
+    _SCREEN_SAVER_LEVEL = 1000
 
     def __init__(self):
-        self._window = None
+        self._panel = None
+        self._webview = None
 
     def create(self) -> None:
-        import webview
-        screen = webview.screens[0]
-        x = int((screen.width - self.WIDTH) / 2)
-        y = int(screen.height - self.HEIGHT - self.BOTTOM_MARGIN)
-        self._window = webview.create_window(
-            "Voisr Recording", str(WEB_DIR / "widget.html"),
-            width=self.WIDTH, height=self.HEIGHT, x=x, y=y,
-            frameless=True, on_top=True, transparent=True,
-            focus=False, resizable=False, hidden=True)
-
-    def _set(self, state: str) -> None:
-        if self._window is None:
-            return
-        try:
-            self._window.evaluate_js(f'setState("{state}")')
-            self._order_front()
-        except Exception:
-            pass  # window not ready yet; never break the record path
-
-    def _order_front(self) -> None:
-        """Show the pill over EVERYTHING — other apps, other Spaces, and
-        fullscreen apps — without activating Voisr (which would steal focus
-        and break paste-at-cursor). This is the canonical overlay recipe:
-        screen-saver window level + join-all-spaces so it rides along onto
-        whatever Space (including a fullscreen app's) is currently active."""
+        """Build the panel + webview on the main thread and preload the HTML.
+        Safe to call from a worker thread (dispatches onto the main thread)."""
         try:
             from PyObjCTools import AppHelper
-            win = self._window.native
-
-            # NSWindowCollectionBehavior bits (values are stable API):
-            CAN_JOIN_ALL_SPACES = 1 << 0
-            STATIONARY = 1 << 4
-            IGNORES_CYCLE = 1 << 6
-            FULLSCREEN_AUXILIARY = 1 << 8
-            SCREEN_SAVER_LEVEL = 1000  # NSScreenSaverWindowLevel
-
-            def show():
-                win.setLevel_(SCREEN_SAVER_LEVEL)
-                win.setCollectionBehavior_(
-                    CAN_JOIN_ALL_SPACES | STATIONARY | IGNORES_CYCLE
-                    | FULLSCREEN_AUXILIARY)
-                win.setHidesOnDeactivate_(False)
-                win.orderFrontRegardless()
-
-            AppHelper.callAfter(show)
+            AppHelper.callAfter(self._build)
         except Exception:
-            self._window.show()
+            pass
+
+    def _build(self) -> None:
+        try:
+            from AppKit import (NSPanel, NSColor, NSBackingStoreBuffered,
+                                NSScreen)
+            from WebKit import WKWebView, WKWebViewConfiguration
+            from Foundation import NSMakeRect, NSURL
+
+            frame = NSScreen.mainScreen().frame()
+            x = (frame.size.width - self.WIDTH) / 2
+            y = self.BOTTOM_MARGIN
+            rect = NSMakeRect(x, y, self.WIDTH, self.HEIGHT)
+
+            panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+                rect, self._STYLE_NONACTIVATING, NSBackingStoreBuffered, False)
+            panel.setFloatingPanel_(True)
+            panel.setBecomesKeyOnlyIfNeeded_(True)
+            panel.setLevel_(self._SCREEN_SAVER_LEVEL)
+            panel.setCollectionBehavior_(
+                self._CB_CAN_JOIN_ALL_SPACES | self._CB_STATIONARY
+                | self._CB_FULLSCREEN_AUX)
+            panel.setHidesOnDeactivate_(False)
+            panel.setOpaque_(False)
+            panel.setBackgroundColor_(NSColor.clearColor())
+            panel.setTitle_("Voisr Recording")  # for identification, not shown
+
+            cfg = WKWebViewConfiguration.alloc().init()
+            wv = WKWebView.alloc().initWithFrame_configuration_(
+                NSMakeRect(0, 0, self.WIDTH, self.HEIGHT), cfg)
+            wv.setValue_forKey_(False, "drawsBackground")  # transparent
+            html = WEB_DIR / "widget.html"
+            wv.loadFileURL_allowingReadAccessToURL_(
+                NSURL.fileURLWithPath_(str(html)),
+                NSURL.fileURLWithPath_(str(WEB_DIR)))
+            panel.setContentView_(wv)
+
+            self._panel = panel
+            self._webview = wv
+        except Exception as e:
+            print(f"Voisr widget: build failed: {e}", flush=True)
+
+    def _set(self, state: str) -> None:
+        try:
+            from PyObjCTools import AppHelper
+
+            def go():
+                if self._panel is None:
+                    self._build()
+                if self._webview is None:
+                    return
+                self._webview.evaluateJavaScript_completionHandler_(
+                    f'setState("{state}")', None)
+                self._panel.orderFrontRegardless()
+
+            AppHelper.callAfter(go)
+        except Exception:
+            pass  # never break the record path
 
     def show_recording(self):
         self._set("recording")
@@ -167,10 +197,14 @@ class RecordingWidget:
         self._set("error")
 
     def hide(self):
-        if self._window is None:
-            return
         try:
-            self._window.hide()
+            from PyObjCTools import AppHelper
+
+            def go():
+                if self._panel is not None:
+                    self._panel.orderOut_(None)
+
+            AppHelper.callAfter(go)
         except Exception:
             pass
 
