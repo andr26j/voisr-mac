@@ -15,10 +15,30 @@ A local-only macOS clone of [Wispr Flow](https://wisprflow.ai)'s core loop: **ho
 bash setup.sh   # installs whisper-cpp (brew), downloads the model (~141 MB), creates venv
 ```
 
-## Usage
+## Desktop app (dashboard)
+
+A Wispr Flow–style dashboard: record dictations, browse history, track stats (words, WPM, streak), edit your dictionary, and change settings.
+
+```bash
+bash scripts/install_app.sh   # installs to ~/Applications/WisprLocal.app
+open ~/Applications/WisprLocal.app
+```
+
+The installer copies the runtime to `~/Library/Application Support/WisprLocal` (macOS blocks apps from reading Desktop paths without per-app grants, so the app can't run out of this folder directly). The installed app keeps its own `config.json` and history there; re-run the installer after pulling code changes.
+
+For development, run the same dashboard straight from the repo:
+
+```bash
+./venv/bin/python -m wisprlocal.ui
+```
+
+On first recording, macOS will ask for Microphone access — allow it once.
+
+## CLI usage
 
 ```bash
 # Toggle mode (default; no special permissions beyond Microphone)
+
 ./venv/bin/python -m wisprlocal.app
 
 # Push-to-talk: hold right-Option to record, release to transcribe + paste
