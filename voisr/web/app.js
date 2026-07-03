@@ -212,9 +212,14 @@ async function addDictEntry(e) {
 /* ---------- settings ---------- */
 
 async function renderSettings() {
-  const cfg = await api().get_config();
+  const [cfg, options, status] = await Promise.all([
+    api().get_config(), api().get_hotkey_options(), api().get_hotkey_status(),
+  ]);
   $("#paste-toggle").checked = !!cfg.paste;
-  $("#hotkey-pill").textContent = cfg.hotkey || "alt_r";
+  const sel = $("#hotkey-select");
+  sel.innerHTML = options.map((o) =>
+    `<option value="${o.value}"${o.value === cfg.hotkey ? " selected" : ""}>${o.label}</option>`).join("");
+  $("#hotkey-status").textContent = status.status;
 }
 
 /* ---------- init ---------- */
@@ -227,6 +232,12 @@ function init() {
   $("#paste-toggle").addEventListener("change", async (e) => {
     await api().set_config({ paste: e.target.checked });
     toast(e.target.checked ? "Auto-paste enabled" : "Auto-paste disabled");
+  });
+  $("#hotkey-select").addEventListener("change", async (e) => {
+    await api().set_config({ hotkey: e.target.value });
+    const status = await api().get_hotkey_status();
+    $("#hotkey-status").textContent = status.status;
+    toast(`Push-to-talk key set to ${e.target.selectedOptions[0].textContent}`);
   });
   show("home");
 }
@@ -252,6 +263,12 @@ setTimeout(() => {
     set_config: async (u) => Object.assign(mockCfg, u),
     delete_history_item: async (id) => { mockHistory = mockHistory.filter((i) => i.id !== id); return { ok: true }; },
     copy_text: async () => ({ ok: true }),
+    get_hotkey_options: async () => [
+      { value: "alt_r", label: "Right Option (\u2325)" }, { value: "alt_l", label: "Left Option (\u2325)" },
+      { value: "cmd_r", label: "Right Command (\u2318)" }, { value: "ctrl_r", label: "Right Control (\u2303)" },
+      { value: "shift_r", label: "Right Shift (\u21e7)" }, { value: "f13", label: "F13" }, { value: "f14", label: "F14" },
+    ],
+    get_hotkey_status: async () => ({ status: `active on ${mockCfg.hotkey}` }),
     start_recording: async () => { recording = true; return { recording: true }; },
     stop_recording: async () => {
       if (!recording) return { error: "not recording" };

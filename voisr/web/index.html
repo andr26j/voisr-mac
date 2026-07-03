@@ -153,9 +153,10 @@
         <div class="setting-row">
           <div>
             <h2>Push-to-talk key</h2>
-            <p class="setting-desc">Hold to record from any app: run <code>python -m voisr.app --mode hotkey</code>. Needs Input Monitoring permission.</p>
+            <p class="setting-desc">Hold this key in any app to dictate; release to transcribe and paste. Needs Input Monitoring permission (System Settings &rarr; Privacy &amp; Security).</p>
+            <p class="setting-status" id="hotkey-status"></p>
           </div>
-          <span class="pill" id="hotkey-pill">alt_r</span>
+          <select id="hotkey-select" class="select" aria-label="Push-to-talk key"></select>
         </div>
         <div class="setting-row">
           <div>

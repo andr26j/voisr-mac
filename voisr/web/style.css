@@ -413,3 +413,22 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   .home-side { flex-direction: row; }
   .stat-card { flex: 1; }
 }
+
+/* ---------- Select ---------- */
+
+.select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  padding: 0 12px;
+  height: 44px;
+  min-width: 190px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.select:focus-visible { outline: 2px solid var(--ring); outline-offset: -1px; }
+
+.setting-status { font-size: 12px; font-weight: 600; color: var(--success); margin-top: 6px; }
