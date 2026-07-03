@@ -26,7 +26,8 @@ echo "==> Creating venv"
 "$APPSUP/venv/bin/pip" install -q -r "$APPSUP/requirements.txt"
 
 echo "==> Creating $APPDIR"
-mkdir -p "$APPDIR/Contents/MacOS"
+mkdir -p "$APPDIR/Contents/MacOS" "$APPDIR/Contents/Resources"
+cp "$PROJECT/assets/Voisr.icns" "$APPDIR/Contents/Resources/Voisr.icns"
 cat > "$APPDIR/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -48,6 +49,8 @@ cat > "$APPDIR/Contents/Info.plist" <<'PLIST'
     <string>Voisr</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Voisr records your voice to transcribe it on-device.</string>
+    <key>CFBundleIconFile</key>
+    <string>Voisr</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

@@ -1,0 +1,16 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Voisr logo">
+  <defs>
+    <linearGradient id="voisr-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F0764B"/>
+      <stop offset="1" stop-color="#DE5530"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" rx="228" fill="url(#voisr-bg)"/>
+  <g fill="#FFFFFF">
+    <rect x="200" y="282" width="80" height="460" rx="40"/>
+    <rect x="336" y="362" width="80" height="300" rx="40"/>
+    <rect x="472" y="422" width="80" height="180" rx="40"/>
+    <rect x="608" y="362" width="80" height="300" rx="40"/>
+    <rect x="744" y="282" width="80" height="460" rx="40"/>
+  </g>
+</svg>

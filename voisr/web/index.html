@@ -11,7 +11,16 @@
 
   <aside class="sidebar">
     <div class="brand">
-      <span class="brand-dot" aria-hidden="true"></span>
+      <svg class="brand-mark" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect x="0" y="0" width="1024" height="1024" rx="228" fill="#E8643C"/>
+        <g fill="#FFFFFF">
+          <rect x="200" y="282" width="80" height="460" rx="40"/>
+          <rect x="336" y="362" width="80" height="300" rx="40"/>
+          <rect x="472" y="422" width="80" height="180" rx="40"/>
+          <rect x="608" y="362" width="80" height="300" rx="40"/>
+          <rect x="744" y="282" width="80" height="460" rx="40"/>
+        </g>
+      </svg>
       <span class="brand-name">Voisr</span>
     </div>
 
@@ -143,7 +152,7 @@
         <div class="setting-row">
           <div>
             <h2>Auto-paste in hotkey mode</h2>
-            <p class="setting-desc">When using push-to-talk (<code>--mode hotkey</code>), also press Cmd-V into the app you're in. Needs Accessibility permission.</p>
+            <p class="setting-desc">After a push-to-talk dictation, paste the text straight into the app you're in (Cmd-V). Needs Accessibility permission.</p>
           </div>
           <label class="switch">
             <input type="checkbox" id="paste-toggle">
