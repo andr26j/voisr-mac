@@ -1,0 +1,10 @@
+{
+  "hotkey": "alt_r",
+  "paste": true,
+  "device": ":0",
+  "dictionary": {
+    "trade mate": "TradeMate",
+    "trademake": "TradeMate",
+    "trademate": "TradeMate"
+  }
+}
