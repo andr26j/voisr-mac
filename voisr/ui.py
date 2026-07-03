@@ -36,13 +36,100 @@ def resolve_key(key_name: str):
     return named if named is not None else keyboard.KeyCode.from_char(key_name)
 
 
+class RecordingWidget:
+    """Floating Wispr-style pill shown while dictating.
+
+    Mirrors Wispr Flow's mini window: frameless, transparent, always on
+    top, never takes focus. States are driven via setState() in widget.html.
+    """
+
+    WIDTH, HEIGHT = 232, 52
+    BOTTOM_MARGIN = 80
+
+    def __init__(self):
+        self._window = None
+
+    def create(self) -> None:
+        import webview
+        screen = webview.screens[0]
+        x = int((screen.width - self.WIDTH) / 2)
+        y = int(screen.height - self.HEIGHT - self.BOTTOM_MARGIN)
+        self._window = webview.create_window(
+            "Voisr Recording", str(WEB_DIR / "widget.html"),
+            width=self.WIDTH, height=self.HEIGHT, x=x, y=y,
+            frameless=True, on_top=True, transparent=True,
+            focus=False, resizable=False, hidden=True)
+
+    def _set(self, state: str) -> None:
+        if self._window is None:
+            return
+        try:
+            self._window.evaluate_js(f'setState("{state}")')
+            self._window.show()
+        except Exception:
+            pass  # window not ready yet; never break the record path
+
+    def show_recording(self):
+        self._set("recording")
+
+    def show_processing(self):
+        self._set("processing")
+
+    def show_done(self):
+        self._set("done")
+
+    def show_error(self):
+        self._set("error")
+
+    def hide(self):
+        if self._window is None:
+            return
+        try:
+            self._window.hide()
+        except Exception:
+            pass
+
+
 class HotkeyService:
     """Global push-to-talk listener driving the shared Api record path."""
 
-    def __init__(self, api):
+    def __init__(self, api, widget=None, hide_delay=1.2):
         self._api = api
+        self._widget = widget
+        self._hide_delay = hide_delay
         self._listener = None
+        self._pressed = False
         self.status = "not started"
+
+    def _widget_enabled(self) -> bool:
+        return self._widget is not None and bool(self._api.get_config().get("show_widget", True))
+
+    def press(self) -> None:
+        if self._pressed:
+            return
+        self._pressed = True
+        if self._widget_enabled():
+            self._widget.show_recording()
+        self._api.start_recording()
+
+    def release(self) -> None:
+        if not self._pressed:
+            return
+        self._pressed = False
+        show = self._widget_enabled()
+        if show:
+            self._widget.show_processing()
+        result = self._api.stop_recording(paste=True)
+        if show:
+            if "error" in result:
+                self._widget.show_error()
+            else:
+                self._widget.show_done()
+            if self._hide_delay:
+                import threading
+                threading.Timer(self._hide_delay, self._widget.hide).start()
+            else:
+                self._widget.hide()
 
     def start(self, key_name: str) -> None:
         try:
@@ -51,11 +138,11 @@ class HotkeyService:
 
             def on_press(key):
                 if key == target:
-                    self._api.start_recording()
+                    self.press()
 
             def on_release(key):
                 if key == target:
-                    self._api.stop_recording(paste=True)
+                    self.release()
 
             self._listener = keyboard.Listener(on_press=on_press, on_release=on_release)
             self._listener.daemon = True
@@ -162,11 +249,13 @@ class Api:
 def main():
     import webview
     api = Api()
-    service = HotkeyService(api)
+    widget = RecordingWidget()
+    service = HotkeyService(api, widget=widget)
     api.attach_hotkey_service(service)
     service.start(api.get_config().get("hotkey", "alt_r"))
     window = webview.create_window("Voisr", str(WEB_DIR / "index.html"),
                                    js_api=api, width=1060, height=700, min_size=(860, 560))
+    widget.create()
     try:
         webview.start()
     finally:

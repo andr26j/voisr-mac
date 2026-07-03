@@ -9,7 +9,8 @@ from voisr.inject import paste_at_cursor, set_clipboard
 from voisr.recorder import Recorder
 from voisr.transcriber import transcribe
 
-DEFAULT_CONFIG = {"hotkey": "alt_r", "paste": True, "device": ":0", "dictionary": {}}
+DEFAULT_CONFIG = {"hotkey": "alt_r", "paste": True, "device": ":0", "dictionary": {},
+                  "show_widget": True}
 
 
 def load_config(path) -> dict:

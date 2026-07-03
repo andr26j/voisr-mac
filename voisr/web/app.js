@@ -216,6 +216,7 @@ async function renderSettings() {
     api().get_config(), api().get_hotkey_options(), api().get_hotkey_status(),
   ]);
   $("#paste-toggle").checked = !!cfg.paste;
+  $("#widget-toggle").checked = cfg.show_widget !== false;
   const sel = $("#hotkey-select");
   sel.innerHTML = options.map((o) =>
     `<option value="${o.value}"${o.value === cfg.hotkey ? " selected" : ""}>${o.label}</option>`).join("");
@@ -232,6 +233,10 @@ function init() {
   $("#paste-toggle").addEventListener("change", async (e) => {
     await api().set_config({ paste: e.target.checked });
     toast(e.target.checked ? "Auto-paste enabled" : "Auto-paste disabled");
+  });
+  $("#widget-toggle").addEventListener("change", async (e) => {
+    await api().set_config({ show_widget: e.target.checked });
+    toast(e.target.checked ? "Recording widget on" : "Recording widget off");
   });
   $("#hotkey-select").addEventListener("change", async (e) => {
     await api().set_config({ hotkey: e.target.value });
@@ -254,7 +259,7 @@ setTimeout(() => {
     { id: "a2", ts: now - 7200, text: "Draft a follow-up about the Brunswick site visit next week.", words: 10, duration_s: 6 },
     { id: "a3", ts: now - 90000, text: "Remember to book the trailer for Saturday morning.", words: 8, duration_s: 4 },
   ];
-  let mockCfg = { hotkey: "alt_r", paste: true, device: ":0", dictionary: { trademake: "TradeMate", "trade mate": "TradeMate" } };
+  let mockCfg = { hotkey: "alt_r", paste: true, show_widget: true, device: ":0", dictionary: { trademake: "TradeMate", "trade mate": "TradeMate" } };
   let recording = false;
   window.pywebview = { api: {
     get_history: async () => [...mockHistory].sort((a, b) => b.ts - a.ts),
