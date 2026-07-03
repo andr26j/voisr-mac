@@ -126,17 +126,28 @@ class RecordingWidget:
             pass  # window not ready yet; never break the record path
 
     def _order_front(self) -> None:
-        """Show without activating: pywebview's show() calls
-        activateIgnoringOtherApps_, which would steal focus from the app
-        the user is dictating into and break paste-at-cursor."""
+        """Show the pill over EVERYTHING — other apps, other Spaces, and
+        fullscreen apps — without activating Voisr (which would steal focus
+        and break paste-at-cursor). This is the canonical overlay recipe:
+        screen-saver window level + join-all-spaces so it rides along onto
+        whatever Space (including a fullscreen app's) is currently active."""
         try:
             from PyObjCTools import AppHelper
             win = self._window.native
 
+            # NSWindowCollectionBehavior bits (values are stable API):
+            CAN_JOIN_ALL_SPACES = 1 << 0
+            STATIONARY = 1 << 4
+            IGNORES_CYCLE = 1 << 6
+            FULLSCREEN_AUXILIARY = 1 << 8
+            SCREEN_SAVER_LEVEL = 1000  # NSScreenSaverWindowLevel
+
             def show():
-                # canJoinAllSpaces | fullScreenAuxiliary: follow the user to
-                # any Space or fullscreen app, like Wispr's pill
-                win.setCollectionBehavior_(win.collectionBehavior() | (1 << 0) | (1 << 8))
+                win.setLevel_(SCREEN_SAVER_LEVEL)
+                win.setCollectionBehavior_(
+                    CAN_JOIN_ALL_SPACES | STATIONARY | IGNORES_CYCLE
+                    | FULLSCREEN_AUXILIARY)
+                win.setHidesOnDeactivate_(False)
                 win.orderFrontRegardless()
 
             AppHelper.callAfter(show)
