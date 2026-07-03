@@ -66,6 +66,8 @@ def test_set_config_without_hotkey_change_does_not_restart(tmp_path):
 def test_get_hotkey_status(tmp_path):
     svc = FakeHotkeyService()
     api = make_api(tmp_path, service=svc)
-    assert api.get_hotkey_status() == {"status": "active on alt_r"}
+    status = api.get_hotkey_status()["status"]
+    assert status.startswith("active on alt_r")
+    assert ("paste ready" in status) or ("Accessibility" in status)
     api_no_svc = make_api(tmp_path)
     assert "hotkey" in api_no_svc.get_hotkey_status()["status"].lower() or api_no_svc.get_hotkey_status()["status"]

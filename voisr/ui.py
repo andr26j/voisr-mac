@@ -10,6 +10,36 @@ from voisr.inject import paste_at_cursor, set_clipboard
 from voisr.recorder import Recorder
 from voisr.transcriber import transcribe
 
+
+def default_recorder():
+    """Prefer the zero-latency persistent stream; fall back to ffmpeg."""
+    try:
+        from voisr.stream_recorder import StreamRecorder
+        return StreamRecorder()
+    except Exception:
+        return Recorder()
+
+
+def request_permissions() -> None:
+    """Trigger the macOS grant dialogs Voisr needs (no-ops once granted):
+    Input Monitoring (hotkey listening) and Accessibility (Cmd-V posting)."""
+    try:
+        import Quartz
+        if not Quartz.CGPreflightListenEventAccess():
+            Quartz.CGRequestListenEventAccess()
+        if not Quartz.CGPreflightPostEventAccess():
+            Quartz.CGRequestPostEventAccess()
+    except Exception:
+        pass
+
+
+def paste_ready() -> bool:
+    try:
+        import Quartz
+        return bool(Quartz.CGPreflightPostEventAccess())
+    except Exception:
+        return False
+
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
@@ -107,10 +137,12 @@ class HotkeyService:
     def press(self) -> None:
         if self._pressed:
             return
+        result = self._api.start_recording()
+        if "error" in result:
+            return  # e.g. a dashboard recording is already running
         self._pressed = True
         if self._widget_enabled():
             self._widget.show_recording()
-        self._api.start_recording()
 
     def release(self) -> None:
         if not self._pressed:
@@ -119,6 +151,13 @@ class HotkeyService:
         show = self._widget_enabled()
         if show:
             self._widget.show_processing()
+        # Transcription takes seconds; it must NOT run inside the pynput
+        # callback: macOS disables event taps whose callbacks stall, and
+        # pynput never re-enables them (the hotkey would die after one use).
+        import threading
+        threading.Thread(target=self._finish, args=(show,), daemon=True).start()
+
+    def _finish(self, show: bool) -> None:
         result = self._api.stop_recording(paste=True)
         if show:
             if "error" in result:
@@ -126,10 +165,9 @@ class HotkeyService:
             else:
                 self._widget.show_done()
             if self._hide_delay:
-                import threading
-                threading.Timer(self._hide_delay, self._widget.hide).start()
-            else:
-                self._widget.hide()
+                import time
+                time.sleep(self._hide_delay)
+            self._widget.hide()
 
     def start(self, key_name: str) -> None:
         try:
@@ -169,7 +207,7 @@ class Api:
                  clock=time.monotonic, hotkey_service=None):
         self._config_path = Path(config_path)
         self._history = history or HistoryStore(ROOT / "data" / "history.jsonl")
-        self._recorder = recorder or Recorder()
+        self._recorder = recorder or default_recorder()
         self._transcribe_fn = transcribe_fn
         self._clock = clock
         self._hotkey_service = hotkey_service
@@ -239,7 +277,11 @@ class Api:
     def get_hotkey_status(self):
         if self._hotkey_service is None:
             return {"status": "push-to-talk not running"}
-        return {"status": self._hotkey_service.status}
+        status = self._hotkey_service.status
+        if status.startswith("active") and self.get_config().get("paste"):
+            status += " · paste ready" if paste_ready() \
+                else " · grant Accessibility to auto-paste"
+        return {"status": status}
 
     def copy_text(self, text):
         set_clipboard(text)
@@ -248,6 +290,7 @@ class Api:
 
 def main():
     import webview
+    request_permissions()
     api = Api()
     widget = RecordingWidget()
     service = HotkeyService(api, widget=widget)

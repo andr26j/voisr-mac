@@ -52,33 +52,24 @@ def toggle_mode(cfg) -> None:
         wav.unlink(missing_ok=True)
 
 
-def hotkey_mode(cfg) -> None:
-    from pynput import keyboard
+def hotkey_mode(cfg, config_path) -> None:
+    # Reuse the app's HotkeyService: zero-latency stream capture and
+    # transcription off the event-tap thread (a blocked tap gets disabled
+    # by macOS and pynput never re-enables it).
+    import time
 
-    rec = Recorder(cfg["device"])
-    state = {"wav": None}
-    key_name = cfg["hotkey"]
-    target = getattr(keyboard.Key, key_name, None) or keyboard.KeyCode.from_char(key_name)
-    print(f"Hold [{key_name}] to talk. Ctrl-C to quit.")
+    from voisr.ui import Api, HotkeyService, default_recorder, request_permissions
 
-    def on_press(key):
-        if key == target and state["wav"] is None:
-            state["wav"] = Path(tempfile.mkstemp(suffix=".wav")[1])
-            rec.start(state["wav"])
-            print("● recording...")
-
-    def on_release(key):
-        if key == target and state["wav"] is not None:
-            rec.stop()
-            wav, state["wav"] = state["wav"], None
-            if wav.exists() and wav.stat().st_size >= 1000:
-                deliver(process_audio(wav, cfg["dictionary"]), cfg["paste"])
-            else:
-                print("(recording too short — hold the key while speaking)")
-            wav.unlink(missing_ok=True)
-
-    with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
-        listener.join()
+    request_permissions()
+    api = Api(config_path=config_path, recorder=default_recorder())
+    service = HotkeyService(api)
+    service.start(cfg["hotkey"])
+    print(f"Hold [{cfg['hotkey']}] to talk. Ctrl-C to quit. ({service.status})")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        service.stop()
 
 
 def main() -> None:
@@ -98,7 +89,7 @@ def main() -> None:
         wav = to_wav16k(args.file, args.file + ".16k.wav")
         print(process_audio(wav, cfg["dictionary"]))
     elif args.mode == "hotkey":
-        hotkey_mode(cfg)
+        hotkey_mode(cfg, args.config)
     else:
         try:
             toggle_mode(cfg)
