@@ -228,6 +228,7 @@ class HotkeyService:
             self.status = ("waiting for permission — grant Voisr under System "
                            "Settings → Privacy & Security → Input Monitoring "
                            "and Accessibility")
+            print(f"Voisr hotkey: {self.status}", flush=True)
             self._watch_for_permissions(key_name)
             return
         try:
@@ -260,8 +261,10 @@ class HotkeyService:
                                "Monitoring in System Settings, then relaunch Voisr")
                 return
             self.status = f"active on {key_name}"
+            print(f"Voisr hotkey: {self.status}", flush=True)
         except Exception as e:  # missing Input Monitoring permission, etc.
             self.status = f"unavailable: {e}"
+            print(f"Voisr hotkey: {self.status}", flush=True)
 
     def _watch_for_permissions(self, key_name: str) -> None:
         if self._watcher is not None:
@@ -434,6 +437,12 @@ def main():
     print(f"Voisr starting (python arch: {platform.machine()}, {audio}, "
           f"whisper: {whisper})", flush=True)
     request_permissions()
+    try:
+        import Quartz
+        print(f"Voisr permissions: listen={bool(Quartz.CGPreflightListenEventAccess())} "
+              f"post={bool(Quartz.CGPreflightPostEventAccess())}", flush=True)
+    except Exception as e:
+        print(f"Voisr permissions: preflight unavailable ({e})", flush=True)
     from voisr.inject import prepare_paste_controller
     prepare_paste_controller()  # must happen on the main thread (TIS APIs)
     api = Api()
