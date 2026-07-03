@@ -120,14 +120,28 @@ class RecordingWidget:
             pass
 
 
+def input_permissions_ok() -> bool:
+    """True when Voisr may listen for global keys (and post events)."""
+    try:
+        import Quartz
+        return bool(Quartz.CGPreflightListenEventAccess())
+    except Exception:
+        return True  # non-pyobjc environments (tests, other platforms)
+
+
 class HotkeyService:
     """Global push-to-talk listener driving the shared Api record path."""
 
-    def __init__(self, api, widget=None, hide_delay=1.2):
+    def __init__(self, api, widget=None, hide_delay=1.2,
+                 permissions_check=input_permissions_ok, poll_interval=3.0):
         self._api = api
         self._widget = widget
         self._hide_delay = hide_delay
+        self._permissions_check = permissions_check
+        self._poll_interval = poll_interval
         self._listener = None
+        self._watcher = None
+        self._stopped = False
         self._pressed = False
         self.status = "not started"
 
@@ -170,29 +184,74 @@ class HotkeyService:
             self._widget.hide()
 
     def start(self, key_name: str) -> None:
+        self._stopped = False
+        # Never create an event tap in an untrusted process: macOS can kill
+        # the app on repeated tap attempts (this crashed Settings changes).
+        # Wait for the grant in the background and activate when it lands.
+        if not self._permissions_check():
+            self.status = ("waiting for permission — grant Voisr under System "
+                           "Settings → Privacy & Security → Input Monitoring "
+                           "and Accessibility")
+            self._watch_for_permissions(key_name)
+            return
         try:
             from pynput import keyboard
             target = resolve_key(key_name)
 
+            # Callbacks must never raise: pynput kills the listener on any
+            # callback exception and the hotkey would go permanently dead.
             def on_press(key):
-                if key == target:
-                    self.press()
+                try:
+                    if key == target:
+                        self.press()
+                except Exception:
+                    pass
 
             def on_release(key):
-                if key == target:
-                    self.release()
+                try:
+                    if key == target:
+                        self.release()
+                except Exception:
+                    pass
 
             self._listener = keyboard.Listener(on_press=on_press, on_release=on_release)
             self._listener.daemon = True
             self._listener.start()
+            import time
+            time.sleep(0.3)  # give the event tap a moment to come up (or die)
+            if not self._listener.running:
+                self.status = ("unavailable — grant Voisr Accessibility and Input "
+                               "Monitoring in System Settings, then relaunch Voisr")
+                return
             self.status = f"active on {key_name}"
         except Exception as e:  # missing Input Monitoring permission, etc.
             self.status = f"unavailable: {e}"
 
+    def _watch_for_permissions(self, key_name: str) -> None:
+        if self._watcher is not None:
+            return
+        import threading
+        import time
+
+        def poll():
+            while not self._stopped and not self._permissions_check():
+                time.sleep(self._poll_interval)
+            self._watcher = None
+            if not self._stopped:
+                self.start(key_name)
+
+        self._watcher = threading.Thread(target=poll, daemon=True)
+        self._watcher.start()
+
     def stop(self) -> None:
-        if self._listener:
-            self._listener.stop()
-            self._listener = None
+        self._stopped = True
+        listener, self._listener = self._listener, None
+        if listener is None:
+            return
+        try:
+            listener.stop()
+        except Exception:
+            pass  # a dead listener's run loop teardown must not crash the app
 
     def restart(self, key_name: str) -> None:
         self.stop()
@@ -204,10 +263,12 @@ class Api:
 
     def __init__(self, config_path=ROOT / "config.json",
                  history=None, recorder=None, transcribe_fn=transcribe,
-                 clock=time.monotonic, hotkey_service=None):
+                 clock=time.monotonic, hotkey_service=None,
+                 fallback_recorder_factory=Recorder):
         self._config_path = Path(config_path)
         self._history = history or HistoryStore(ROOT / "data" / "history.jsonl")
         self._recorder = recorder or default_recorder()
+        self._fallback_recorder_factory = fallback_recorder_factory
         self._transcribe_fn = transcribe_fn
         self._clock = clock
         self._hotkey_service = hotkey_service
@@ -220,16 +281,31 @@ class Api:
     def start_recording(self):
         if self._wav is not None:
             return {"error": "already recording"}
-        self._wav = Path(tempfile.mkstemp(suffix=".wav")[1])
+        wav = Path(tempfile.mkstemp(suffix=".wav")[1])
+        try:
+            self._recorder.start(wav)
+        except Exception:
+            # e.g. the stream backend can't load; self-heal onto ffmpeg
+            try:
+                fallback = self._fallback_recorder_factory()
+                fallback.start(wav)
+                self._recorder = fallback
+            except Exception as e:
+                wav.unlink(missing_ok=True)
+                return {"error": f"recorder failed: {e}"[:200]}
+        self._wav = wav
         self._t0 = self._clock()
-        self._recorder.start(self._wav)
         return {"recording": True}
 
     def stop_recording(self, paste=False):
         if self._wav is None:
             return {"error": "not recording"}
-        err = self._recorder.stop()
         wav, self._wav = self._wav, None
+        try:
+            err = self._recorder.stop()
+        except Exception as e:
+            wav.unlink(missing_ok=True)
+            return {"error": f"recorder failed: {e}"[:200]}
         duration = max(self._clock() - self._t0, 0.1)
         try:
             if not wav.exists() or wav.stat().st_size < 1000:
@@ -289,7 +365,15 @@ class Api:
 
 
 def main():
+    import platform
+
     import webview
+    try:
+        import sounddevice
+        audio = "stream-audio ok"
+    except Exception as e:
+        audio = f"stream-audio unavailable ({e.__class__.__name__}), using ffmpeg"
+    print(f"Voisr starting (python arch: {platform.machine()}, {audio})", flush=True)
     request_permissions()
     api = Api()
     widget = RecordingWidget()

@@ -167,3 +167,76 @@ def test_push_to_talk_end_to_end_real_transcription(tmp_path, spoken_wav):
         assert "push to talk" in api.get_history()[0]["text"].lower()
     finally:
         set_clipboard(old_clip)
+
+
+class ExplodingRecorder:
+    def start(self, path):
+        raise RuntimeError("boom: incompatible architecture")
+
+    def stop(self):
+        return ""
+
+
+def test_recorder_failure_falls_back_and_recovers(tmp_path):
+    fallback = FakeRecorder()
+    api = Api(config_path=tmp_path / "config.json",
+              history=HistoryStore(tmp_path / "h.jsonl"),
+              recorder=ExplodingRecorder(),
+              transcribe_fn=lambda wav: "recovered",
+              clock=lambda: 1.0,
+              fallback_recorder_factory=lambda: fallback)
+    res = api.start_recording()
+    assert res.get("recording") is True
+    assert api._recorder is fallback
+    out = api.stop_recording()
+    assert out["text"] == "Recovered"
+
+
+def test_recorder_failure_without_fallback_returns_error(tmp_path):
+    api = Api(config_path=tmp_path / "config.json",
+              history=HistoryStore(tmp_path / "h.jsonl"),
+              recorder=ExplodingRecorder(),
+              transcribe_fn=lambda wav: "x",
+              clock=lambda: 1.0,
+              fallback_recorder_factory=ExplodingRecorder)
+    res = api.start_recording()
+    assert "error" in res
+    assert api._wav is None  # not stuck in a phantom recording state
+
+
+def test_restart_survives_dead_listener(tmp_path):
+    class DeadListener:
+        def stop(self):
+            raise OSError("run loop already torn down")
+
+    svc = HotkeyService(make_api(tmp_path), widget=FakeWidget(), hide_delay=0)
+    svc._listener = DeadListener()
+    svc.restart("f13")  # must not raise (this crashed the app from Settings)
+
+
+def test_start_without_permission_creates_no_listener_and_waits(tmp_path):
+    import time
+
+    granted = {"ok": False}
+    svc = HotkeyService(make_api(tmp_path), widget=FakeWidget(), hide_delay=0,
+                        permissions_check=lambda: granted["ok"],
+                        poll_interval=0.05)
+    svc.start("alt_r")
+    assert svc._listener is None
+    assert "waiting for permission" in svc.status
+    granted["ok"] = True  # user grants in System Settings
+    deadline = time.monotonic() + 3
+    while "waiting" in svc.status and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert svc.status.startswith("active on alt_r") or "unavailable" in svc.status
+    svc.stop()
+
+
+def test_restart_while_unpermitted_does_not_touch_pynput(tmp_path):
+    svc = HotkeyService(make_api(tmp_path), widget=FakeWidget(), hide_delay=0,
+                        permissions_check=lambda: False, poll_interval=999)
+    svc.start("alt_r")
+    svc.restart("f13")  # the exact user action that crashed the app
+    svc.restart("cmd_r")
+    assert svc._listener is None
+    svc.stop()

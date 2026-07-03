@@ -53,6 +53,11 @@ cat > "$APPDIR/Contents/Info.plist" <<'PLIST'
     <string>Voisr</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>LSArchitecturePriority</key>
+    <array>
+        <string>arm64</string>
+        <string>x86_64</string>
+    </array>
 </dict>
 </plist>
 PLIST
@@ -62,7 +67,13 @@ cat > "$APPDIR/Contents/MacOS/Voisr" <<'LAUNCH'
 APPSUP="$HOME/Library/Application Support/Voisr"
 LOG="$HOME/Library/Logs/Voisr.log"
 export PYTHONPATH="$APPSUP"
-exec "$APPSUP/venv/bin/python" -m voisr.ui >> "$LOG" 2>&1
+# LaunchServices can start script bundles under Rosetta (x86_64), which
+# breaks the venv's native-arch wheels; force the machine's real arch.
+if [ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]; then
+  exec /usr/bin/arch -arm64 "$APPSUP/venv/bin/python" -m voisr.ui >> "$LOG" 2>&1
+else
+  exec "$APPSUP/venv/bin/python" -m voisr.ui >> "$LOG" 2>&1
+fi
 LAUNCH
 chmod +x "$APPDIR/Contents/MacOS/Voisr"
 
