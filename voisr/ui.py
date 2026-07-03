@@ -21,14 +21,22 @@ def default_recorder():
 
 
 def request_permissions() -> None:
-    """Trigger the macOS grant dialogs Voisr needs (no-ops once granted):
-    Input Monitoring (hotkey listening) and Accessibility (Cmd-V posting)."""
+    """Register Voisr with TCC and prompt for the grants it needs, so the app
+    APPEARS in System Settings → Privacy & Security under each pane:
+      • Input Monitoring — CGRequestListenEventAccess + the event tap itself
+      • Accessibility    — AXIsProcessTrustedWithOptions(prompt) posts events"""
     try:
         import Quartz
         if not Quartz.CGPreflightListenEventAccess():
             Quartz.CGRequestListenEventAccess()
         if not Quartz.CGPreflightPostEventAccess():
             Quartz.CGRequestPostEventAccess()
+    except Exception:
+        pass
+    try:
+        from ApplicationServices import (AXIsProcessTrustedWithOptions,
+                                         kAXTrustedCheckOptionPrompt)
+        AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
     except Exception:
         pass
 
@@ -165,20 +173,32 @@ def input_permissions_ok() -> bool:
         return True  # non-pyobjc environments (tests, other platforms)
 
 
+def _pynput_listener_factory(on_press, on_release):
+    """Create and start a real global keyboard listener (daemon thread)."""
+    from pynput import keyboard
+    listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+    listener.daemon = True
+    listener.start()
+    return listener
+
+
 class HotkeyService:
     """Global push-to-talk listener driving the shared Api record path."""
 
     def __init__(self, api, widget=None, hide_delay=1.2,
-                 permissions_check=input_permissions_ok, poll_interval=3.0):
+                 permissions_check=input_permissions_ok, poll_interval=3.0,
+                 listener_factory=None):
         self._api = api
         self._widget = widget
         self._hide_delay = hide_delay
         self._permissions_check = permissions_check
         self._poll_interval = poll_interval
+        self._listener_factory = listener_factory or _pynput_listener_factory
         self._listener = None
         self._watcher = None
         self._stopped = False
         self._pressed = False
+        self._key_name = None
         self.status = "not started"
 
     def _widget_enabled(self) -> bool:
@@ -221,63 +241,76 @@ class HotkeyService:
 
     def start(self, key_name: str) -> None:
         self._stopped = False
-        # Never create an event tap in an untrusted process: macOS can kill
-        # the app on repeated tap attempts (this crashed Settings changes).
-        # Wait for the grant in the background and activate when it lands.
-        if not self._permissions_check():
-            self.status = ("waiting for permission — grant Voisr under System "
-                           "Settings → Privacy & Security → Input Monitoring "
-                           "and Accessibility")
-            print(f"Voisr hotkey: {self.status}", flush=True)
-            self._watch_for_permissions(key_name)
-            return
+        self._key_name = key_name
+        # Attempt the listener NOW even if unpermitted: creating the event
+        # tap is exactly what lists Voisr under Input Monitoring and shows
+        # the prompt. An untrusted tap is null (pynput returns cleanly) — it
+        # does not crash — so this is safe. request_permissions() also fires
+        # the Accessibility prompt so Voisr appears in that pane too.
+        request_permissions()
+        self._spawn_listener(key_name)
+        self._refresh_status()
+        self._watch(key_name)
+
+    def _spawn_listener(self, key_name: str) -> None:
+        target = resolve_key(key_name)
+
+        # Callbacks must never raise: pynput kills the listener on any
+        # callback exception and the hotkey would go permanently dead.
+        def on_press(key):
+            try:
+                if key == target:
+                    self.press()
+            except Exception:
+                pass
+
+        def on_release(key):
+            try:
+                if key == target:
+                    self.release()
+            except Exception:
+                pass
+
+        old, self._listener = self._listener, None
+        if old is not None:
+            try:
+                old.stop()
+            except Exception:
+                pass
         try:
-            from pynput import keyboard
-            target = resolve_key(key_name)
+            self._listener = self._listener_factory(on_press, on_release)
+        except Exception as e:
+            print(f"Voisr hotkey: listener start failed: {e}", flush=True)
 
-            # Callbacks must never raise: pynput kills the listener on any
-            # callback exception and the hotkey would go permanently dead.
-            def on_press(key):
-                try:
-                    if key == target:
-                        self.press()
-                except Exception:
-                    pass
+    def _refresh_status(self) -> None:
+        if self._permissions_check():
+            self.status = f"active on {self._key_name}"
+        else:
+            self.status = ("waiting for permission — open System Settings → "
+                           "Privacy & Security and switch Voisr ON under BOTH "
+                           "Input Monitoring and Accessibility")
+        print(f"Voisr hotkey: {self.status}", flush=True)
 
-            def on_release(key):
-                try:
-                    if key == target:
-                        self.release()
-                except Exception:
-                    pass
-
-            self._listener = keyboard.Listener(on_press=on_press, on_release=on_release)
-            self._listener.daemon = True
-            self._listener.start()
-            import time
-            time.sleep(0.3)  # give the event tap a moment to come up (or die)
-            if not self._listener.running:
-                self.status = ("unavailable — grant Voisr Accessibility and Input "
-                               "Monitoring in System Settings, then relaunch Voisr")
-                return
-            self.status = f"active on {key_name}"
-            print(f"Voisr hotkey: {self.status}", flush=True)
-        except Exception as e:  # missing Input Monitoring permission, etc.
-            self.status = f"unavailable: {e}"
-            print(f"Voisr hotkey: {self.status}", flush=True)
-
-    def _watch_for_permissions(self, key_name: str) -> None:
+    def _watch(self, key_name: str) -> None:
         if self._watcher is not None:
             return
         import threading
         import time
 
         def poll():
-            while not self._stopped and not self._permissions_check():
+            was_granted = self._permissions_check()
+            while not self._stopped:
+                granted = self._permissions_check()
+                if granted and not was_granted:
+                    # permission just landed → respawn to get a LIVE tap
+                    # (the untrusted listener spawned at start() exited)
+                    self._spawn_listener(key_name)
+                    self._refresh_status()
+                was_granted = granted
+                if granted:
+                    break
                 time.sleep(self._poll_interval)
             self._watcher = None
-            if not self._stopped:
-                self.start(key_name)
 
         self._watcher = threading.Thread(target=poll, daemon=True)
         self._watcher.start()
@@ -436,26 +469,27 @@ def main():
     whisper = find_binary("whisper-cli") or "MISSING"
     print(f"Voisr starting (python arch: {platform.machine()}, {audio}, "
           f"whisper: {whisper})", flush=True)
-    request_permissions()
-    try:
-        import Quartz
-        print(f"Voisr permissions: listen={bool(Quartz.CGPreflightListenEventAccess())} "
-              f"post={bool(Quartz.CGPreflightPostEventAccess())}", flush=True)
-    except Exception as e:
-        print(f"Voisr permissions: preflight unavailable ({e})", flush=True)
     from voisr.inject import prepare_paste_controller
-    prepare_paste_controller()  # must happen on the main thread (TIS APIs)
+    prepare_paste_controller()  # main thread, fast, non-blocking (TIS APIs)
     api = Api()
-    api.prime_microphone()  # trigger the mic permission prompt at launch
     widget = RecordingWidget()
     service = HotkeyService(api, widget=widget)
     api.attach_hotkey_service(service)
-    service.start(api.get_config().get("hotkey", "alt_r"))
     window = webview.create_window("Voisr", str(WEB_DIR / "index.html"),
                                    js_api=api, width=1060, height=700, min_size=(860, 560))
     widget.create()
+
+    def on_started():
+        # Runs on a worker thread AFTER the GUI run loop is up, so the
+        # permission prompts (mic, Input Monitoring, Accessibility) can
+        # actually display and blocking calls never freeze startup.
+        api.prime_microphone()  # trigger the mic permission prompt
+        # service.start() calls request_permissions() (Input Monitoring +
+        # Accessibility prompts) and spawns the tap that registers the app.
+        service.start(api.get_config().get("hotkey", "alt_r"))
+
     try:
-        webview.start()
+        webview.start(on_started)
     finally:
         service.stop()
 

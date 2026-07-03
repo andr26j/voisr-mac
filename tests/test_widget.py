@@ -214,32 +214,60 @@ def test_restart_survives_dead_listener(tmp_path):
     svc.restart("f13")  # must not raise (this crashed the app from Settings)
 
 
-def test_start_without_permission_creates_no_listener_and_waits(tmp_path):
+class FakeListener:
+    def __init__(self):
+        self.stopped = False
+
+    def stop(self):
+        self.stopped = True
+
+
+def _counting_factory():
+    made = []
+
+    def factory(on_press, on_release):
+        listener = FakeListener()
+        made.append(listener)
+        return listener
+
+    factory.made = made
+    return factory
+
+
+def test_start_attempts_listener_even_unpermitted_then_activates(tmp_path):
+    # Registering the app in Input Monitoring REQUIRES creating the tap, so
+    # the listener must be spawned even while unpermitted; status then flips
+    # to active once the grant lands, without a relaunch.
     import time
 
     granted = {"ok": False}
+    factory = _counting_factory()
     svc = HotkeyService(make_api(tmp_path), widget=FakeWidget(), hide_delay=0,
                         permissions_check=lambda: granted["ok"],
-                        poll_interval=0.05)
+                        poll_interval=0.05, listener_factory=factory)
     svc.start("alt_r")
-    assert svc._listener is None
+    assert len(factory.made) == 1          # attempted despite no permission
     assert "waiting for permission" in svc.status
-    granted["ok"] = True  # user grants in System Settings
+    granted["ok"] = True                   # user grants in System Settings
     deadline = time.monotonic() + 3
     while "waiting" in svc.status and time.monotonic() < deadline:
         time.sleep(0.05)
-    assert svc.status.startswith("active on alt_r") or "unavailable" in svc.status
+    assert svc.status.startswith("active on alt_r")
+    assert len(factory.made) == 2          # respawned to get a live tap
     svc.stop()
 
 
-def test_restart_while_unpermitted_does_not_touch_pynput(tmp_path):
+def test_restart_while_unpermitted_does_not_crash(tmp_path):
+    factory = _counting_factory()
     svc = HotkeyService(make_api(tmp_path), widget=FakeWidget(), hide_delay=0,
-                        permissions_check=lambda: False, poll_interval=999)
+                        permissions_check=lambda: False, poll_interval=999,
+                        listener_factory=factory)
     svc.start("alt_r")
     svc.restart("f13")  # the exact user action that crashed the app
     svc.restart("cmd_r")
-    assert svc._listener is None
+    assert svc._listener is not None       # a listener is always live
     svc.stop()
+    assert svc._listener is None
 
 
 def test_transcriber_failure_surfaces_as_error_not_exception(tmp_path):
