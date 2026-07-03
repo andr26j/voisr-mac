@@ -62,20 +62,22 @@ cat > "$APPDIR/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-cat > "$APPDIR/Contents/MacOS/Voisr" <<'LAUNCH'
+# Native stub (not a script): keeps the process identity as Voisr.app so
+# TCC lists "Voisr" in Privacy & Security instead of "Python", and the
+# process always runs the machine's native architecture.
+if command -v cc >/dev/null; then
+  cc -O2 -o "$APPDIR/Contents/MacOS/Voisr" "$PROJECT/scripts/voisr_stub.c"
+else
+  echo "WARNING: no C compiler; falling back to script launcher (TCC will attribute permissions to Python)"
+  cat > "$APPDIR/Contents/MacOS/Voisr" <<'LAUNCH'
 #!/bin/bash
 APPSUP="$HOME/Library/Application Support/Voisr"
 LOG="$HOME/Library/Logs/Voisr.log"
 export PYTHONPATH="$APPSUP"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-# LaunchServices can start script bundles under Rosetta (x86_64), which
-# breaks the venv's native-arch wheels; force the machine's real arch.
-if [ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]; then
-  exec /usr/bin/arch -arm64 "$APPSUP/venv/bin/python" -m voisr.ui >> "$LOG" 2>&1
-else
-  exec "$APPSUP/venv/bin/python" -m voisr.ui >> "$LOG" 2>&1
-fi
+exec "$APPSUP/venv/bin/python" -m voisr.ui >> "$LOG" 2>&1
 LAUNCH
+fi
 chmod +x "$APPDIR/Contents/MacOS/Voisr"
 
 xattr -cr "$APPDIR" 2>/dev/null || true
