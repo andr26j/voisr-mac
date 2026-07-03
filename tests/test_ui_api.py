@@ -1,7 +1,7 @@
 import json
 
-from wisprlocal.history import HistoryStore
-from wisprlocal.ui import Api
+from voisr.history import HistoryStore
+from voisr.ui import Api
 
 
 class FakeRecorder:

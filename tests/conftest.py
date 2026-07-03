@@ -2,7 +2,7 @@ import subprocess
 
 import pytest
 
-from wisprlocal.audio import to_wav16k
+from voisr.audio import to_wav16k
 
 
 @pytest.fixture

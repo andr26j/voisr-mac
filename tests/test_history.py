@@ -1,4 +1,4 @@
-from wisprlocal.history import HistoryStore
+from voisr.history import HistoryStore
 
 
 def test_add_and_list(tmp_path):

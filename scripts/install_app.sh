@@ -1,22 +1,22 @@
 #!/bin/bash
-# Installs Wispr Local as a double-clickable Mac app.
+# Installs Voisr as a double-clickable Mac app.
 #
 # Runtime (code, venv, whisper model, config, history) goes to
-#   ~/Library/Application Support/WisprLocal
+#   ~/Library/Application Support/Voisr
 # and a launcher bundle goes to
-#   ~/Applications/WisprLocal.app
+#   ~/Applications/Voisr.app
 #
 # App Support is used because macOS TCC blocks apps from reading
 # Desktop/Documents paths without per-app permission grants.
 set -euo pipefail
 
 PROJECT="$(cd "$(dirname "$0")/.." && pwd)"
-APPSUP="$HOME/Library/Application Support/WisprLocal"
-APPDIR="$HOME/Applications/WisprLocal.app"
+APPSUP="$HOME/Library/Application Support/Voisr"
+APPDIR="$HOME/Applications/Voisr.app"
 
 echo "==> Installing runtime to $APPSUP"
 mkdir -p "$APPSUP/models"
-rsync -a --delete "$PROJECT/wisprlocal/" "$APPSUP/wisprlocal/" --exclude __pycache__
+rsync -a --delete "$PROJECT/voisr/" "$APPSUP/voisr/" --exclude __pycache__
 cp "$PROJECT/requirements.txt" "$APPSUP/"
 cp "$PROJECT/models/ggml-base.en.bin" "$APPSUP/models/"
 [ -f "$APPSUP/config.json" ] || cp "$PROJECT/config.json" "$APPSUP/"
@@ -33,11 +33,11 @@ cat > "$APPDIR/Contents/Info.plist" <<'PLIST'
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>WisprLocal</string>
+    <string>Voisr</string>
     <key>CFBundleDisplayName</key>
-    <string>Wispr Local</string>
+    <string>Voisr</string>
     <key>CFBundleIdentifier</key>
-    <string>com.local.wisprlocal</string>
+    <string>com.local.voisr</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundleShortVersionString</key>
@@ -45,25 +45,25 @@ cat > "$APPDIR/Contents/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
-    <string>WisprLocal</string>
+    <string>Voisr</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Wispr Local records your voice to transcribe it on-device.</string>
+    <string>Voisr records your voice to transcribe it on-device.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>
 </plist>
 PLIST
 
-cat > "$APPDIR/Contents/MacOS/WisprLocal" <<'LAUNCH'
+cat > "$APPDIR/Contents/MacOS/Voisr" <<'LAUNCH'
 #!/bin/bash
-APPSUP="$HOME/Library/Application Support/WisprLocal"
-LOG="$HOME/Library/Logs/WisprLocal.log"
+APPSUP="$HOME/Library/Application Support/Voisr"
+LOG="$HOME/Library/Logs/Voisr.log"
 export PYTHONPATH="$APPSUP"
-exec "$APPSUP/venv/bin/python" -m wisprlocal.ui >> "$LOG" 2>&1
+exec "$APPSUP/venv/bin/python" -m voisr.ui >> "$LOG" 2>&1
 LAUNCH
-chmod +x "$APPDIR/Contents/MacOS/WisprLocal"
+chmod +x "$APPDIR/Contents/MacOS/Voisr"
 
 xattr -cr "$APPDIR" 2>/dev/null || true
 codesign --force --deep -s - "$APPDIR" 2>/dev/null || true
 
-echo "==> Done. Open with: open '$APPDIR'  (or double-click WisprLocal in ~/Applications)"
+echo "==> Done. Open with: open '$APPDIR'  (or double-click Voisr in ~/Applications)"

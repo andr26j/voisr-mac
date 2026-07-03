@@ -1,4 +1,4 @@
-from wisprlocal.cleanup import clean
+from voisr.cleanup import clean
 
 
 def test_removes_filler_words():

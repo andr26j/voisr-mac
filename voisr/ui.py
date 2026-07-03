@@ -3,12 +3,12 @@ import tempfile
 import time
 from pathlib import Path
 
-from wisprlocal.app import load_config
-from wisprlocal.cleanup import clean
-from wisprlocal.history import HistoryStore
-from wisprlocal.inject import set_clipboard
-from wisprlocal.recorder import Recorder
-from wisprlocal.transcriber import transcribe
+from voisr.app import load_config
+from voisr.cleanup import clean
+from voisr.history import HistoryStore
+from voisr.inject import set_clipboard
+from voisr.recorder import Recorder
+from voisr.transcriber import transcribe
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -82,7 +82,7 @@ class Api:
 def main():
     import webview
     api = Api()
-    webview.create_window("Wispr Local", str(WEB_DIR / "index.html"),
+    webview.create_window("Voisr", str(WEB_DIR / "index.html"),
                           js_api=api, width=1060, height=700, min_size=(860, 560))
     webview.start()
 

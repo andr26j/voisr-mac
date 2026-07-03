@@ -1,4 +1,4 @@
-from wisprlocal.transcriber import transcribe
+from voisr.transcriber import transcribe
 
 
 def test_transcribes_synthesized_speech(spoken_wav):

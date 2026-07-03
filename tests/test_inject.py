@@ -1,4 +1,4 @@
-from wisprlocal.inject import get_clipboard, set_clipboard
+from voisr.inject import get_clipboard, set_clipboard
 
 
 def test_clipboard_roundtrip():

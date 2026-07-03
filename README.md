@@ -1,4 +1,4 @@
-# wispr-local
+# Voisr
 
 A local-only macOS clone of [Wispr Flow](https://wisprflow.ai)'s core loop: **hold a key, speak, and clean text appears at your cursor** — in any app. All processing happens on your machine (whisper.cpp); no audio or text ever leaves it.
 
@@ -20,16 +20,16 @@ bash setup.sh   # installs whisper-cpp (brew), downloads the model (~141 MB), cr
 A Wispr Flow–style dashboard: record dictations, browse history, track stats (words, WPM, streak), edit your dictionary, and change settings.
 
 ```bash
-bash scripts/install_app.sh   # installs to ~/Applications/WisprLocal.app
-open ~/Applications/WisprLocal.app
+bash scripts/install_app.sh   # installs to ~/Applications/Voisr.app
+open ~/Applications/Voisr.app
 ```
 
-The installer copies the runtime to `~/Library/Application Support/WisprLocal` (macOS blocks apps from reading Desktop paths without per-app grants, so the app can't run out of this folder directly). The installed app keeps its own `config.json` and history there; re-run the installer after pulling code changes.
+The installer copies the runtime to `~/Library/Application Support/Voisr` (macOS blocks apps from reading Desktop paths without per-app grants, so the app can't run out of this folder directly). The installed app keeps its own `config.json` and history there; re-run the installer after pulling code changes.
 
 For development, run the same dashboard straight from the repo:
 
 ```bash
-./venv/bin/python -m wisprlocal.ui
+./venv/bin/python -m voisr.ui
 ```
 
 On first recording, macOS will ask for Microphone access — allow it once.
@@ -39,16 +39,16 @@ On first recording, macOS will ask for Microphone access — allow it once.
 ```bash
 # Toggle mode (default; no special permissions beyond Microphone)
 
-./venv/bin/python -m wisprlocal.app
+./venv/bin/python -m voisr.app
 
 # Push-to-talk: hold right-Option to record, release to transcribe + paste
-./venv/bin/python -m wisprlocal.app --mode hotkey
+./venv/bin/python -m voisr.app --mode hotkey
 
 # Transcribe an audio file
-./venv/bin/python -m wisprlocal.app --mode file --file memo.m4a
+./venv/bin/python -m voisr.app --mode file --file memo.m4a
 
 # Copy to clipboard instead of pasting
-./venv/bin/python -m wisprlocal.app --no-paste
+./venv/bin/python -m voisr.app --no-paste
 ```
 
 ## Configuration (`config.json`)
@@ -82,7 +82,7 @@ Toggle mode with `--no-paste` works with Microphone permission only.
 ## Known limitations
 
 - ffmpeg takes ~1–1.5 s to start capturing — begin speaking after the `● recording...` cue, or hold the key a beat before talking.
-- English-only model by default (swap in a multilingual `ggml-*.bin` in `models/` and adjust `wisprlocal/transcriber.py` if needed).
+- English-only model by default (swap in a multilingual `ggml-*.bin` in `models/` and adjust `voisr/transcriber.py` if needed).
 - No Command Mode (voice editing) — out of scope for the basics.
 
 ## Development

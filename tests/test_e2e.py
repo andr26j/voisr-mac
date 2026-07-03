@@ -1,4 +1,4 @@
-from wisprlocal.app import load_config, process_audio
+from voisr.app import load_config, process_audio
 
 
 def test_full_pipeline_from_audio_to_clean_text(spoken_wav):

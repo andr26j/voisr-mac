@@ -4,10 +4,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-from wisprlocal.cleanup import clean
-from wisprlocal.inject import paste_at_cursor, set_clipboard
-from wisprlocal.recorder import Recorder
-from wisprlocal.transcriber import transcribe
+from voisr.cleanup import clean
+from voisr.inject import paste_at_cursor, set_clipboard
+from voisr.recorder import Recorder
+from voisr.transcriber import transcribe
 
 DEFAULT_CONFIG = {"hotkey": "alt_r", "paste": True, "device": ":0", "dictionary": {}}
 
@@ -81,7 +81,7 @@ def hotkey_mode(cfg) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="wispr-local: on-device push-to-talk dictation")
+    ap = argparse.ArgumentParser(description="voisr: on-device push-to-talk dictation")
     ap.add_argument("--mode", choices=["toggle", "hotkey", "file"], default="toggle")
     ap.add_argument("--file", help="audio file to transcribe (mode=file)")
     ap.add_argument("--config", default=Path(__file__).resolve().parent.parent / "config.json")
@@ -93,7 +93,7 @@ def main() -> None:
     if args.mode == "file":
         if not args.file:
             ap.error("--file is required with --mode file")
-        from wisprlocal.audio import to_wav16k
+        from voisr.audio import to_wav16k
         wav = to_wav16k(args.file, args.file + ".16k.wav")
         print(process_audio(wav, cfg["dictionary"]))
     elif args.mode == "hotkey":
