@@ -258,3 +258,52 @@ def test_transcriber_failure_surfaces_as_error_not_exception(tmp_path):
     svc.release()
     wait_for_hide(widget)
     assert "error" in widget.calls and widget.calls[-1] == "hide"
+
+
+def _write_wav(path, samples):
+    import array
+    import wave
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(array.array("h", samples).tobytes())
+
+
+def test_silent_recording_reports_mic_problem_not_hallucination(tmp_path):
+    class SilentRecorder:
+        def start(self, path):
+            self.path = path
+
+        def stop(self):
+            _write_wav(self.path, [0] * 16000)  # 1s of digital silence
+            return ""
+
+    api = Api(config_path=tmp_path / "config.json",
+              history=HistoryStore(tmp_path / "h.jsonl"),
+              recorder=SilentRecorder(),
+              transcribe_fn=lambda wav: "You",  # whisper hallucinates on silence
+              clock=lambda: 1.0)
+    api.start_recording()
+    res = api.stop_recording()
+    assert "error" in res and "Microphone" in res["error"]
+    assert api.get_history() == []  # no junk entries
+
+
+def test_real_audio_passes_silence_gate(tmp_path):
+    class NoisyRecorder:
+        def start(self, path):
+            self.path = path
+
+        def stop(self):
+            _write_wav(self.path, [0, 900, -800, 1200] * 4000)
+            return ""
+
+    api = Api(config_path=tmp_path / "config.json",
+              history=HistoryStore(tmp_path / "h.jsonl"),
+              recorder=NoisyRecorder(),
+              transcribe_fn=lambda wav: "real words",
+              clock=lambda: 1.0)
+    api.start_recording()
+    res = api.stop_recording()
+    assert res["text"] == "Real words"

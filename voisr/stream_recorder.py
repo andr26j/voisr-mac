@@ -34,6 +34,10 @@ class StreamRecorder:
             with self._lock:
                 self._frames.append(bytes(indata))
 
+    def prime(self) -> None:
+        """Open the persistent stream (triggers the macOS mic prompt)."""
+        self._ensure_stream()
+
     def start(self, out_path) -> None:
         if self._recording:
             raise RuntimeError("already recording")

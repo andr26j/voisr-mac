@@ -40,6 +40,24 @@ def paste_ready() -> bool:
     except Exception:
         return False
 
+def wav_peak(path) -> int:
+    """Peak |amplitude| of a 16-bit WAV, -1 if unparseable (skip the check)."""
+    import array
+    import wave
+    try:
+        with wave.open(str(path), "rb") as w:
+            if w.getsampwidth() != 2:
+                return -1
+            data = w.readframes(w.getnframes())
+        if not data:
+            return 0
+        samples = array.array("h")
+        samples.frombytes(data[:len(data) // 2 * 2])
+        return max(abs(s) for s in samples) if samples else 0
+    except Exception:
+        return -1
+
+
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
@@ -105,7 +123,15 @@ class RecordingWidget:
         the user is dictating into and break paste-at-cursor."""
         try:
             from PyObjCTools import AppHelper
-            AppHelper.callAfter(self._window.native.orderFrontRegardless)
+            win = self._window.native
+
+            def show():
+                # canJoinAllSpaces | fullScreenAuxiliary: follow the user to
+                # any Space or fullscreen app, like Wispr's pill
+                win.setCollectionBehavior_(win.collectionBehavior() | (1 << 0) | (1 << 8))
+                win.orderFrontRegardless()
+
+            AppHelper.callAfter(show)
         except Exception:
             self._window.show()
 
@@ -320,6 +346,12 @@ class Api:
         try:
             if not wav.exists() or wav.stat().st_size < 1000:
                 return {"error": f"recording failed (mic permission?) {err.strip()[:120]}"}
+            peak = wav_peak(wav)
+            if 0 <= peak < 60:
+                # digital silence: whisper would hallucinate ("You", "Thank you")
+                return {"error": "no audio captured — allow Voisr to use the "
+                                 "Microphone in System Settings → Privacy & "
+                                 "Security, then try again"}
             cfg = self.get_config()
             try:
                 text = clean(self._transcribe_fn(wav), dictionary=cfg.get("dictionary", {}))
@@ -372,6 +404,17 @@ class Api:
                 else " · grant Accessibility to auto-paste"
         return {"status": status}
 
+    def prime_microphone(self):
+        """Open the audio stream now so the macOS Microphone prompt appears
+        at launch (attributed to Voisr) instead of mid-dictation."""
+        try:
+            prime = getattr(self._recorder, "prime", None)
+            if prime:
+                prime()
+            return {"ok": True}
+        except Exception as e:
+            return {"error": str(e)[:200]}
+
     def copy_text(self, text):
         set_clipboard(text)
         return {"ok": True}
@@ -394,6 +437,7 @@ def main():
     from voisr.inject import prepare_paste_controller
     prepare_paste_controller()  # must happen on the main thread (TIS APIs)
     api = Api()
+    api.prime_microphone()  # trigger the mic permission prompt at launch
     widget = RecordingWidget()
     service = HotkeyService(api, widget=widget)
     api.attach_hotkey_service(service)
