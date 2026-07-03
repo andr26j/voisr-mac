@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wispr Local</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="shell">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <span class="brand-name">Wispr Local</span>
+    </div>
+
+    <nav class="nav" aria-label="Main">
+      <button class="nav-item active" data-view="home">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        Home
+      </button>
+      <button class="nav-item" data-view="history">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        History
+      </button>
+      <button class="nav-item" data-view="dictionary">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
+        Dictionary
+      </button>
+      <button class="nav-item" data-view="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        Settings
+      </button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      On-device. Nothing leaves this Mac.
+    </div>
+  </aside>
+
+  <main class="main">
+
+    <!-- HOME -->
+    <section class="view" id="view-home">
+      <header class="page-head">
+        <h1 id="greeting">Welcome back</h1>
+        <p class="sub">Press record, speak naturally, and your words are transcribed on this Mac and copied to your clipboard.</p>
+      </header>
+
+      <div class="home-grid">
+        <div class="home-main">
+          <div class="record-card card">
+            <button id="record-btn" class="record-btn" aria-label="Start recording">
+              <svg id="record-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+            </button>
+            <p id="record-status" class="record-status">Click to start dictating</p>
+            <p id="record-error" class="record-error" role="alert"></p>
+            <div id="record-result" class="record-result" hidden>
+              <p id="result-text"></p>
+              <span class="result-badge">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                Copied to clipboard
+              </span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h2>Recent activity</h2>
+              <button class="link-btn" data-view="history">View all</button>
+            </div>
+            <ul id="recent-list" class="item-list"></ul>
+            <p id="recent-empty" class="empty" hidden>No dictations yet — your recent transcripts will appear here.</p>
+          </div>
+        </div>
+
+        <div class="home-side">
+          <div class="stat-card card">
+            <span class="stat-label">Words dictated</span>
+            <span class="stat-num" id="stat-words">0</span>
+          </div>
+          <div class="stat-card card">
+            <span class="stat-label">Average words / min</span>
+            <span class="stat-num" id="stat-wpm">0</span>
+          </div>
+          <div class="stat-card card">
+            <span class="stat-label">Day streak</span>
+            <span class="stat-num" id="stat-streak">0</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- HISTORY -->
+    <section class="view" id="view-history" hidden>
+      <header class="page-head">
+        <h1>History</h1>
+        <p class="sub">Every dictation, stored locally in <code>data/history.jsonl</code>.</p>
+      </header>
+      <div id="history-groups"></div>
+      <p id="history-empty" class="empty" hidden>Nothing here yet. Record your first dictation from Home.</p>
+    </section>
+
+    <!-- DICTIONARY -->
+    <section class="view" id="view-dictionary" hidden>
+      <header class="page-head">
+        <h1>Dictionary</h1>
+        <p class="sub">When the transcriber mishears a name or term, map what it heard to what you meant. Every variant counts.</p>
+      </header>
+      <div class="card">
+        <form id="dict-form" class="dict-form">
+          <div class="field">
+            <label for="dict-spoken">Heard as</label>
+            <input id="dict-spoken" type="text" placeholder="trademake" autocomplete="off" required>
+          </div>
+          <div class="field">
+            <label for="dict-written">Replace with</label>
+            <input id="dict-written" type="text" placeholder="TradeMate" autocomplete="off" required>
+          </div>
+          <button type="submit" class="btn-primary">Add</button>
+        </form>
+        <ul id="dict-list" class="item-list"></ul>
+        <p id="dict-empty" class="empty" hidden>No entries yet. Add one above.</p>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="view" id="view-settings" hidden>
+      <header class="page-head">
+        <h1>Settings</h1>
+        <p class="sub">Stored in <code>config.json</code>, shared with the command-line modes.</p>
+      </header>
+      <div class="card settings-card">
+        <div class="setting-row">
+          <div>
+            <h2>Copy to clipboard after dictation</h2>
+            <p class="setting-desc">Each finished dictation is placed on your clipboard, ready to paste anywhere.</p>
+          </div>
+          <span class="pill">Always on</span>
+        </div>
+        <div class="setting-row">
+          <div>
+            <h2>Auto-paste in hotkey mode</h2>
+            <p class="setting-desc">When using push-to-talk (<code>--mode hotkey</code>), also press Cmd-V into the app you're in. Needs Accessibility permission.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="paste-toggle">
+            <span class="slider" aria-hidden="true"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <div>
+            <h2>Push-to-talk key</h2>
+            <p class="setting-desc">Hold to record from any app: run <code>python -m wisprlocal.app --mode hotkey</code>. Needs Input Monitoring permission.</p>
+          </div>
+          <span class="pill" id="hotkey-pill">alt_r</span>
+        </div>
+        <div class="setting-row">
+          <div>
+            <h2>Privacy</h2>
+            <p class="setting-desc">Audio is recorded to a temp file, transcribed by whisper.cpp on this Mac, then deleted. No network calls, no accounts, no telemetry.</p>
+          </div>
+          <span class="pill pill-good">Local only</span>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

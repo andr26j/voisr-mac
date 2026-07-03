@@ -20,11 +20,11 @@ class Api:
     def __init__(self, config_path=ROOT / "config.json",
                  history=None, recorder=None, transcribe_fn=transcribe,
                  clock=time.monotonic):
-        self.config_path = Path(config_path)
-        self.history = history or HistoryStore(ROOT / "data" / "history.jsonl")
-        self.recorder = recorder or Recorder()
-        self.transcribe_fn = transcribe_fn
-        self.clock = clock
+        self._config_path = Path(config_path)
+        self._history = history or HistoryStore(ROOT / "data" / "history.jsonl")
+        self._recorder = recorder or Recorder()
+        self._transcribe_fn = transcribe_fn
+        self._clock = clock
         self._wav = None
         self._t0 = None
 
@@ -32,46 +32,46 @@ class Api:
         if self._wav is not None:
             return {"error": "already recording"}
         self._wav = Path(tempfile.mkstemp(suffix=".wav")[1])
-        self._t0 = self.clock()
-        self.recorder.start(self._wav)
+        self._t0 = self._clock()
+        self._recorder.start(self._wav)
         return {"recording": True}
 
     def stop_recording(self):
         if self._wav is None:
             return {"error": "not recording"}
-        err = self.recorder.stop()
+        err = self._recorder.stop()
         wav, self._wav = self._wav, None
-        duration = max(self.clock() - self._t0, 0.1)
+        duration = max(self._clock() - self._t0, 0.1)
         try:
             if not wav.exists() or wav.stat().st_size < 1000:
                 return {"error": f"recording failed (mic permission?) {err.strip()[:120]}"}
             cfg = self.get_config()
-            text = clean(self.transcribe_fn(wav), dictionary=cfg.get("dictionary", {}))
+            text = clean(self._transcribe_fn(wav), dictionary=cfg.get("dictionary", {}))
             if not text:
                 return {"error": "nothing transcribed — try speaking a bit longer"}
-            item = self.history.add(text, duration_s=duration)
+            item = self._history.add(text, duration_s=duration)
             set_clipboard(text)
             return {"text": text, "item": item, "copied": True}
         finally:
             wav.unlink(missing_ok=True)
 
     def get_history(self):
-        return self.history.list()
+        return self._history.list()
 
     def delete_history_item(self, item_id):
-        self.history.delete(item_id)
+        self._history.delete(item_id)
         return {"ok": True}
 
     def get_stats(self):
-        return self.history.stats()
+        return self._history.stats()
 
     def get_config(self):
-        return load_config(self.config_path)
+        return load_config(self._config_path)
 
     def set_config(self, updates):
         cfg = self.get_config()
         cfg.update(updates)
-        self.config_path.write_text(json.dumps(cfg, indent=2))
+        self._config_path.write_text(json.dumps(cfg, indent=2))
         return cfg
 
     def copy_text(self, text):
