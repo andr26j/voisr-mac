@@ -10,6 +10,24 @@ def get_clipboard() -> str:
     return subprocess.run(["pbpaste"], capture_output=True).stdout.decode()
 
 
+_controller = None
+
+
+def prepare_paste_controller() -> None:
+    """Build the pynput Controller ON THE MAIN THREAD at app startup.
+
+    Controller() reads the keyboard layout via TIS (Text Input Services),
+    which is main-thread-only inside GUI apps — constructing it from a
+    worker thread kills the process outright. Call this from main() before
+    the UI loop starts; paste threads then reuse the prepared instance."""
+    global _controller
+    try:
+        from pynput.keyboard import Controller
+        _controller = Controller()
+    except Exception:
+        _controller = None
+
+
 def _post_cmd_v() -> bool:
     """Send Cmd-V as CGEvents (needs Accessibility). Preflight-gated so we
     never claim success while events would silently go nowhere."""
@@ -18,7 +36,8 @@ def _post_cmd_v() -> bool:
         if not Quartz.CGPreflightPostEventAccess():
             return False
         from pynput.keyboard import Controller, Key
-        kb = Controller()
+        # Only construct here outside GUI apps (tests/CLI on the main thread)
+        kb = _controller or Controller()
         with kb.pressed(Key.cmd):
             kb.tap("v")
         return True

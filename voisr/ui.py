@@ -95,9 +95,19 @@ class RecordingWidget:
             return
         try:
             self._window.evaluate_js(f'setState("{state}")')
-            self._window.show()
+            self._order_front()
         except Exception:
             pass  # window not ready yet; never break the record path
+
+    def _order_front(self) -> None:
+        """Show without activating: pywebview's show() calls
+        activateIgnoringOtherApps_, which would steal focus from the app
+        the user is dictating into and break paste-at-cursor."""
+        try:
+            from PyObjCTools import AppHelper
+            AppHelper.callAfter(self._window.native.orderFrontRegardless)
+        except Exception:
+            self._window.show()
 
     def show_recording(self):
         self._set("recording")
@@ -381,6 +391,8 @@ def main():
     print(f"Voisr starting (python arch: {platform.machine()}, {audio}, "
           f"whisper: {whisper})", flush=True)
     request_permissions()
+    from voisr.inject import prepare_paste_controller
+    prepare_paste_controller()  # must happen on the main thread (TIS APIs)
     api = Api()
     widget = RecordingWidget()
     service = HotkeyService(api, widget=widget)
