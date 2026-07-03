@@ -1,6 +1,8 @@
 import signal
 import subprocess
 
+from voisr.paths import find_binary
+
 
 class Recorder:
     """Records mic audio to 16 kHz mono WAV using ffmpeg/avfoundation."""
@@ -12,8 +14,9 @@ class Recorder:
     def start(self, out_path) -> None:
         if self.proc:
             raise RuntimeError("already recording")
+        ffmpeg = find_binary("ffmpeg") or "ffmpeg"
         self.proc = subprocess.Popen(
-            ["ffmpeg", "-y", "-loglevel", "error", "-f", "avfoundation",
+            [ffmpeg, "-y", "-loglevel", "error", "-f", "avfoundation",
              "-i", self.device, "-ar", "16000", "-ac", "1",
              "-c:a", "pcm_s16le", str(out_path)],
             stdin=subprocess.DEVNULL,

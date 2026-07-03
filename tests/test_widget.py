@@ -240,3 +240,21 @@ def test_restart_while_unpermitted_does_not_touch_pynput(tmp_path):
     svc.restart("cmd_r")
     assert svc._listener is None
     svc.stop()
+
+
+def test_transcriber_failure_surfaces_as_error_not_exception(tmp_path):
+    def broken_transcribe(wav):
+        raise RuntimeError("whisper-cli not found")
+
+    api = make_api(tmp_path)
+    api._transcribe_fn = broken_transcribe
+    api.start_recording()
+    res = api.stop_recording()
+    assert "error" in res and "whisper-cli" in res["error"]
+
+    widget = FakeWidget()
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.press()
+    svc.release()
+    wait_for_hide(widget)
+    assert "error" in widget.calls and widget.calls[-1] == "hide"

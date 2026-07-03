@@ -311,7 +311,10 @@ class Api:
             if not wav.exists() or wav.stat().st_size < 1000:
                 return {"error": f"recording failed (mic permission?) {err.strip()[:120]}"}
             cfg = self.get_config()
-            text = clean(self._transcribe_fn(wav), dictionary=cfg.get("dictionary", {}))
+            try:
+                text = clean(self._transcribe_fn(wav), dictionary=cfg.get("dictionary", {}))
+            except Exception as e:
+                return {"error": f"transcription failed: {e}"[:250]}
             if not text:
                 return {"error": "nothing transcribed — try speaking a bit longer"}
             item = self._history.add(text, duration_s=duration)
@@ -373,7 +376,10 @@ def main():
         audio = "stream-audio ok"
     except Exception as e:
         audio = f"stream-audio unavailable ({e.__class__.__name__}), using ffmpeg"
-    print(f"Voisr starting (python arch: {platform.machine()}, {audio})", flush=True)
+    from voisr.paths import find_binary
+    whisper = find_binary("whisper-cli") or "MISSING"
+    print(f"Voisr starting (python arch: {platform.machine()}, {audio}, "
+          f"whisper: {whisper})", flush=True)
     request_permissions()
     api = Api()
     widget = RecordingWidget()

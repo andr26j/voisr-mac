@@ -67,6 +67,7 @@ cat > "$APPDIR/Contents/MacOS/Voisr" <<'LAUNCH'
 APPSUP="$HOME/Library/Application Support/Voisr"
 LOG="$HOME/Library/Logs/Voisr.log"
 export PYTHONPATH="$APPSUP"
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 # LaunchServices can start script bundles under Rosetta (x86_64), which
 # breaks the venv's native-arch wheels; force the machine's real arch.
 if [ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]; then
