@@ -486,15 +486,11 @@ class Api:
         return {"status": status}
 
     def prime_microphone(self):
-        """Open the audio stream now so the macOS Microphone prompt appears
-        at launch (attributed to Voisr) instead of mid-dictation."""
-        try:
-            prime = getattr(self._recorder, "prime", None)
-            if prime:
-                prime()
-            return {"ok": True}
-        except Exception as e:
-            return {"error": str(e)[:200]}
+        """Retained for interface parity — intentionally does NOT open the
+        mic. The stream is opened only while recording so the macOS "mic in
+        use" indicator is off when idle; the permission prompt appears on
+        the first real dictation."""
+        return {"ok": True}
 
     def copy_text(self, text):
         set_clipboard(text)
@@ -526,11 +522,10 @@ def main():
 
     def on_started():
         # Runs on a worker thread AFTER the GUI run loop is up, so the
-        # permission prompts (mic, Input Monitoring, Accessibility) can
-        # actually display and blocking calls never freeze startup.
-        api.prime_microphone()  # trigger the mic permission prompt
-        # service.start() calls request_permissions() (Input Monitoring +
-        # Accessibility prompts) and spawns the tap that registers the app.
+        # Input Monitoring / Accessibility prompts can display and blocking
+        # calls never freeze startup. The mic is NOT opened here — it opens
+        # only during an actual dictation, so the "mic in use" indicator is
+        # off while idle.
         service.start(api.get_config().get("hotkey", "alt_r"))
 
     try:
