@@ -4,3 +4,6 @@ __pycache__/
 *.wav
 *.aiff
 .pytest_cache/
+
+# runtime data (created by the app)
+data/*.jsonl
