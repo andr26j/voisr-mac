@@ -212,14 +212,12 @@ async function addDictEntry(e) {
 /* ---------- settings ---------- */
 
 async function renderSettings() {
-  const [cfg, options, status] = await Promise.all([
-    api().get_config(), api().get_hotkey_options(), api().get_hotkey_status(),
+  const [cfg, status] = await Promise.all([
+    api().get_config(), api().get_hotkey_status(),
   ]);
   $("#paste-toggle").checked = !!cfg.paste;
   $("#widget-toggle").checked = cfg.show_widget !== false;
-  const sel = $("#hotkey-select");
-  sel.innerHTML = options.map((o) =>
-    `<option value="${o.value}"${o.value === cfg.hotkey ? " selected" : ""}>${o.label}</option>`).join("");
+  $("#hotkey-current").textContent = cfg.hotkey_label || cfg.hotkey || "alt_r";
   $("#hotkey-status").textContent = status.status;
 }
 
@@ -238,11 +236,24 @@ function init() {
     await api().set_config({ show_widget: e.target.checked });
     toast(e.target.checked ? "Recording widget on" : "Recording widget off");
   });
-  $("#hotkey-select").addEventListener("change", async (e) => {
-    await api().set_config({ hotkey: e.target.value });
-    const status = await api().get_hotkey_status();
-    $("#hotkey-status").textContent = status.status;
-    toast(`Push-to-talk key set to ${e.target.selectedOptions[0].textContent}`);
+  $("#hotkey-capture").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = "Press any key…";
+    $("#hotkey-current").textContent = "…";
+    try {
+      const res = await api().capture_hotkey();
+      if (res.error) {
+        toast(res.error);
+      } else {
+        toast(`Push-to-talk key set to ${res.label}`);
+      }
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Change…";
+      renderSettings();
+    }
   });
   show("home");
 }
@@ -268,6 +279,11 @@ setTimeout(() => {
     set_config: async (u) => Object.assign(mockCfg, u),
     delete_history_item: async (id) => { mockHistory = mockHistory.filter((i) => i.id !== id); return { ok: true }; },
     copy_text: async () => ({ ok: true }),
+    capture_hotkey: async () => {
+      await new Promise((r) => setTimeout(r, 1200));
+      mockCfg.hotkey_vk = 63; mockCfg.hotkey_label = "Fn / Globe";
+      return { vk: 63, label: "Fn / Globe" };
+    },
     get_hotkey_options: async () => [
       { value: "alt_r", label: "Right Option (\u2325)" }, { value: "alt_l", label: "Left Option (\u2325)" },
       { value: "cmd_r", label: "Right Command (\u2318)" }, { value: "ctrl_r", label: "Right Control (\u2303)" },

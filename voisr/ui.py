@@ -92,6 +92,69 @@ def resolve_key(key_name: str):
     return named if named is not None else keyboard.KeyCode.from_char(key_name)
 
 
+# macOS virtual keycodes for keys pynput delivers via flagsChanged but has
+# no modifier-flag mapping for — it reports BOTH edges as on_release, so the
+# service must use toggle semantics (1st event = press, 2nd = release).
+# Modifiers never auto-repeat, so toggling is sound.
+TOGGLE_VKS = {63}  # Fn / Globe
+
+VK_LABELS = {
+    63: "Fn / Globe", 57: "Caps Lock",
+    58: "Left Option (⌥)", 61: "Right Option (⌥)",
+    55: "Left Command (⌘)", 54: "Right Command (⌘)",
+    56: "Left Shift (⇧)", 60: "Right Shift (⇧)",
+    59: "Left Control (⌃)", 62: "Right Control (⌃)",
+    49: "Space", 48: "Tab", 36: "Return", 53: "Esc",
+    122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5", 97: "F6",
+    98: "F7", 100: "F8", 101: "F9", 109: "F10", 103: "F11", 111: "F12",
+    105: "F13", 107: "F14", 113: "F15", 106: "F16", 64: "F17",
+    79: "F18", 80: "F19",
+}
+
+_LEGACY_NAME_TO_VK = {
+    "alt_r": 61, "alt_l": 58, "alt": 58,
+    "cmd_r": 54, "cmd_l": 55, "cmd": 55,
+    "ctrl_r": 62, "ctrl_l": 59, "ctrl": 59,
+    "shift_r": 60, "shift_l": 56, "shift": 56,
+    "f13": 105, "f14": 107, "f15": 113, "f16": 106,
+    "f17": 64, "f18": 79, "f19": 80,
+}
+
+
+def legacy_name_to_vk(name: str):
+    return _LEGACY_NAME_TO_VK.get(name)
+
+
+def event_vk(key):
+    """Virtual keycode of a pynput event key (KeyCode or Key enum)."""
+    vk = getattr(key, "vk", None)
+    if vk is None:
+        vk = getattr(getattr(key, "value", None), "vk", None)
+    return vk
+
+
+def key_label(vk: int, key=None) -> str:
+    """Human-readable name for a captured key."""
+    if vk in VK_LABELS:
+        return VK_LABELS[vk]
+    char = getattr(key, "char", None)
+    if char:
+        return char.upper()
+    name = getattr(key, "name", None)
+    if name:
+        return name.replace("_", " ").title()
+    return f"Key {vk}"
+
+
+def capture_next_key(timeout: float = 8.0):
+    """Block until the user presses any key; return (vk, label) or None."""
+    from voisr.keytap import capture_next_vk
+    vk = capture_next_vk(timeout)
+    if vk is None:
+        return None
+    return vk, key_label(vk)
+
+
 class RecordingWidget:
     """Floating Wispr-style pill shown while dictating.
 
@@ -218,11 +281,11 @@ def input_permissions_ok() -> bool:
         return True  # non-pyobjc environments (tests, other platforms)
 
 
-def _pynput_listener_factory(on_press, on_release):
-    """Create and start a real global keyboard listener (daemon thread)."""
-    from pynput import keyboard
-    listener = keyboard.Listener(on_press=on_press, on_release=on_release)
-    listener.daemon = True
+def _quartz_listener_factory(handler):
+    """Create and start the global key tap (see voisr.keytap for why this
+    replaces pynput's listener, which crashes the process via TIS)."""
+    from voisr.keytap import QuartzKeyListener
+    listener = QuartzKeyListener(handler)
     listener.start()
     return listener
 
@@ -238,12 +301,13 @@ class HotkeyService:
         self._hide_delay = hide_delay
         self._permissions_check = permissions_check
         self._poll_interval = poll_interval
-        self._listener_factory = listener_factory or _pynput_listener_factory
+        self._listener_factory = listener_factory or _quartz_listener_factory
         self._listener = None
         self._watcher = None
         self._stopped = False
         self._pressed = False
         self._key_name = None
+        self._target_vk = None
         self.status = "not started"
 
     def _widget_enabled(self) -> bool:
@@ -284,35 +348,62 @@ class HotkeyService:
                 time.sleep(self._hide_delay)
             self._widget.hide()
 
-    def start(self, key_name: str) -> None:
+    def _resolve_target(self, key_name=None):
+        """Return (vk, label) for the push-to-talk key.
+
+        Explicit key_name (tests/CLI) wins; otherwise the config's captured
+        hotkey_vk, falling back to the legacy 'hotkey' name."""
+        if key_name is not None:
+            vk = legacy_name_to_vk(key_name)
+            if vk is None:
+                vk = event_vk(resolve_key(key_name))
+            return vk, key_label(vk) if vk is not None else key_name
+        cfg = self._api.get_config()
+        vk = cfg.get("hotkey_vk")
+        if vk is not None:
+            return int(vk), cfg.get("hotkey_label") or key_label(int(vk))
+        name = cfg.get("hotkey", "alt_r")
+        vk = legacy_name_to_vk(name)
+        if vk is None:
+            vk = event_vk(resolve_key(name))
+        return vk, key_label(vk) if vk is not None else name
+
+    def start(self, key_name=None) -> None:
         self._stopped = False
-        self._key_name = key_name
+        vk, label = self._resolve_target(key_name)
+        self._target_vk = vk
+        self._key_name = label
         # Attempt the listener NOW even if unpermitted: creating the event
         # tap is exactly what lists Voisr under Input Monitoring and shows
         # the prompt. An untrusted tap is null (pynput returns cleanly) — it
         # does not crash — so this is safe. request_permissions() also fires
         # the Accessibility prompt so Voisr appears in that pane too.
         request_permissions()
-        self._spawn_listener(key_name)
+        self._spawn_listener()
         self._refresh_status()
-        self._watch(key_name)
+        self._watch()
 
-    def _spawn_listener(self, key_name: str) -> None:
-        target = resolve_key(key_name)
+    def _toggle(self) -> None:
+        """flagsChanged-only keys (Fn) report both edges identically."""
+        if self._pressed:
+            self.release()
+        else:
+            self.press()
 
-        # Callbacks must never raise: pynput kills the listener on any
-        # callback exception and the hotkey would go permanently dead.
-        def on_press(key):
+    def _spawn_listener(self) -> None:
+        target_vk = self._target_vk
+
+        def handler(vk, kind, flags):
+            # Never raise: a callback error must not kill the tap.
             try:
-                if key == target:
+                if vk != target_vk:
+                    return
+                if kind == "down":       # auto-repeats; press() guards
                     self.press()
-            except Exception:
-                pass
-
-        def on_release(key):
-            try:
-                if key == target:
+                elif kind == "up":
                     self.release()
+                else:                    # "flags": modifier edges (Fn, ⌥, ⌘...)
+                    self._toggle()       # modifiers never auto-repeat
             except Exception:
                 pass
 
@@ -323,7 +414,7 @@ class HotkeyService:
             except Exception:
                 pass
         try:
-            self._listener = self._listener_factory(on_press, on_release)
+            self._listener = self._listener_factory(handler)
         except Exception as e:
             print(f"Voisr hotkey: listener start failed: {e}", flush=True)
 
@@ -336,7 +427,7 @@ class HotkeyService:
                            "Input Monitoring and Accessibility")
         print(f"Voisr hotkey: {self.status}", flush=True)
 
-    def _watch(self, key_name: str) -> None:
+    def _watch(self) -> None:
         if self._watcher is not None:
             return
         import threading
@@ -349,7 +440,7 @@ class HotkeyService:
                 if granted and not was_granted:
                     # permission just landed → respawn to get a LIVE tap
                     # (the untrusted listener spawned at start() exited)
-                    self._spawn_listener(key_name)
+                    self._spawn_listener()
                     self._refresh_status()
                 was_granted = granted
                 if granted:
@@ -370,7 +461,7 @@ class HotkeyService:
         except Exception:
             pass  # a dead listener's run loop teardown must not crash the app
 
-    def restart(self, key_name: str) -> None:
+    def restart(self, key_name=None) -> None:
         self.stop()
         self.start(key_name)
 
@@ -381,7 +472,8 @@ class Api:
     def __init__(self, config_path=ROOT / "config.json",
                  history=None, recorder=None, transcribe_fn=transcribe,
                  clock=time.monotonic, hotkey_service=None,
-                 fallback_recorder_factory=Recorder):
+                 fallback_recorder_factory=Recorder,
+                 capture_fn=capture_next_key):
         self._config_path = Path(config_path)
         self._history = history or HistoryStore(ROOT / "data" / "history.jsonl")
         self._recorder = recorder or default_recorder()
@@ -389,11 +481,33 @@ class Api:
         self._transcribe_fn = transcribe_fn
         self._clock = clock
         self._hotkey_service = hotkey_service
+        self._capture_fn = capture_fn
         self._wav = None
         self._t0 = None
 
     def attach_hotkey_service(self, service):
         self._hotkey_service = service
+
+    def capture_hotkey(self):
+        """'Press any key' flow: suspend the live listener (so the pressed
+        key doesn't trigger a dictation), capture the next key — any key,
+        including Fn/Globe — persist it, and restart the listener on it."""
+        svc = self._hotkey_service
+        if svc is not None:
+            svc.stop()
+        try:
+            got = self._capture_fn(8.0)
+            if not got:
+                return {"error": "no key detected — click Change and press a key"}
+            vk, label = got
+            cfg = self.get_config()
+            cfg["hotkey_vk"] = vk
+            cfg["hotkey_label"] = label
+            self._config_path.write_text(json.dumps(cfg, indent=2))
+            return {"vk": vk, "label": label}
+        finally:
+            if svc is not None:
+                svc.start()
 
     def start_recording(self):
         if self._wav is not None:
@@ -526,7 +640,7 @@ def main():
         # calls never freeze startup. The mic is NOT opened here — it opens
         # only during an actual dictation, so the "mic in use" indicator is
         # off while idle.
-        service.start(api.get_config().get("hotkey", "alt_r"))
+        service.start()  # config-driven: prefers captured hotkey_vk
 
     try:
         webview.start(on_started)

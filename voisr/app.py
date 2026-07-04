@@ -63,7 +63,7 @@ def hotkey_mode(cfg, config_path) -> None:
     request_permissions()
     api = Api(config_path=config_path, recorder=default_recorder())
     service = HotkeyService(api)
-    service.start(cfg["hotkey"])
+    service.start()  # config-driven: prefers captured hotkey_vk
     print(f"Hold [{cfg['hotkey']}] to talk. Ctrl-C to quit. ({service.status})")
     try:
         while True:

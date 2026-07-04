@@ -165,7 +165,10 @@
             <p class="setting-desc">Hold this key in any app to dictate; release to transcribe and paste. Needs Input Monitoring permission (System Settings &rarr; Privacy &amp; Security).</p>
             <p class="setting-status" id="hotkey-status"></p>
           </div>
-          <select id="hotkey-select" class="select" aria-label="Push-to-talk key"></select>
+          <div class="hotkey-control">
+            <span class="pill" id="hotkey-current">…</span>
+            <button type="button" class="btn-secondary" id="hotkey-capture">Change…</button>
+          </div>
         </div>
         <div class="setting-row">
           <div>

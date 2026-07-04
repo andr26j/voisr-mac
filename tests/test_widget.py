@@ -225,8 +225,9 @@ class FakeListener:
 def _counting_factory():
     made = []
 
-    def factory(on_press, on_release):
+    def factory(handler):
         listener = FakeListener()
+        listener.handler = handler
         made.append(listener)
         return listener
 
@@ -252,7 +253,7 @@ def test_start_attempts_listener_even_unpermitted_then_activates(tmp_path):
     deadline = time.monotonic() + 3
     while "waiting" in svc.status and time.monotonic() < deadline:
         time.sleep(0.05)
-    assert svc.status.startswith("active on alt_r")
+    assert svc.status.startswith("active on Right Option")
     assert len(factory.made) == 2          # respawned to get a live tap
     svc.stop()
 
