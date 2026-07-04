@@ -397,6 +397,10 @@ class HotkeyService:
             # Never raise: a callback error must not kill the tap.
             try:
                 if vk != target_vk:
+                    if kind == "down":
+                        # user is typing manually -> don't smart-join the
+                        # next dictation onto the previous one
+                        self._api.note_user_typing()
                     return
                 if kind == "down":       # auto-repeats; press() guards
                     self.press()
@@ -469,21 +473,43 @@ class HotkeyService:
 class Api:
     """JS<->Python bridge exposed to the dashboard via pywebview."""
 
+    SPACE_JOIN_WINDOW_S = 300  # only join dictations this close together
+
     def __init__(self, config_path=ROOT / "config.json",
-                 history=None, recorder=None, transcribe_fn=transcribe,
+                 history=None, recorder=None, transcribe_fn=None,
                  clock=time.monotonic, hotkey_service=None,
                  fallback_recorder_factory=Recorder,
-                 capture_fn=capture_next_key):
+                 capture_fn=capture_next_key,
+                 paste_fn=paste_at_cursor):
         self._config_path = Path(config_path)
         self._history = history or HistoryStore(ROOT / "data" / "history.jsonl")
         self._recorder = recorder or default_recorder()
         self._fallback_recorder_factory = fallback_recorder_factory
-        self._transcribe_fn = transcribe_fn
+        self._transcribe_fn = transcribe_fn or self._default_transcribe
         self._clock = clock
         self._hotkey_service = hotkey_service
         self._capture_fn = capture_fn
+        self._paste_fn = paste_fn
         self._wav = None
         self._t0 = None
+        self._last_paste_text = None
+        self._last_paste_ts = None
+        self._typed_since_paste = False
+
+    def _default_transcribe(self, wav):
+        """Transcribe with the best local model, biased toward the user's
+        dictionary vocabulary (names/jargon transcribe correctly first try)."""
+        from voisr.transcriber import resolve_model, transcribe as _transcribe
+        cfg = self.get_config()
+        vocab = sorted({v for v in (cfg.get("dictionary") or {}).values()})
+        prompt = ("Glossary: " + ", ".join(vocab) + ".") if vocab else None
+        return _transcribe(wav, model_path=resolve_model(cfg.get("model")),
+                           prompt=prompt)
+
+    def note_user_typing(self):
+        """Called by the key listener when any non-hotkey key is typed;
+        suppresses smart joining of the next dictation."""
+        self._typed_since_paste = True
 
     def attach_hotkey_service(self, service):
         self._hotkey_service = service
@@ -557,7 +583,17 @@ class Api:
             item = self._history.add(text, duration_s=duration)
             pasted = False
             if paste and cfg.get("paste"):
-                pasted = paste_at_cursor(text)
+                lead = ""
+                if (self._last_paste_text
+                        and not self._typed_since_paste
+                        and self._clock() - self._last_paste_ts <= self.SPACE_JOIN_WINDOW_S
+                        and not self._last_paste_text[-1].isspace()):
+                    lead = " "  # joining consecutive dictations, like Wispr
+                pasted = self._paste_fn(lead + text)
+                if pasted:
+                    self._last_paste_text = text
+                    self._last_paste_ts = self._clock()
+                    self._typed_since_paste = False
             if not pasted:
                 set_clipboard(text)
             return {"text": text, "item": item, "copied": True, "pasted": pasted}

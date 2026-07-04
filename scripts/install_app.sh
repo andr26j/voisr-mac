@@ -18,7 +18,7 @@ echo "==> Installing runtime to $APPSUP"
 mkdir -p "$APPSUP/models"
 rsync -a --delete "$PROJECT/voisr/" "$APPSUP/voisr/" --exclude __pycache__
 cp "$PROJECT/requirements.txt" "$APPSUP/"
-cp "$PROJECT/models/ggml-base.en.bin" "$APPSUP/models/"
+rsync -a "$PROJECT/models/" "$APPSUP/models/"
 [ -f "$APPSUP/config.json" ] || cp "$PROJECT/config.json" "$APPSUP/"
 
 echo "==> Creating venv"

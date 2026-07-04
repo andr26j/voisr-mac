@@ -11,7 +11,10 @@ keycodes, so this tap skips character translation entirely.
 It also re-enables the tap if macOS disables it by timeout — a pynput
 weakness (a disabled tap stays dead there).
 """
+import os
 import threading
+
+_OWN_PID = os.getpid()
 
 
 class QuartzKeyListener:
@@ -47,6 +50,10 @@ class QuartzKeyListener:
                     if tap is not None:
                         Quartz.CGEventTapEnable(tap, True)
                     return event
+                src_pid = Quartz.CGEventGetIntegerValueField(
+                    event, Quartz.kCGEventSourceUnixProcessID)
+                if src_pid == _OWN_PID:
+                    return event  # our own posted Cmd-V, not user input
                 vk = Quartz.CGEventGetIntegerValueField(
                     event, Quartz.kCGKeyboardEventKeycode)
                 if etype == Quartz.kCGEventKeyDown:
