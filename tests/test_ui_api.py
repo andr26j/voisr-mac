@@ -50,6 +50,34 @@ def test_config_roundtrip_and_dictionary(tmp_path):
     assert json.loads((tmp_path / "config.json").read_text())["dictionary"] == {"trademake": "TradeMate"}
 
 
+def test_successful_dictation_notifies_window(tmp_path):
+    import time
+
+    class FakeWindow:
+        def __init__(self):
+            self.calls = []
+
+        def evaluate_js(self, js):
+            self.calls.append(js)
+
+    api = make_api(tmp_path)
+    win = FakeWindow()
+    api.attach_window(win)
+    api.start_recording()
+    api.stop_recording()
+    deadline = time.monotonic() + 2.0  # the notify is fire-and-forget off-thread
+    while not win.calls and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert any("voisr:new-dictation" in c for c in win.calls)
+
+
+def test_corrupt_config_falls_back_to_defaults(tmp_path):
+    (tmp_path / "config.json").write_text("{not json")
+    api = make_api(tmp_path)
+    cfg = api.get_config()
+    assert cfg["paste"] is True and cfg["hotkey"] == "alt_r"
+
+
 def test_stats_shape(tmp_path):
     api = make_api(tmp_path)
     s = api.get_stats()

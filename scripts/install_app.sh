@@ -65,10 +65,20 @@ PLIST
 # Native stub (not a script): keeps the process identity as Voisr.app so
 # TCC lists "Voisr" in Privacy & Security instead of "Python", and the
 # process always runs the machine's native architecture.
-if command -v cc >/dev/null; then
-  cc -O2 -o "$APPDIR/Contents/MacOS/Voisr" "$PROJECT/scripts/voisr_stub.c"
+#
+# The stub dlopen()s the Python framework dylib, so its paths must match the
+# python3 that built the venv — derive them here instead of hardcoding.
+PYVER="$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')"
+PYFW="$(python3 -c 'import sys; print(sys.base_prefix)')"
+if command -v cc >/dev/null && [ -f "$PYFW/Python" ]; then
+  cc -O2 -DPYFW="\"$PYFW\"" -DPYVER="\"$PYVER\"" \
+     -o "$APPDIR/Contents/MacOS/Voisr" "$PROJECT/scripts/voisr_stub.c"
 else
-  echo "WARNING: no C compiler; falling back to script launcher (TCC will attribute permissions to Python)"
+  if [ ! -f "$PYFW/Python" ]; then
+    echo "WARNING: python3 is not a framework build ($PYFW/Python missing); falling back to script launcher (TCC will attribute permissions to Python)"
+  else
+    echo "WARNING: no C compiler; falling back to script launcher (TCC will attribute permissions to Python)"
+  fi
   cat > "$APPDIR/Contents/MacOS/Voisr" <<'LAUNCH'
 #!/bin/bash
 APPSUP="$HOME/Library/Application Support/Voisr"

@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -17,7 +18,11 @@ def load_config(path) -> dict:
     cfg = dict(DEFAULT_CONFIG)
     p = Path(path)
     if p.exists():
-        cfg.update(json.loads(p.read_text()))
+        try:
+            cfg.update(json.loads(p.read_text()))
+        except (json.JSONDecodeError, OSError) as e:
+            # a corrupt config must not brick the app; run on defaults
+            print(f"voisr: ignoring unreadable config {p}: {e}", flush=True)
     return cfg
 
 
@@ -41,12 +46,15 @@ def toggle_mode(cfg) -> None:
     print("Toggle mode. Enter = start/stop recording, Ctrl-C to quit.")
     while True:
         input("  [Enter] to START recording... ")
-        wav = Path(tempfile.mkstemp(suffix=".wav")[1])
+        fd, wav_path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)  # the recorder writes by path; keeping fd open leaks one per dictation
+        wav = Path(wav_path)
         rec.start(wav)
         input("  recording — [Enter] to STOP... ")
         err = rec.stop()
         if not wav.exists() or wav.stat().st_size < 1000:
             print(f"  recording failed (mic permission?): {err.strip()[:200]}")
+            wav.unlink(missing_ok=True)
             continue
         deliver(process_audio(wav, cfg["dictionary"]), cfg["paste"])
         wav.unlink(missing_ok=True)

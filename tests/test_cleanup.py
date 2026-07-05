@@ -17,6 +17,14 @@ def test_applies_custom_dictionary():
     assert clean("talk to trade mate support", dictionary={"trade mate": "TradeMate"}) == "Talk to TradeMate support"
 
 
+def test_dictionary_matches_whole_words_only():
+    assert clean("filed under category cat", dictionary={"cat": "Katherine"}) == "Filed under category Katherine"
+
+
+def test_dictionary_replacement_with_backslash_is_literal():
+    assert clean("say backslash", dictionary={"backslash": r"a\b"}) == r"Say a\b"
+
+
 def test_empty_input():
     assert clean("") == ""
 

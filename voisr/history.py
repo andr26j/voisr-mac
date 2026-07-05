@@ -15,7 +15,15 @@ class HistoryStore:
     def _read(self) -> list[dict]:
         if not self.path.exists():
             return []
-        return [json.loads(l) for l in self.path.read_text().splitlines() if l.strip()]
+        items = []
+        for line in self.path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                items.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue  # a torn line (crash mid-write) must not brick the store
+        return items
 
     def _write(self, items: list[dict]) -> None:
         self.path.write_text("".join(json.dumps(i) + "\n" for i in items))

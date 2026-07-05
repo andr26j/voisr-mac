@@ -11,7 +11,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static const char *PYFW = "/Library/Frameworks/Python.framework/Versions/3.14";
+/* Both are overridable at compile time — the installer passes -DPYFW/-DPYVER
+ * matching whatever python3 built the venv (see install_app.sh). */
+#ifndef PYFW
+#define PYFW "/Library/Frameworks/Python.framework/Versions/3.14"
+#endif
+#ifndef PYVER
+#define PYVER "3.14"
+#endif
 
 int main(int argc, char **argv) {
     const char *home = getenv("HOME");
@@ -22,7 +29,7 @@ int main(int argc, char **argv) {
 
     snprintf(appsup, sizeof appsup, "%s/Library/Application Support/Voisr", home);
     snprintf(sitepkgs, sizeof sitepkgs,
-             "%s/venv/lib/python3.14/site-packages", appsup);
+             "%s/venv/lib/python" PYVER "/site-packages", appsup);
     snprintf(logfile, sizeof logfile, "%s/Library/Logs/Voisr.log", home);
     snprintf(pythonpath, sizeof pythonpath, "%s:%s", appsup, sitepkgs);
     snprintf(dylib, sizeof dylib, "%s/Python", PYFW);

@@ -130,6 +130,47 @@ def test_legacy_config_name_still_works(tmp_path):
     svc.stop()
 
 
+def test_missed_release_edge_does_not_invert_state(tmp_path):
+    # Two consecutive press edges (release missed while the tap was disabled)
+    # must NOT flip recording off — the flag bit carries the true key state.
+    (tmp_path / "config.json").write_text(json.dumps({"hotkey_vk": 63, "paste": False}))
+    widget = FakeWidget()
+    factory = cb_factory()
+    svc = HotkeyService(make_api(tmp_path), widget=widget, hide_delay=0,
+                        listener_factory=factory)
+    svc.start()
+    listener = factory.made[-1]
+    listener.handler(63, "flags", 0x800000)   # press
+    listener.handler(63, "flags", 0x800000)   # press again (release was missed)
+    assert widget.calls == ["recording"]      # still recording, not inverted
+    listener.handler(63, "flags", 0)          # release
+    wait_for_hide(widget)
+    assert widget.calls == ["recording", "processing", "done", "hide"]
+    svc.stop()
+
+
+def test_new_recording_is_not_hidden_by_stale_finish(tmp_path):
+    # Re-pressing during the previous dictation's hide delay must not hide
+    # the widget while the new recording is live.
+    import time
+    (tmp_path / "config.json").write_text(json.dumps({"hotkey_vk": 63, "paste": False}))
+    widget = FakeWidget()
+    factory = cb_factory()
+    svc = HotkeyService(make_api(tmp_path), widget=widget, hide_delay=0.3,
+                        listener_factory=factory)
+    svc.start()
+    listener = factory.made[-1]
+    listener.handler(63, "flags", 0x800000)
+    listener.handler(63, "flags", 0)
+    deadline = time.monotonic() + 3.0
+    while "done" not in widget.calls and time.monotonic() < deadline:
+        time.sleep(0.02)
+    listener.handler(63, "flags", 0x800000)   # new recording inside hide delay
+    time.sleep(0.6)                            # let the stale hide timer fire
+    assert widget.calls[-1] == "recording"     # not hidden by the stale thread
+    svc.stop()
+
+
 def test_capture_hotkey_stores_vk_and_restarts_service(tmp_path):
     class FakeSvc:
         def __init__(self): self.events = []

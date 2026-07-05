@@ -36,6 +36,15 @@ def test_stats(tmp_path):
     assert s["streak_days"] == 1
 
 
+def test_corrupt_line_is_skipped(tmp_path):
+    h = HistoryStore(tmp_path / "h.jsonl")
+    h.add("good", 1.0)
+    with open(h.path, "a") as f:
+        f.write('{"torn line\n')  # crash mid-write
+    h.add("after", 1.0)
+    assert [i["text"] for i in h.list()] == ["after", "good"]
+
+
 def test_stats_empty(tmp_path):
     s = HistoryStore(tmp_path / "h.jsonl").stats()
     assert s == {"total_words": 0, "dictations": 0, "avg_wpm": 0, "streak_days": 0}

@@ -11,9 +11,9 @@ const ICONS = {
 };
 
 function escapeHtml(s) {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
+  // must also cover quotes: the result is interpolated into attribute values
+  return String(s).replace(/[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 function timeOf(ts) {
@@ -235,6 +235,12 @@ function init() {
   $("#widget-toggle").addEventListener("change", async (e) => {
     await api().set_config({ show_widget: e.target.checked });
     toast(e.target.checked ? "Recording widget on" : "Recording widget off");
+  });
+  // pushed from Python after each dictation (hotkey ones land while the
+  // dashboard is open) — refresh whichever view is on screen
+  window.addEventListener("voisr:new-dictation", () => {
+    if (!$("#view-home").hidden) renderHome();
+    if (!$("#view-history").hidden) renderHistory();
   });
   $("#hotkey-capture").addEventListener("click", async (e) => {
     const btn = e.currentTarget;

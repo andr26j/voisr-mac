@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -97,6 +98,18 @@ def resolve_key(key_name: str):
 # service must use toggle semantics (1st event = press, 2nd = release).
 # Modifiers never auto-repeat, so toggling is sound.
 TOGGLE_VKS = {63}  # Fn / Globe
+
+# CGEventFlags bit that mirrors each modifier key's physical state, so press
+# vs release can be read from the event itself instead of blind toggling
+# (a missed edge would otherwise invert the toggle until the next miss).
+# Side-specific keys use the stable NX_DEVICE* bits.
+_VK_FLAG_MASKS = {
+    63: 0x800000,   # Fn / Globe (kCGEventFlagMaskSecondaryFn)
+    58: 0x20, 61: 0x40,      # Left / Right Option
+    55: 0x8, 54: 0x10,       # Left / Right Command
+    56: 0x2, 60: 0x4,        # Left / Right Shift
+    59: 0x1, 62: 0x2000,     # Left / Right Control
+}
 
 VK_LABELS = {
     63: "Fn / Globe", 57: "Caps Lock",
@@ -308,6 +321,7 @@ class HotkeyService:
         self._pressed = False
         self._key_name = None
         self._target_vk = None
+        self._epoch = 0  # bumped per recording; stale _finish threads must not touch the widget
         self.status = "not started"
 
     def _widget_enabled(self) -> bool:
@@ -320,6 +334,7 @@ class HotkeyService:
         if "error" in result:
             return  # e.g. a dashboard recording is already running
         self._pressed = True
+        self._epoch += 1
         if self._widget_enabled():
             self._widget.show_recording()
 
@@ -334,11 +349,12 @@ class HotkeyService:
         # callback: macOS disables event taps whose callbacks stall, and
         # pynput never re-enables them (the hotkey would die after one use).
         import threading
-        threading.Thread(target=self._finish, args=(show,), daemon=True).start()
+        threading.Thread(target=self._finish, args=(show, self._epoch),
+                         daemon=True).start()
 
-    def _finish(self, show: bool) -> None:
+    def _finish(self, show: bool, epoch: int) -> None:
         result = self._api.stop_recording(paste=True)
-        if show:
+        if show and epoch == self._epoch:
             if "error" in result:
                 self._widget.show_error()
             else:
@@ -346,7 +362,8 @@ class HotkeyService:
             if self._hide_delay:
                 import time
                 time.sleep(self._hide_delay)
-            self._widget.hide()
+            if epoch == self._epoch:  # a newer recording owns the widget now
+                self._widget.hide()
 
     def _resolve_target(self, key_name=None):
         """Return (vk, label) for the push-to-talk key.
@@ -407,7 +424,16 @@ class HotkeyService:
                 elif kind == "up":
                     self.release()
                 else:                    # "flags": modifier edges (Fn, ⌥, ⌘...)
-                    self._toggle()       # modifiers never auto-repeat
+                    mask = _VK_FLAG_MASKS.get(vk)
+                    if mask is not None:
+                        # the flag bit carries the key's true state — immune
+                        # to the desync a missed edge causes with toggling
+                        if flags & mask:
+                            self.press()
+                        else:
+                            self.release()
+                    else:                # e.g. Caps Lock: flag ≠ key state
+                        self._toggle()   # modifiers never auto-repeat
             except Exception:
                 pass
 
@@ -495,6 +521,7 @@ class Api:
         self._last_paste_text = None
         self._last_paste_ts = None
         self._typed_since_paste = False
+        self._window = None
 
     def _default_transcribe(self, wav):
         """Transcribe with the best local model, biased toward the user's
@@ -513,6 +540,28 @@ class Api:
 
     def attach_hotkey_service(self, service):
         self._hotkey_service = service
+
+    def attach_window(self, window):
+        """Dashboard window handle, used to push live-refresh events to JS."""
+        self._window = window
+
+    def _notify_dictation(self):
+        """Tell the dashboard a dictation landed (hotkey dictations must show
+        up without a view switch). Fire-and-forget off-thread: a slow or dead
+        webview must never delay or break the record path."""
+        win = self._window
+        if win is None:
+            return
+        import threading
+
+        def go():
+            try:
+                win.evaluate_js(
+                    'window.dispatchEvent(new Event("voisr:new-dictation"))')
+            except Exception:
+                pass
+
+        threading.Thread(target=go, daemon=True).start()
 
     def capture_hotkey(self):
         """'Press any key' flow: suspend the live listener (so the pressed
@@ -538,7 +587,9 @@ class Api:
     def start_recording(self):
         if self._wav is not None:
             return {"error": "already recording"}
-        wav = Path(tempfile.mkstemp(suffix=".wav")[1])
+        fd, wav_path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)  # the recorder writes by path; keeping fd open leaks one per dictation
+        wav = Path(wav_path)
         try:
             self._recorder.start(wav)
         except Exception:
@@ -581,6 +632,7 @@ class Api:
             if not text:
                 return {"error": "nothing transcribed — try speaking a bit longer"}
             item = self._history.add(text, duration_s=duration)
+            self._notify_dictation()
             pasted = False
             if paste and cfg.get("paste"):
                 lead = ""
@@ -668,6 +720,7 @@ def main():
     api.attach_hotkey_service(service)
     window = webview.create_window("Voisr", str(WEB_DIR / "index.html"),
                                    js_api=api, width=1060, height=700, min_size=(860, 560))
+    api.attach_window(window)
     widget.create()
 
     def on_started():

@@ -10,7 +10,14 @@ def clean(text: str, dictionary: dict[str, str] | None = None) -> str:
         return ""
     out = FILLER_RE.sub("", text)
     for spoken, written in (dictionary or {}).items():
-        out = re.sub(re.escape(spoken), written, out, flags=re.IGNORECASE)
+        # whole-word match (don't rewrite inside longer words); replacement is
+        # a callable so backslashes in `written` stay literal
+        pattern = re.escape(spoken)
+        if spoken[:1].isalnum():
+            pattern = r"\b" + pattern
+        if spoken[-1:].isalnum():
+            pattern = pattern + r"\b"
+        out = re.sub(pattern, lambda m: written, out, flags=re.IGNORECASE)
     out = re.sub(r"\s+", " ", out).strip()
     out = re.sub(r"\s+([,.;:!?])", r"\1", out)
     out = re.sub(r"^[,.;:\s]+", "", out)
