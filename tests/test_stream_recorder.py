@@ -38,6 +38,20 @@ def test_back_to_back_recordings(tmp_path):
         rec.close()
 
 
+def test_cap_stops_buffering_and_releases_mic(tmp_path):
+    import sounddevice as sd
+    rec = StreamRecorder()
+    rec._recording = True
+    rec._out = str(tmp_path / "c.wav")
+    rec._max_bytes = 8  # tiny cap so the test stays instant
+    rec._on_audio(b"\x00" * 8, 4, None, None)
+    with pytest.raises(sd.CallbackStop):   # sounddevice stops the stream on this
+        rec._on_audio(b"\x00" * 8, 4, None, None)
+    rec.stop()
+    with wave.open(str(tmp_path / "c.wav"), "rb") as w:
+        assert w.getnframes() == 4  # only the pre-cap audio was kept
+
+
 def test_stop_without_start_raises(tmp_path):
     rec = StreamRecorder()
     try:

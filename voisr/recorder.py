@@ -7,6 +7,8 @@ from voisr.paths import find_binary
 class Recorder:
     """Records mic audio to 16 kHz mono WAV using ffmpeg/avfoundation."""
 
+    MAX_SECONDS = 600  # stops a stuck-key recording (parity with StreamRecorder)
+
     def __init__(self, device: str = ":0"):
         self.device = device
         self.proc: subprocess.Popen | None = None
@@ -18,7 +20,7 @@ class Recorder:
         self.proc = subprocess.Popen(
             [ffmpeg, "-y", "-loglevel", "error", "-f", "avfoundation",
              "-i", self.device, "-ar", "16000", "-ac", "1",
-             "-c:a", "pcm_s16le", str(out_path)],
+             "-c:a", "pcm_s16le", "-t", str(self.MAX_SECONDS), str(out_path)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 

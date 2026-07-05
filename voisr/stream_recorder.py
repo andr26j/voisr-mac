@@ -13,6 +13,7 @@ class StreamRecorder:
     """
 
     SAMPLERATE = 16000
+    MAX_SECONDS = 600  # bounds memory (~19 MB) and stops a stuck-key recording
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -20,11 +21,21 @@ class StreamRecorder:
         self._recording = False
         self._out = None
         self._stream = None
+        self._bytes = 0
+        self._max_bytes = self.SAMPLERATE * 2 * self.MAX_SECONDS
 
     def _on_audio(self, indata, frames, time_info, status):
-        if self._recording:
-            with self._lock:
+        if not self._recording:
+            return
+        with self._lock:
+            if self._bytes < self._max_bytes:
                 self._frames.append(bytes(indata))
+                self._bytes += len(indata)
+                return
+        # cap reached: stop capturing and release the mic (indicator off);
+        # stop() still writes everything buffered so far
+        import sounddevice as sd
+        raise sd.CallbackStop
 
     def prime(self) -> None:
         """No-op: the mic is opened per-recording, never held open.
@@ -39,6 +50,7 @@ class StreamRecorder:
         import sounddevice as sd
         with self._lock:
             self._frames = []
+            self._bytes = 0
         self._out = str(out_path)
         self._recording = True
         # Open the mic only now — the indicator turns on here and off in stop()
