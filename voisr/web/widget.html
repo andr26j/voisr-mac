@@ -73,10 +73,33 @@
   </div>
 <script>
   "use strict";
+  const pill = document.getElementById("pill");
+  const bars = pill.querySelectorAll(".bar");
+
+  /* Restart the CSS animation from frame 0.
+     WebKit pauses a WKWebView's animations while its window is occluded —
+     which is exactly what happens when the pill is ordered over another
+     app's fullscreen Space — and does not reliably resume an already-running
+     animation when the window becomes visible again, so the bars can appear
+     frozen. Re-applying the animation guarantees it plays. */
+  function kick() {
+    for (const b of bars) b.style.animation = "none";
+    void pill.offsetWidth;            // reflow so the removal takes effect
+    for (const b of bars) b.style.animation = "";
+  }
+
   function setState(state) {
-    document.getElementById("pill").dataset.state = state;
+    pill.dataset.state = state;
+    kick();
   }
   window.setState = setState;
+
+  /* WebKit flips the page back to "visible" the moment the panel is shown
+     over a fullscreen app — re-kick then so the waveform is never stuck at
+     its first frame after appearing. */
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") kick();
+  });
 
   /* browser QA: widget.html?preview cycles through all states */
   if (new URLSearchParams(location.search).has("preview")) {
