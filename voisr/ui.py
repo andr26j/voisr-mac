@@ -358,7 +358,7 @@ class HotkeyService:
         self._epoch += 1
         cfg = self._api.get_config()
         if self._widget is not None and bool(cfg.get("show_widget", True)):
-            self._widget.show_recording(theme=cfg.get("pill_theme", "classic"))
+            self._widget.show_recording(theme=sanitize_pill_theme(cfg.get("pill_theme")))
 
     def release(self) -> None:
         if not self._pressed:
