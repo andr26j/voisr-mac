@@ -85,6 +85,22 @@ HOTKEY_OPTIONS = [
     {"value": "f19", "label": "F19"},
 ]
 
+PILL_THEMES = [
+    {"value": "classic", "label": "Classic"},
+    {"value": "ember", "label": "Ember"},
+    {"value": "aurora", "label": "Aurora"},
+    {"value": "ocean", "label": "Ocean"},
+    {"value": "neon", "label": "Neon EQ"},
+    {"value": "breathe", "label": "Breathe"},
+    {"value": "scanner", "label": "Scanner"},
+]
+_PILL_THEME_VALUES = {t["value"] for t in PILL_THEMES}
+
+
+def sanitize_pill_theme(name) -> str:
+    """Whitelist a theme name from config before it reaches JS interpolation."""
+    return name if name in _PILL_THEME_VALUES else "classic"
+
 
 def resolve_key(key_name: str):
     """Map a config key name to a pynput key object."""
@@ -677,6 +693,9 @@ class Api:
 
     def get_hotkey_options(self):
         return HOTKEY_OPTIONS
+
+    def get_pill_themes(self):
+        return PILL_THEMES
 
     def get_hotkey_status(self):
         if self._hotkey_service is None:

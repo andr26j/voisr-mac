@@ -91,3 +91,22 @@ def test_delete_history_item(tmp_path):
     item_id = api.get_history()[0]["id"]
     api.delete_history_item(item_id)
     assert api.get_history() == []
+
+
+def test_default_config_includes_pill_theme(tmp_path):
+    api = make_api(tmp_path)
+    assert api.get_config()["pill_theme"] == "classic"
+
+
+def test_pill_theme_roundtrip(tmp_path):
+    api = make_api(tmp_path)
+    api.set_config({"pill_theme": "ember"})
+    assert api.get_config()["pill_theme"] == "ember"
+
+
+def test_get_pill_themes_shape(tmp_path):
+    api = make_api(tmp_path)
+    themes = api.get_pill_themes()
+    assert [t["value"] for t in themes] == [
+        "classic", "ember", "aurora", "ocean", "neon", "breathe", "scanner"]
+    assert all(set(t) == {"value", "label"} for t in themes)

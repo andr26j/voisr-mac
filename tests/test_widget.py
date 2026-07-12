@@ -336,3 +336,11 @@ def test_real_audio_passes_silence_gate(tmp_path):
     api.start_recording()
     res = api.stop_recording()
     assert res["text"] == "Real words"
+
+
+def test_unknown_theme_sanitized_to_classic():
+    from voisr.ui import sanitize_pill_theme
+    assert sanitize_pill_theme("ember") == "ember"
+    assert sanitize_pill_theme("classic") == "classic"
+    assert sanitize_pill_theme('x"); alert(1); ("') == "classic"
+    assert sanitize_pill_theme(None) == "classic"
