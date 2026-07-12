@@ -107,8 +107,9 @@
   @keyframes scan    { 0%, 20% { opacity: 1; } 40%, 100% { opacity: .18; } }
   @media (prefers-reduced-motion: reduce) {
     .bar { animation: none !important; height: 14px !important; }
-    /* scanner's resting opacity is animation-driven; restore visibility */
-    .pill[data-theme="scanner"] .bar { opacity: .9 !important; }
+    /* scanner's resting opacity is animation-driven; restore visibility
+       (and keep the dots dot-shaped rather than 14px capsules) */
+    .pill[data-theme="scanner"] .bar { opacity: .9 !important; height: 6px !important; }
   }
 </style>
 </head>
