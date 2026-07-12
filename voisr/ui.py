@@ -99,7 +99,7 @@ _PILL_THEME_VALUES = {t["value"] for t in PILL_THEMES}
 
 def sanitize_pill_theme(name) -> str:
     """Whitelist a theme name from config before it reaches JS interpolation."""
-    return name if name in _PILL_THEME_VALUES else "classic"
+    return name if isinstance(name, str) and name in _PILL_THEME_VALUES else "classic"
 
 
 def resolve_key(key_name: str):

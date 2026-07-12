@@ -344,3 +344,5 @@ def test_unknown_theme_sanitized_to_classic():
     assert sanitize_pill_theme("classic") == "classic"
     assert sanitize_pill_theme('x"); alert(1); ("') == "classic"
     assert sanitize_pill_theme(None) == "classic"
+    assert sanitize_pill_theme([]) == "classic"
+    assert sanitize_pill_theme({}) == "classic"
