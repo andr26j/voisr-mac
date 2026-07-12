@@ -85,6 +85,9 @@ HOTKEY_OPTIONS = [
     {"value": "f19", "label": "F19"},
 ]
 
+# Adding a theme? Also update: widget.html (theme CSS + THEME_VALUES),
+# style.css (mini-pill rule + keyframes), and app.js's dev-mock
+# get_pill_themes. test_widget_html_covers_all_pill_themes guards widget.html.
 PILL_THEMES = [
     {"value": "classic", "label": "Classic"},
     {"value": "ember", "label": "Ember"},

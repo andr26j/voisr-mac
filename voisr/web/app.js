@@ -212,24 +212,18 @@ async function addDictEntry(e) {
 /* ---------- settings ---------- */
 
 function miniPillHtml(value) {
-  return `<div class="mini-pill" data-theme="${value}">${'<span class="mb"></span>'.repeat(7)}</div>`;
+  return `<div class="mini-pill" data-theme="${escapeHtml(value)}">${'<span class="mb"></span>'.repeat(7)}</div>`;
 }
 
 async function renderThemes() {
   const [cfg, themes] = await Promise.all([api().get_config(), api().get_pill_themes()]);
   const active = cfg.pill_theme || "classic";
-  const grid = $("#theme-grid");
-  grid.innerHTML = themes.map((t) => `
+  $("#theme-grid").innerHTML = themes.map((t) => `
     <button type="button" class="theme-opt${t.value === active ? " active" : ""}"
-            data-value="${t.value}" role="radio" aria-checked="${t.value === active}">
+            data-value="${escapeHtml(t.value)}" aria-pressed="${t.value === active}">
       ${miniPillHtml(t.value)}
-      <span class="theme-name">${t.label}</span>
+      <span class="theme-name">${escapeHtml(t.label)}</span>
     </button>`).join("");
-  grid.querySelectorAll(".theme-opt").forEach((b) => b.addEventListener("click", async () => {
-    await api().set_config({ pill_theme: b.dataset.value });
-    toast(`Pill theme: ${b.querySelector(".theme-name").textContent}`);
-    renderThemes();
-  }));
 }
 
 async function renderSettings() {
@@ -257,6 +251,13 @@ function init() {
   $("#widget-toggle").addEventListener("change", async (e) => {
     await api().set_config({ show_widget: e.target.checked });
     toast(e.target.checked ? "Recording widget on" : "Recording widget off");
+  });
+  $("#theme-grid").addEventListener("click", async (e) => {
+    const btn = e.target.closest(".theme-opt");
+    if (!btn) return;
+    await api().set_config({ pill_theme: btn.dataset.value });
+    toast(`Pill theme: ${btn.querySelector(".theme-name").textContent}`);
+    renderThemes();
   });
   // pushed from Python after each dictation (hotkey ones land while the
   // dashboard is open) — refresh whichever view is on screen

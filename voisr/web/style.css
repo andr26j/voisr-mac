@@ -526,4 +526,6 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 @media (prefers-reduced-motion: reduce) {
   .mini-pill .mb { animation: none !important; height: 8px !important; }
+  /* scanner's resting opacity is animation-driven; restore visibility + dot shape */
+  .mini-pill[data-theme="scanner"] .mb { opacity: .9 !important; height: 4px !important; }
 }
