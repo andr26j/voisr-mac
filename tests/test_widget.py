@@ -18,9 +18,11 @@ class FakeRecorder:
 class FakeWidget:
     def __init__(self):
         self.calls = []
+        self.themes = []
 
-    def show_recording(self):
+    def show_recording(self, theme="classic"):
         self.calls.append("recording")
+        self.themes.append(theme)
 
     def show_processing(self):
         self.calls.append("processing")
@@ -346,3 +348,18 @@ def test_unknown_theme_sanitized_to_classic():
     assert sanitize_pill_theme(None) == "classic"
     assert sanitize_pill_theme([]) == "classic"
     assert sanitize_pill_theme({}) == "classic"
+
+
+def test_press_passes_configured_theme_to_widget(tmp_path):
+    widget = FakeWidget()
+    api = make_api(tmp_path, config={"pill_theme": "ember"})
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.press()
+    assert widget.themes == ["ember"]
+
+
+def test_press_defaults_to_classic_theme(tmp_path):
+    widget = FakeWidget()
+    svc = HotkeyService(make_api(tmp_path), widget=widget, hide_delay=0)
+    svc.press()
+    assert widget.themes == ["classic"]
