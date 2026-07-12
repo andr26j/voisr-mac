@@ -70,16 +70,37 @@ PLIST
 # python3 that built the venv — derive them here instead of hardcoding.
 PYVER="$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')"
 PYFW="$(python3 -c 'import sys; print(sys.base_prefix)')"
-if command -v cc >/dev/null && [ -f "$PYFW/Python" ]; then
+LAUNCHER="$APPDIR/Contents/MacOS/Voisr"
+
+# macOS ties an ad-hoc-signed app's Input Monitoring / Accessibility grants to
+# the launcher binary's code hash (cdhash). Recompiling the stub produces a new
+# cdhash, which SILENTLY revokes those grants on every reinstall — the toggle
+# in System Settings stays ON but no longer matches the new binary, so the
+# hotkey tap is denied. To keep grants alive across reinstalls, only rebuild the
+# launcher when its inputs actually change (stub source, Python version/prefix);
+# otherwise reuse the existing binary so its cdhash stays constant.
+# The sig file lives OUTSIDE the .app bundle: an app's cdhash is hashed over the
+# executable AND its sealed Info.plist/resources, so a tracking file inside the
+# bundle would itself change the cdhash and defeat the purpose.
+BUILD_SIG="stub:$(shasum -a 256 "$PROJECT/scripts/voisr_stub.c" | cut -d' ' -f1) pyver:$PYVER pyfw:$PYFW"
+SIGFILE="$APPSUP/.launcher-build-sig"
+
+if [ -f "$LAUNCHER" ] && [ -f "$SIGFILE" ] && [ "$(cat "$SIGFILE")" = "$BUILD_SIG" ]; then
+  echo "==> Launcher unchanged — reusing it so Input Monitoring / Accessibility grants survive"
+elif command -v cc >/dev/null && [ -f "$PYFW/Python" ]; then
+  had_launcher=""; [ -f "$LAUNCHER" ] && had_launcher=1
   cc -O2 -DPYFW="\"$PYFW\"" -DPYVER="\"$PYVER\"" \
-     -o "$APPDIR/Contents/MacOS/Voisr" "$PROJECT/scripts/voisr_stub.c"
+     -o "$LAUNCHER" "$PROJECT/scripts/voisr_stub.c"
+  chmod +x "$LAUNCHER"
+  printf '%s' "$BUILD_SIG" > "$SIGFILE"
+  [ -n "$had_launcher" ] && echo "==> Launcher rebuilt (stub or Python changed) — re-grant Voisr under Input Monitoring & Accessibility once; macOS pins those to the binary."
 else
   if [ ! -f "$PYFW/Python" ]; then
     echo "WARNING: python3 is not a framework build ($PYFW/Python missing); falling back to script launcher (TCC will attribute permissions to Python)"
   else
     echo "WARNING: no C compiler; falling back to script launcher (TCC will attribute permissions to Python)"
   fi
-  cat > "$APPDIR/Contents/MacOS/Voisr" <<'LAUNCH'
+  cat > "$LAUNCHER" <<'LAUNCH'
 #!/bin/bash
 APPSUP="$HOME/Library/Application Support/Voisr"
 LOG="$HOME/Library/Logs/Voisr.log"
@@ -87,8 +108,9 @@ export PYTHONPATH="$APPSUP"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 exec "$APPSUP/venv/bin/python" -m voisr.ui >> "$LOG" 2>&1
 LAUNCH
+  chmod +x "$LAUNCHER"
+  rm -f "$SIGFILE"  # script launcher has no stable native binary to track
 fi
-chmod +x "$APPDIR/Contents/MacOS/Voisr"
 
 xattr -cr "$APPDIR" 2>/dev/null || true
 codesign --force --deep -s - "$APPDIR" 2>/dev/null || true
