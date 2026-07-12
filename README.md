@@ -17,7 +17,7 @@ bash setup.sh   # installs whisper-cpp (brew), downloads the model (~141 MB), cr
 
 ## Desktop app (dashboard)
 
-A Wispr Flow–style dashboard: record dictations, browse history, track stats (words, WPM, streak), edit your dictionary, and change settings.
+A Wispr Flow–style dashboard: record dictations, browse history, track stats (words, WPM, streak), edit your dictionary, and change settings — including 7 color/animation themes for the recording pill.
 
 ```bash
 bash scripts/install_app.sh   # installs to ~/Applications/Voisr.app
