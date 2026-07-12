@@ -363,3 +363,13 @@ def test_press_defaults_to_classic_theme(tmp_path):
     svc = HotkeyService(make_api(tmp_path), widget=widget, hide_delay=0)
     svc.press()
     assert widget.themes == ["classic"]
+
+
+def test_widget_html_covers_all_pill_themes():
+    """widget.html's JS whitelist and CSS rules must track PILL_THEMES."""
+    from voisr.ui import PILL_THEMES, WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    for theme in PILL_THEMES:
+        assert f'"{theme["value"]}"' in html  # THEME_VALUES entry
+        if theme["value"] != "classic":       # classic = no attribute by design
+            assert f'[data-theme="{theme["value"]}"]' in html  # CSS rule exists

@@ -56,7 +56,9 @@
   .pill[data-state="error"] .icon-error { display: block; }
   .icon svg { width: 20px; height: 20px; display: block; }
   /* ---- themes ----------------------------------------------------------
-     Color (and Scanner's dot shape) applies in ALL states; each theme's
+     Color (and Scanner's dot shape) applies in ALL states — theme rules must
+     stay AFTER the state rules above (equal specificity, source order
+     decides); each theme's
      signature animation applies to the recording state only. Overrides use
      longhand animation-* properties so the nth-child stagger delays above
      keep applying (the shorthand would reset them). No data-theme attribute
@@ -86,7 +88,7 @@
   .pill[data-theme="breathe"] .bar { background: #A8E6CF; }
   .pill[data-state="recording"][data-theme="breathe"] .bar {
     animation-name: breathe; animation-duration: 1.6s;
-    animation-delay: 0s !important; /* one synchronized pulse, no stagger */
+    animation-delay: 0s !important; /* one synchronized pulse, no stagger (defensive: ties with nth-child stagger rules on specificity) */
   }
 
   .pill[data-theme="scanner"] .bar {
@@ -105,6 +107,8 @@
   @keyframes scan    { 0%, 20% { opacity: 1; } 40%, 100% { opacity: .18; } }
   @media (prefers-reduced-motion: reduce) {
     .bar { animation: none !important; height: 14px !important; }
+    /* scanner's resting opacity is animation-driven; restore visibility */
+    .pill[data-theme="scanner"] .bar { opacity: .9 !important; }
   }
 </style>
 </head>
@@ -151,8 +155,10 @@
   }
   window.setTheme = setTheme;
 
+  const params = new URLSearchParams(location.search);
+
   /* browser QA: widget.html?theme=ember previews a theme */
-  const qaTheme = new URLSearchParams(location.search).get("theme");
+  const qaTheme = params.get("theme");
   if (qaTheme) setTheme(qaTheme);
 
   /* WebKit flips the page back to "visible" the moment the panel is shown
@@ -163,7 +169,7 @@
   });
 
   /* browser QA: widget.html?preview cycles through all states */
-  if (new URLSearchParams(location.search).has("preview")) {
+  if (params.has("preview")) {
     const states = ["recording", "processing", "done", "error"];
     let i = 0;
     setInterval(() => { setState(states[i = (i + 1) % states.length]); }, 1500);
