@@ -211,6 +211,27 @@ async function addDictEntry(e) {
 
 /* ---------- settings ---------- */
 
+function miniPillHtml(value) {
+  return `<div class="mini-pill" data-theme="${value}">${'<span class="mb"></span>'.repeat(7)}</div>`;
+}
+
+async function renderThemes() {
+  const [cfg, themes] = await Promise.all([api().get_config(), api().get_pill_themes()]);
+  const active = cfg.pill_theme || "classic";
+  const grid = $("#theme-grid");
+  grid.innerHTML = themes.map((t) => `
+    <button type="button" class="theme-opt${t.value === active ? " active" : ""}"
+            data-value="${t.value}" role="radio" aria-checked="${t.value === active}">
+      ${miniPillHtml(t.value)}
+      <span class="theme-name">${t.label}</span>
+    </button>`).join("");
+  grid.querySelectorAll(".theme-opt").forEach((b) => b.addEventListener("click", async () => {
+    await api().set_config({ pill_theme: b.dataset.value });
+    toast(`Pill theme: ${b.querySelector(".theme-name").textContent}`);
+    renderThemes();
+  }));
+}
+
 async function renderSettings() {
   const [cfg, status] = await Promise.all([
     api().get_config(), api().get_hotkey_status(),
@@ -219,6 +240,7 @@ async function renderSettings() {
   $("#widget-toggle").checked = cfg.show_widget !== false;
   $("#hotkey-current").textContent = cfg.hotkey_label || cfg.hotkey || "alt_r";
   $("#hotkey-status").textContent = status.status;
+  renderThemes();
 }
 
 /* ---------- init ---------- */
@@ -276,7 +298,7 @@ setTimeout(() => {
     { id: "a2", ts: now - 7200, text: "Draft a follow-up about the Brunswick site visit next week.", words: 10, duration_s: 6 },
     { id: "a3", ts: now - 90000, text: "Remember to book the trailer for Saturday morning.", words: 8, duration_s: 4 },
   ];
-  let mockCfg = { hotkey: "alt_r", paste: true, show_widget: true, device: ":0", dictionary: { trademake: "TradeMate", "trade mate": "TradeMate" } };
+  let mockCfg = { hotkey: "alt_r", paste: true, show_widget: true, device: ":0", pill_theme: "classic", dictionary: { trademake: "TradeMate", "trade mate": "TradeMate" } };
   let recording = false;
   window.pywebview = { api: {
     get_history: async () => [...mockHistory].sort((a, b) => b.ts - a.ts),
@@ -296,6 +318,12 @@ setTimeout(() => {
       { value: "shift_r", label: "Right Shift (\u21e7)" }, { value: "f13", label: "F13" }, { value: "f14", label: "F14" },
     ],
     get_hotkey_status: async () => ({ status: `active on ${mockCfg.hotkey}` }),
+    get_pill_themes: async () => [
+      { value: "classic", label: "Classic" }, { value: "ember", label: "Ember" },
+      { value: "aurora", label: "Aurora" }, { value: "ocean", label: "Ocean" },
+      { value: "neon", label: "Neon EQ" }, { value: "breathe", label: "Breathe" },
+      { value: "scanner", label: "Scanner" },
+    ],
     start_recording: async () => { recording = true; return { recording: true }; },
     stop_recording: async () => {
       if (!recording) return { error: "not recording" };
