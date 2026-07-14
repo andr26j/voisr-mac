@@ -295,10 +295,47 @@ class RecordingWidget:
                 self._webview.evaluateJavaScript_completionHandler_(
                     f'setState("{state}")', None)
                 self._panel.orderFrontRegardless()
+                if state == "recording":
+                    self._ensure_front()
 
             AppHelper.callAfter(go)
         except Exception:
             pass  # never break the record path
+
+    def _ensure_front(self) -> None:
+        """Reliably surface the pill over another app's native-fullscreen Space.
+
+        Placing a window onto a fullscreen Space is an asynchronous
+        window-server operation: a single orderFrontRegardless() sometimes
+        fails to composite (occlusionState never gains the Visible bit) and the
+        pill simply never appears — the app's most-reported bug. Giving the run
+        loop extra turns after the order lets the placement land, so re-assert
+        it over the next fraction of a second. The 0.8s check re-orders one last
+        time and logs the failure signature if the window is still not visible,
+        so any recurrence is captured instead of invisible."""
+        try:
+            from PyObjCTools import AppHelper
+
+            def reorder():
+                if self._panel is not None:
+                    self._panel.orderFrontRegardless()
+
+            def check():
+                p = self._panel
+                if p is None:
+                    return
+                if not (int(p.occlusionState()) & 2):  # NSWindowOcclusionStateVisible
+                    print("Voisr widget: pill still not visible after show "
+                          f"(occ={int(p.occlusionState())}, "
+                          f"onActiveSpace={bool(p.isOnActiveSpace())}); re-ordering",
+                          flush=True)
+                    p.orderFrontRegardless()
+
+            AppHelper.callLater(0.10, reorder)
+            AppHelper.callLater(0.35, reorder)
+            AppHelper.callLater(0.80, check)
+        except Exception:
+            pass
 
     def show_recording(self, theme: str = "classic", color: str | None = None):
         self._set("recording", theme=theme, color=color)
