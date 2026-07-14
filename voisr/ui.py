@@ -274,7 +274,8 @@ class RecordingWidget:
         except Exception as e:
             print(f"Voisr widget: build failed: {e}", flush=True)
 
-    def _set(self, state: str, theme: str | None = None) -> None:
+    def _set(self, state: str, theme: str | None = None,
+             color: str | None = None) -> None:
         try:
             from PyObjCTools import AppHelper
 
@@ -284,10 +285,13 @@ class RecordingWidget:
                 if self._webview is None:
                     return
                 if theme is not None:
-                    # sanitize_pill_theme whitelists the name — config.json
-                    # content can never be interpolated into JS verbatim
+                    # sanitize_* whitelist both values — config.json content
+                    # can never be interpolated into JS verbatim
                     self._webview.evaluateJavaScript_completionHandler_(
                         f'setTheme("{sanitize_pill_theme(theme)}")', None)
+                    safe = sanitize_pill_color(color)
+                    self._webview.evaluateJavaScript_completionHandler_(
+                        f'setColor("{safe}")' if safe else "setColor(null)", None)
                 self._webview.evaluateJavaScript_completionHandler_(
                     f'setState("{state}")', None)
                 self._panel.orderFrontRegardless()
@@ -296,8 +300,8 @@ class RecordingWidget:
         except Exception:
             pass  # never break the record path
 
-    def show_recording(self, theme: str = "classic"):
-        self._set("recording", theme=theme)
+    def show_recording(self, theme: str = "classic", color: str | None = None):
+        self._set("recording", theme=theme, color=color)
 
     def show_processing(self):
         self._set("processing")
