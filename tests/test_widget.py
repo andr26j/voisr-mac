@@ -373,3 +373,15 @@ def test_widget_html_covers_all_pill_themes():
         assert f'"{theme["value"]}"' in html  # THEME_VALUES entry
         if theme["value"] != "classic":       # classic = no attribute by design
             assert f'[data-theme="{theme["value"]}"]' in html  # CSS rule exists
+
+
+def test_pill_color_sanitizer():
+    from voisr.ui import sanitize_pill_color
+    assert sanitize_pill_color("#FF00AA") == "#FF00AA"
+    assert sanitize_pill_color("#ff00aa") == "#ff00aa"
+    assert sanitize_pill_color(None) is None
+    assert sanitize_pill_color("red") is None
+    assert sanitize_pill_color("#FFF") is None
+    assert sanitize_pill_color('#12345"); alert(1); ("') is None
+    assert sanitize_pill_color(["#FF00AA"]) is None
+    assert sanitize_pill_color({}) is None

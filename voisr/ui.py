@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -103,6 +104,17 @@ _PILL_THEME_VALUES = {t["value"] for t in PILL_THEMES}
 def sanitize_pill_theme(name) -> str:
     """Whitelist a theme name from config before it reaches JS interpolation."""
     return name if isinstance(name, str) and name in _PILL_THEME_VALUES else "classic"
+
+
+_HEX_COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}")
+
+
+def sanitize_pill_color(value):
+    """Whitelist a custom bar color from config before JS interpolation.
+    Returns the hex string, or None (= use the theme's designed color)."""
+    if isinstance(value, str) and _HEX_COLOR_RE.fullmatch(value):
+        return value
+    return None
 
 
 def resolve_key(key_name: str):

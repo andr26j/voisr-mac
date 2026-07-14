@@ -110,3 +110,14 @@ def test_get_pill_themes_shape(tmp_path):
     assert [t["value"] for t in themes] == [
         "classic", "ember", "aurora", "ocean", "neon", "breathe", "scanner"]
     assert all(set(t) == {"value", "label"} for t in themes)
+
+
+def test_default_config_includes_pill_color_none(tmp_path):
+    api = make_api(tmp_path)
+    assert api.get_config()["pill_color"] is None
+
+
+def test_pill_color_roundtrip(tmp_path):
+    api = make_api(tmp_path)
+    api.set_config({"pill_color": "#FF00AA"})
+    assert api.get_config()["pill_color"] == "#FF00AA"
