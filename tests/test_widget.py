@@ -19,10 +19,12 @@ class FakeWidget:
     def __init__(self):
         self.calls = []
         self.themes = []
+        self.colors = []
 
-    def show_recording(self, theme="classic"):
+    def show_recording(self, theme="classic", color=None):
         self.calls.append("recording")
         self.themes.append(theme)
+        self.colors.append(color)
 
     def show_processing(self):
         self.calls.append("processing")
@@ -385,3 +387,24 @@ def test_pill_color_sanitizer():
     assert sanitize_pill_color('#12345"); alert(1); ("') is None
     assert sanitize_pill_color(["#FF00AA"]) is None
     assert sanitize_pill_color({}) is None
+
+
+def test_press_passes_configured_color_to_widget(tmp_path):
+    widget = FakeWidget()
+    api = make_api(tmp_path, config={"pill_color": "#FF00AA"})
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.press()
+    assert widget.colors == ["#FF00AA"]
+
+
+def test_press_passes_none_color_by_default_and_for_invalid(tmp_path):
+    widget = FakeWidget()
+    svc = HotkeyService(make_api(tmp_path), widget=widget, hide_delay=0)
+    svc.press()
+    assert widget.colors == [None]
+
+    widget2 = FakeWidget()
+    api2 = make_api(tmp_path, config={"pill_color": "not-a-color"})
+    svc2 = HotkeyService(api2, widget=widget2, hide_delay=0)
+    svc2.press()
+    assert widget2.colors == [None]

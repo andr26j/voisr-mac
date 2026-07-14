@@ -19,8 +19,9 @@ class FakeWidget:
     def __init__(self):
         self.calls = []
         self.themes = []
+        self.colors = []
 
-    def show_recording(self, theme="classic"): self.calls.append("recording"); self.themes.append(theme)
+    def show_recording(self, theme="classic", color=None): self.calls.append("recording"); self.themes.append(theme); self.colors.append(color)
     def show_processing(self): self.calls.append("processing")
     def show_done(self): self.calls.append("done")
     def show_error(self): self.calls.append("error")
