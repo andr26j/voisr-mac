@@ -375,6 +375,9 @@ def test_widget_html_covers_all_pill_themes():
         assert f'"{theme["value"]}"' in html  # THEME_VALUES entry
         if theme["value"] != "classic":       # classic = no attribute by design
             assert f'[data-theme="{theme["value"]}"]' in html  # CSS rule exists
+    # custom-color bridge must exist alongside the themes
+    assert "--bar-color" in html
+    assert "setColor" in html
 
 
 def test_pill_color_sanitizer():
