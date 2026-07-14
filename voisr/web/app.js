@@ -271,6 +271,7 @@ function setColorUi(hex) {
     const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16),
           b = parseInt(hex.slice(5, 7), 16);
     preview.style.setProperty("--mb-glow", `rgba(${r}, ${g}, ${b}, .75)`);
+    preview.dataset.customColor = "";
     $("#color-swatch").style.background = hex;
     $("#color-hex").textContent = hex;
     const { h, s } = hexToHs(hex);
@@ -281,6 +282,7 @@ function setColorUi(hex) {
   } else {
     preview.style.removeProperty("--mb-color");
     preview.style.removeProperty("--mb-glow");
+    delete preview.dataset.customColor;
     $("#color-swatch").style.background = "transparent";
     $("#color-hex").textContent = "theme default";
     thumb.hidden = true;
