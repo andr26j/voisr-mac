@@ -109,7 +109,7 @@ def sanitize_pill_theme(name) -> str:
 _HEX_COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}")
 
 
-def sanitize_pill_color(value):
+def sanitize_pill_color(value) -> str | None:
     """Whitelist a custom bar color from config before JS interpolation.
     Returns the hex string, or None (= use the theme's designed color)."""
     if isinstance(value, str) and _HEX_COLOR_RE.fullmatch(value):
