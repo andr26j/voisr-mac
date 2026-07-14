@@ -258,6 +258,8 @@ class RecordingWidget:
             panel.setOpaque_(False)
             panel.setBackgroundColor_(NSColor.clearColor())
             panel.setTitle_("Voisr Recording")  # for identification, not shown
+            panel.setIgnoresMouseEvents_(True)  # invisible resident overlay: click-through
+            panel.setAlphaValue_(0.0)           # resident but faded out until a dictation
 
             cfg = WKWebViewConfiguration.alloc().init()
             wv = WKWebView.alloc().initWithFrame_configuration_(
@@ -271,6 +273,11 @@ class RecordingWidget:
 
             self._panel = panel
             self._webview = wv
+            # Become resident on ALL Spaces immediately (invisible via alpha 0).
+            # A later show then never has to (re)join another app's fullscreen
+            # Space — orderOut/orderFront churn was intermittently leaving the
+            # window on the wrong Space (onActiveSpace=False → no pill).
+            panel.orderFrontRegardless()
         except Exception as e:
             print(f"Voisr widget: build failed: {e}", flush=True)
 
@@ -292,48 +299,34 @@ class RecordingWidget:
                     safe = sanitize_pill_color(color)
                     self._webview.evaluateJavaScript_completionHandler_(
                         f'setColor("{safe}")' if safe else "setColor(null)", None)
+                self._panel.setAlphaValue_(1.0)   # fade in (window stays resident)
                 self._webview.evaluateJavaScript_completionHandler_(
                     f'setState("{state}")', None)
                 self._panel.orderFrontRegardless()
                 if state == "recording":
-                    self._ensure_front()
+                    self._check_visible()
 
             AppHelper.callAfter(go)
         except Exception:
             pass  # never break the record path
 
-    def _ensure_front(self) -> None:
-        """Reliably surface the pill over another app's native-fullscreen Space.
-
-        Placing a window onto a fullscreen Space is an asynchronous
-        window-server operation: a single orderFrontRegardless() sometimes
-        fails to composite (occlusionState never gains the Visible bit) and the
-        pill simply never appears — the app's most-reported bug. Giving the run
-        loop extra turns after the order lets the placement land, so re-assert
-        it over the next fraction of a second. The 0.8s check re-orders one last
-        time and logs the failure signature if the window is still not visible,
-        so any recurrence is captured instead of invisible."""
+    def _check_visible(self) -> None:
+        """Log if the pill still failed to appear after a show. With the panel
+        resident on all Spaces this should not happen; the line captures any
+        recurrence (with the window state) instead of it being silent."""
         try:
             from PyObjCTools import AppHelper
-
-            def reorder():
-                if self._panel is not None:
-                    self._panel.orderFrontRegardless()
 
             def check():
                 p = self._panel
                 if p is None:
                     return
-                if not (int(p.occlusionState()) & 2):  # NSWindowOcclusionStateVisible
+                if not p.isOnActiveSpace() or not (int(p.occlusionState()) & 2):
                     print("Voisr widget: pill still not visible after show "
                           f"(occ={int(p.occlusionState())}, "
-                          f"onActiveSpace={bool(p.isOnActiveSpace())}); re-ordering",
-                          flush=True)
-                    p.orderFrontRegardless()
+                          f"onActiveSpace={bool(p.isOnActiveSpace())})", flush=True)
 
-            AppHelper.callLater(0.10, reorder)
-            AppHelper.callLater(0.35, reorder)
-            AppHelper.callLater(0.80, check)
+            AppHelper.callLater(0.8, check)
         except Exception:
             pass
 
@@ -355,7 +348,11 @@ class RecordingWidget:
 
             def go():
                 if self._panel is not None:
-                    self._panel.orderOut_(None)
+                    # Fade out but stay resident on all Spaces — do NOT orderOut.
+                    # orderOut drops the window's Space membership, and the next
+                    # orderFront intermittently fails to rejoin a fullscreen Space
+                    # (onActiveSpace=False → the pill never appears).
+                    self._panel.setAlphaValue_(0.0)
 
             AppHelper.callAfter(go)
         except Exception:
