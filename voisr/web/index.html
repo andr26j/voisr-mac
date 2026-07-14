@@ -186,6 +186,23 @@
             <p class="setting-desc">Color and animation of the recording pill while you dictate. Applies from your next dictation.</p>
           </div>
           <div id="theme-grid" class="theme-grid" role="group" aria-label="Pill theme"></div>
+          <div class="color-block">
+            <div class="wheel-wrap">
+              <canvas id="color-wheel" width="200" height="200" aria-label="Custom bar color"></canvas>
+              <div id="wheel-thumb" hidden></div>
+            </div>
+            <div class="color-side">
+              <p class="setting-desc">Optional: recolor the bars of any theme. The animation stays; only the color changes.</p>
+              <div class="mini-pill" id="color-preview">
+                <span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span>
+              </div>
+              <div class="color-meta">
+                <span class="swatch" id="color-swatch"></span>
+                <code id="color-hex">theme default</code>
+                <button type="button" class="btn-secondary" id="color-reset">Theme default</button>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="setting-row">
           <div>
