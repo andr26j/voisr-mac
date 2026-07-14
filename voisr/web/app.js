@@ -231,7 +231,7 @@ async function renderThemes() {
 const WHEEL_R = 100;
 
 function hsvToHex(h, s) {
-  const f = (n, k = (n + h / 30) % 12) => 1 - s * Math.max(0, Math.min(k - 3, 9 - k, 1));
+  const f = (n, k = (n + h / 60) % 6) => 1 - s * Math.max(0, Math.min(k, 4 - k, 1));
   return "#" + [f(5), f(3), f(1)]
     .map((v) => Math.round(v * 255).toString(16).padStart(2, "0").toUpperCase()).join("");
 }
@@ -257,7 +257,7 @@ function drawColorWheel() {
     const i = (y * 200 + x) * 4;
     if (r > WHEEL_R) { img.data[i + 3] = 0; continue; }
     const h = ((Math.atan2(dy, dx) * 180 / Math.PI) + 360) % 360, s = Math.min(r / WHEEL_R, 1);
-    const f = (n, k = (n + h / 30) % 12) => 1 - s * Math.max(0, Math.min(k - 3, 9 - k, 1));
+    const f = (n, k = (n + h / 60) % 6) => 1 - s * Math.max(0, Math.min(k, 4 - k, 1));
     img.data[i] = 255 * f(5); img.data[i + 1] = 255 * f(3); img.data[i + 2] = 255 * f(1);
     img.data[i + 3] = r > WHEEL_R - 1.5 ? 255 * (WHEEL_R - r + 0.5) : 255; // soft edge
   }
