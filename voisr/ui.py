@@ -224,6 +224,7 @@ class RecordingWidget:
     _CB_STATIONARY = 1 << 4
     _CB_FULLSCREEN_AUX = 1 << 8
     _SCREEN_SAVER_LEVEL = 1000
+    _supports_ownership_guard = True
 
     def __init__(self):
         self._panel = None
@@ -286,11 +287,13 @@ class RecordingWidget:
             print(f"Voisr widget: build failed: {e}", flush=True)
 
     def _set(self, state: str, theme: str | None = None,
-             color: str | None = None) -> None:
+             color: str | None = None, is_current=None) -> None:
         try:
             from PyObjCTools import AppHelper
 
             def go():
+                if is_current is not None and not is_current():
+                    return
                 if self._panel is None:
                     self._build()
                 if self._webview is None:
@@ -334,23 +337,26 @@ class RecordingWidget:
         except Exception:
             pass
 
-    def show_recording(self, theme: str = "classic", color: str | None = None):
-        self._set("recording", theme=theme, color=color)
+    def show_recording(self, theme: str = "classic", color: str | None = None,
+                       is_current=None):
+        self._set("recording", theme=theme, color=color, is_current=is_current)
 
-    def show_processing(self):
-        self._set("processing")
+    def show_processing(self, is_current=None):
+        self._set("processing", is_current=is_current)
 
-    def show_done(self):
-        self._set("done")
+    def show_done(self, is_current=None):
+        self._set("done", is_current=is_current)
 
-    def show_error(self):
-        self._set("error")
+    def show_error(self, is_current=None):
+        self._set("error", is_current=is_current)
 
-    def hide(self):
+    def hide(self, is_current=None):
         try:
             from PyObjCTools import AppHelper
 
             def go():
+                if is_current is not None and not is_current():
+                    return
                 if self._panel is not None:
                     # Fade out but stay resident on all Spaces — do NOT orderOut.
                     # orderOut drops the window's Space membership, and the next
@@ -399,38 +405,56 @@ class HotkeyService:
         self._pressed = False
         self._key_name = None
         self._target_vk = None
+        self._state_lock = threading.RLock()
         self._epoch = 0  # bumped per recording; stale _finish threads must not touch the widget
         self.status = "not started"
 
     def _widget_enabled(self) -> bool:
         return self._widget is not None and bool(self._api.get_config().get("show_widget", True))
 
+    def _owns_widget(self, epoch: int) -> bool:
+        with self._state_lock:
+            return epoch == self._epoch
+
+    def _widget_action(self, name: str, epoch: int, *args, **kwargs) -> None:
+        method = getattr(self._widget, name)
+        if getattr(self._widget, "_supports_ownership_guard", False):
+            method(*args, **kwargs,
+                   is_current=lambda: self._owns_widget(epoch))
+        else:
+            method(*args, **kwargs)
+
     def press(self) -> None:
-        if self._pressed:
-            return
-        result = self._api.start_recording()
-        if "error" in result:
-            return  # e.g. a dashboard recording is already running
-        self._pressed = True
-        self._epoch += 1
-        cfg = self._api.get_config()
-        if self._widget is not None and bool(cfg.get("show_widget", True)):
-            self._widget.show_recording(
-                theme=sanitize_pill_theme(cfg.get("pill_theme")),
-                color=sanitize_pill_color(cfg.get("pill_color")))
+        with self._state_lock:
+            if self._pressed:
+                return
+            result = self._api.start_recording()
+            if "error" in result:
+                return  # e.g. a dashboard recording is already running
+            self._pressed = True
+            self._epoch += 1
+            epoch = self._epoch
+            cfg = self._api.get_config()
+            if self._widget is not None and bool(cfg.get("show_widget", True)):
+                self._widget_action(
+                    "show_recording", epoch,
+                    theme=sanitize_pill_theme(cfg.get("pill_theme")),
+                    color=sanitize_pill_color(cfg.get("pill_color")))
 
     def release(self) -> None:
-        if not self._pressed:
-            return
-        self._pressed = False
-        show = self._widget_enabled()
-        if show:
-            self._widget.show_processing()
-        future = self._api._release_recording(paste=True)
+        with self._state_lock:
+            if not self._pressed:
+                return
+            self._pressed = False
+            epoch = self._epoch
+            show = self._widget_enabled()
+            if show:
+                self._widget_action("show_processing", epoch)
+            future = self._api._release_recording(paste=True)
         threading.Thread(
             target=self._finish,
-            args=(future, show, self._epoch),
-            name=f"voisr-widget-{self._epoch}",
+            args=(future, show, epoch),
+            name=f"voisr-widget-{epoch}",
             daemon=True,
         ).start()
 
@@ -439,17 +463,19 @@ class HotkeyService:
             result = future.result().to_api_dict()
         except Exception as error:
             result = {"error": f"processing failed: {error}"[:250]}
-        if not show or epoch != self._epoch:
-            return
         try:
-            if "error" in result:
-                self._widget.show_error()
-            else:
-                self._widget.show_done()
+            with self._state_lock:
+                if not show or epoch != self._epoch:
+                    return
+                if "error" in result:
+                    self._widget_action("show_error", epoch)
+                else:
+                    self._widget_action("show_done", epoch)
             if self._hide_delay:
                 time.sleep(self._hide_delay)
-            if epoch == self._epoch:
-                self._widget.hide()
+            with self._state_lock:
+                if epoch == self._epoch:
+                    self._widget_action("hide", epoch)
         except Exception:
             pass
 

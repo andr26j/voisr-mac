@@ -101,6 +101,146 @@ def test_release_observes_its_future_without_calling_synchronous_stop(tmp_path):
     assert widget.calls == ["recording", "processing", "done", "hide"]
 
 
+def test_release_keeps_its_epoch_when_enqueue_overlaps_a_new_press(tmp_path):
+    from concurrent.futures import Future
+    import threading
+
+    from voisr.recording_queue import SessionResult
+
+    class BlockingReleaseApi:
+        def __init__(self):
+            self.release_entered = threading.Event()
+            self.release_may_return = threading.Event()
+            self.future = Future()
+
+        def get_config(self):
+            return {"show_widget": True}
+
+        def start_recording(self):
+            return {"recording": True}
+
+        def _release_recording(self, paste=False):
+            self.release_entered.set()
+            assert self.release_may_return.wait(2)
+            return self.future
+
+    class TrackingWidget(FakeWidget):
+        def __init__(self):
+            super().__init__()
+            self.stale_mutation = threading.Event()
+
+        def show_done(self):
+            super().show_done()
+            self.stale_mutation.set()
+
+        def hide(self):
+            super().hide()
+            self.stale_mutation.set()
+
+    api = BlockingReleaseApi()
+    widget = TrackingWidget()
+    service = HotkeyService(api, widget=widget, hide_delay=0)
+    service.press()
+
+    release_thread = threading.Thread(target=service.release)
+    release_thread.start()
+    assert api.release_entered.wait(2)
+
+    press_started = threading.Event()
+    press_finished = threading.Event()
+
+    def re_press():
+        press_started.set()
+        service.press()
+        press_finished.set()
+
+    press_thread = threading.Thread(target=re_press)
+    press_thread.start()
+    assert press_started.wait(2)
+    api.release_may_return.set()
+    release_thread.join(2)
+    assert not release_thread.is_alive()
+    assert press_finished.wait(2)
+    press_thread.join(2)
+    assert not press_thread.is_alive()
+
+    api.future.set_result(SessionResult.success(1, text="old"))
+    assert not widget.stale_mutation.wait(0.3)
+    assert widget.calls == ["recording", "processing", "recording"]
+
+
+def test_deferred_widget_callbacks_recheck_epoch_before_mutating(tmp_path):
+    from concurrent.futures import Future
+    import threading
+
+    from voisr.recording_queue import SessionResult
+
+    class ReadyApi:
+        def __init__(self):
+            self.future = Future()
+            self.future.set_result(SessionResult.success(1, text="old"))
+
+        def get_config(self):
+            return {"show_widget": True}
+
+        def start_recording(self):
+            return {"recording": True}
+
+        def _release_recording(self, paste=False):
+            return self.future
+
+    class DeferredWidget:
+        _supports_ownership_guard = True
+
+        def __init__(self):
+            self.calls = []
+            self.pending = []
+            self.condition = threading.Condition()
+
+        def _queue(self, state, is_current=None):
+            with self.condition:
+                self.pending.append((state, is_current))
+                self.condition.notify_all()
+
+        def show_recording(self, theme="classic", color=None, is_current=None):
+            self._queue("recording", is_current)
+
+        def show_processing(self, is_current=None):
+            self._queue("processing", is_current)
+
+        def show_done(self, is_current=None):
+            self._queue("done", is_current)
+
+        def show_error(self, is_current=None):
+            self._queue("error", is_current)
+
+        def hide(self, is_current=None):
+            self._queue("hide", is_current)
+
+        def wait_for_pending(self, count):
+            with self.condition:
+                return self.condition.wait_for(lambda: len(self.pending) >= count, 2)
+
+        def flush(self):
+            with self.condition:
+                pending, self.pending = self.pending, []
+            for state, is_current in pending:
+                if is_current is None or is_current():
+                    self.calls.append(state)
+
+    widget = DeferredWidget()
+    service = HotkeyService(ReadyApi(), widget=widget, hide_delay=0)
+    service.press()
+    assert widget.wait_for_pending(1)
+    widget.flush()
+    service.release()
+    assert widget.wait_for_pending(3)
+    service.press()
+    assert widget.wait_for_pending(4)
+    widget.flush()
+    assert widget.calls == ["recording", "recording"]
+
+
 def test_repress_records_while_first_transcribes_and_preserves_widget_owner(tmp_path):
     import threading
 
