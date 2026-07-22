@@ -3,7 +3,8 @@ import queue as queue_module
 import tempfile
 import threading
 import time
-from concurrent.futures import Future
+from copy import deepcopy
+from concurrent.futures import Future, InvalidStateError
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -79,6 +80,7 @@ class RecordingQueue:
         self._temp_path_factory = temp_path_factory
         self._lock = threading.Lock()
         self._active = None
+        self._capture_finalizing = None
         self._next_sequence = 1
         self._pending = queue_module.Queue()
         self._finalizers = set()
@@ -117,31 +119,36 @@ class RecordingQueue:
             pass
 
     def start(self) -> RecordingSession:
-        with self._lock:
-            if self._closing:
-                raise RecordingQueueError("start", "app is shutting down")
-            if self._active is not None:
-                raise RecordingQueueError("start", "already recording")
+        while True:
+            with self._lock:
+                if self._closing:
+                    raise RecordingQueueError("start", "app is shutting down")
+                if self._active is not None:
+                    raise RecordingQueueError("start", "already recording")
+                finalizing = self._capture_finalizing
+                if finalizing is None:
+                    wav_path = self._temp_path_factory()
+                    recorder = None
+                    try:
+                        recorder = self._recorder_factory()
+                        recorder.start(wav_path)
+                    except Exception as error:
+                        self._safe_cancel(recorder)
+                        self._remove_wav(wav_path)
+                        raise RecordingQueueError(
+                            "start", f"recorder failed: {error}"[:200]
+                        )
 
-            wav_path = self._temp_path_factory()
-            recorder = None
-            try:
-                recorder = self._recorder_factory()
-                recorder.start(wav_path)
-            except Exception as error:
-                self._safe_cancel(recorder)
-                self._remove_wav(wav_path)
-                raise RecordingQueueError("start", f"recorder failed: {error}"[:200])
-
-            session = RecordingSession(
-                sequence=self._next_sequence,
-                wav_path=wav_path,
-                started_at=self._clock(),
-                recorder=recorder,
-            )
-            self._next_sequence += 1
-            self._active = session
-            return session
+                    session = RecordingSession(
+                        sequence=self._next_sequence,
+                        wav_path=wav_path,
+                        started_at=self._clock(),
+                        recorder=recorder,
+                    )
+                    self._next_sequence += 1
+                    self._active = session
+                    return session
+            finalizing.capture_ready.wait()
 
     @staticmethod
     def _resolved(result: SessionResult) -> Future:
@@ -157,7 +164,8 @@ class RecordingQueue:
             self._active = None
             session.released_at = self._clock()
             session.paste_requested = bool(paste_requested)
-            session.context = dict(context)
+            session.context = deepcopy(context)
+            self._capture_finalizing = session
             self._pending.put(session)
             finalizer = threading.Thread(
                 target=self._finalize_capture,
@@ -174,6 +182,7 @@ class RecordingQueue:
                     session.sequence, "stop", f"recorder failed: {error}"[:200]
                 )
                 session.capture_ready.set()
+                self._capture_finalizing = None
             return session.completion
 
     def _finalize_capture(self, session: RecordingSession) -> None:
@@ -187,6 +196,8 @@ class RecordingQueue:
             session.capture_ready.set()
             with self._lock:
                 self._finalizers.discard(threading.current_thread())
+                if self._capture_finalizing is session:
+                    self._capture_finalizing = None
 
     def _worker_loop(self) -> None:
         while True:
@@ -210,7 +221,10 @@ class RecordingQueue:
                         )
                 self._remove_wav(session.wav_path)
                 if not session.completion.done():
-                    session.completion.set_result(result)
+                    try:
+                        session.completion.set_result(result)
+                    except InvalidStateError:
+                        pass
             finally:
                 self._pending.task_done()
 

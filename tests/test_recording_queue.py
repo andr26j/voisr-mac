@@ -1,4 +1,5 @@
 import threading
+from concurrent.futures import Future
 
 from voisr.recording_queue import RecordingQueue, SessionResult
 
@@ -84,3 +85,156 @@ def test_second_capture_finalizes_while_first_processes_but_completes_fifo(tmp_p
     finally:
         unblock_first.set()
         queue.close()
+
+
+def test_start_waits_for_previous_stop_but_not_previous_processing(tmp_path):
+    stop_started = threading.Event()
+    allow_stop = threading.Event()
+    stop_finished = threading.Event()
+    second_started = threading.Event()
+    first_processing = threading.Event()
+    unblock_processing = threading.Event()
+    recorders = []
+
+    class BlockingStopRecorder(FakeRecorder):
+        def stop(self):
+            stop_started.set()
+            assert allow_stop.wait(2)
+            result = super().stop()
+            stop_finished.set()
+            return result
+
+    def recorder_factory():
+        recorder = BlockingStopRecorder() if not recorders else FakeRecorder()
+        recorders.append(recorder)
+        return recorder
+
+    def processor(session):
+        if session.sequence == 1:
+            first_processing.set()
+            assert unblock_processing.wait(2)
+        return SessionResult.success(session.sequence, text=str(session.sequence))
+
+    queue = RecordingQueue(
+        recorder_factory=recorder_factory,
+        fallback_recorder_factory=None,
+        processor=processor,
+        temp_path_factory=lambda: tmp_path / f"capture-{len(recorders) + 1}.wav",
+    )
+    try:
+        queue.start()
+        first_future = queue.release(True, {})
+        assert stop_started.wait(2)
+
+        second_session = []
+
+        def start_second():
+            second_session.append(queue.start())
+            second_started.set()
+
+        start_thread = threading.Thread(target=start_second)
+        start_thread.start()
+        assert second_started.wait(0.1) is False
+
+        allow_stop.set()
+        assert stop_finished.wait(2)
+        assert first_processing.wait(2)
+        assert second_started.wait(2)
+        assert first_future.done() is False
+
+        second_future = queue.release(True, {})
+        unblock_processing.set()
+        assert first_future.result(timeout=2).to_api_dict()["text"] == "1"
+        assert second_future.result(timeout=2).to_api_dict()["text"] == "2"
+        assert second_session[0].recorder is recorders[1]
+    finally:
+        allow_stop.set()
+        unblock_processing.set()
+        start_thread.join(timeout=2)
+        queue.close()
+
+
+def test_release_snapshots_nested_context_before_async_processing(tmp_path):
+    stop_started = threading.Event()
+    allow_stop = threading.Event()
+    received_contexts = []
+
+    class BlockingStopRecorder(FakeRecorder):
+        def stop(self):
+            stop_started.set()
+            assert allow_stop.wait(2)
+            return super().stop()
+
+    def processor(session):
+        received_contexts.append(session.context)
+        return SessionResult.success(session.sequence, text="done")
+
+    queue = RecordingQueue(
+        recorder_factory=BlockingStopRecorder,
+        fallback_recorder_factory=None,
+        processor=processor,
+        temp_path_factory=lambda: tmp_path / "capture.wav",
+    )
+    try:
+        queue.start()
+        context = {"metadata": {"language": "en"}, "items": ["initial"]}
+        future = queue.release(True, context)
+        assert stop_started.wait(2)
+
+        context["metadata"]["language"] = "fr"
+        context["items"].append("later")
+        allow_stop.set()
+
+        assert future.result(timeout=2).to_api_dict()["text"] == "done"
+        assert received_contexts == [
+            {"metadata": {"language": "en"}, "items": ["initial"]}
+        ]
+    finally:
+        allow_stop.set()
+        queue.close()
+
+
+def test_cancelled_completion_does_not_stop_later_sessions(tmp_path):
+    class CancelBetweenDoneAndSetResultFuture(Future):
+        def __init__(self):
+            super().__init__()
+            self.done_checked = threading.Event()
+            self.allow_done_to_return = threading.Event()
+
+        def done(self):
+            self.done_checked.set()
+            assert self.allow_done_to_return.wait(2)
+            return False
+
+    recorders = []
+
+    def recorder_factory():
+        recorder = FakeRecorder()
+        recorders.append(recorder)
+        return recorder
+
+    def processor(session):
+        return SessionResult.success(session.sequence, text=str(session.sequence))
+
+    queue = RecordingQueue(
+        recorder_factory=recorder_factory,
+        fallback_recorder_factory=None,
+        processor=processor,
+        temp_path_factory=lambda: tmp_path / f"capture-{len(recorders) + 1}.wav",
+    )
+    second_future = None
+    try:
+        first = queue.start()
+        first.completion = CancelBetweenDoneAndSetResultFuture()
+        queue.release(True, {})
+        assert first.completion.done_checked.wait(2)
+        assert first.completion.cancel() is True
+        first.completion.allow_done_to_return.set()
+
+        queue.start()
+        second_future = queue.release(True, {})
+        assert second_future.result(timeout=1).to_api_dict()["text"] == "2"
+    finally:
+        first.completion.allow_done_to_return.set()
+        if second_future is not None and second_future.done():
+            queue.close()
