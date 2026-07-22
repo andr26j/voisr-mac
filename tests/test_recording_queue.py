@@ -1,7 +1,7 @@
 import threading
 from concurrent.futures import Future
 
-from voisr.recording_queue import RecordingQueue, SessionResult
+from voisr.recording_queue import RecordingQueue, RecordingQueueError, SessionResult
 
 
 class FakeRecorder:
@@ -270,6 +270,36 @@ def test_start_fallback_is_owned_only_by_that_session(tmp_path):
         queue.close()
 
 
+def test_start_failure_cancels_both_recorders_and_removes_wav(tmp_path):
+    primary = ExplodingStartRecorder()
+    fallback = ExplodingStartRecorder()
+    wav_path = tmp_path / "failed-start.wav"
+
+    def allocate_wav():
+        wav_path.touch()
+        return wav_path
+
+    queue = RecordingQueue(
+        recorder_factory=lambda: primary,
+        fallback_recorder_factory=lambda: fallback,
+        processor=lambda session: SessionResult.success(session.sequence),
+        temp_path_factory=allocate_wav,
+    )
+    try:
+        try:
+            queue.start()
+        except RecordingQueueError as error:
+            assert error.stage == "start"
+        else:
+            raise AssertionError("start should report recorder failure")
+
+        assert primary.cancelled is True
+        assert fallback.cancelled is True
+        assert wav_path.exists() is False
+    finally:
+        queue.close()
+
+
 def test_stop_and_processor_failures_do_not_stall_later_sessions(tmp_path):
     available = iter([ExplodingStopRecorder(), FakeRecorder(), FakeRecorder()])
     recorders = []
@@ -360,9 +390,70 @@ def test_close_cancels_active_and_drains_released_session(tmp_path):
     queue.close()
 
 
-def test_temp_wav_failure_is_a_structured_start_error(tmp_path):
-    from voisr.recording_queue import RecordingQueueError
+def test_concurrent_close_waits_for_owner_and_releases_both_callers(tmp_path):
+    process_started = threading.Event()
+    allow_process = threading.Event()
+    first_close_waiting = threading.Event()
+    second_close_finished = threading.Event()
+    errors = []
 
+    def processor(session):
+        process_started.set()
+        assert allow_process.wait(2)
+        return SessionResult.success(session.sequence, text="done")
+
+    queue = RecordingQueue(
+        recorder_factory=FakeRecorder,
+        fallback_recorder_factory=None,
+        processor=processor,
+        temp_path_factory=lambda: tmp_path / "concurrent-close.wav",
+    )
+    released = queue.start()
+    completion = queue.release(False, {})
+    assert process_started.wait(2)
+
+    pending_join = queue._pending.join
+
+    def wait_for_pending():
+        first_close_waiting.set()
+        return pending_join()
+
+    queue._pending.join = wait_for_pending
+
+    def close_queue(finished=None):
+        try:
+            queue.close()
+        except Exception as error:
+            errors.append(error)
+        finally:
+            if finished is not None:
+                finished.set()
+
+    first_closer = threading.Thread(target=close_queue)
+    first_closer.start()
+    assert first_close_waiting.wait(2)
+
+    second_closer = threading.Thread(target=close_queue, args=(second_close_finished,))
+    second_closer.start()
+
+    try:
+        assert second_close_finished.wait(0.1) is False
+    finally:
+        allow_process.set()
+        first_closer.join(2)
+        second_closer.join(2)
+
+    assert completion.result(timeout=2).to_api_dict()["text"] == "done"
+    assert errors == []
+    assert first_closer.is_alive() is False
+    assert second_closer.is_alive() is False
+    assert second_close_finished.is_set()
+    assert queue._finalizers == set()
+    assert queue._worker.is_alive() is False
+    assert released.wav_path.exists() is False
+
+
+def test_temp_wav_failure_is_a_structured_start_error(tmp_path):
     queue = RecordingQueue(
         recorder_factory=FakeRecorder,
         fallback_recorder_factory=None,
