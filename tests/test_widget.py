@@ -73,6 +73,100 @@ def test_press_release_drives_widget_states(tmp_path):
     assert widget.calls == ["recording", "processing", "done", "hide"]
 
 
+def test_release_observes_its_future_without_calling_synchronous_stop(tmp_path):
+    from concurrent.futures import Future
+
+    from voisr.recording_queue import SessionResult
+
+    class FutureApi:
+        def get_config(self):
+            return {"show_widget": True}
+
+        def start_recording(self):
+            return {"recording": True}
+
+        def _release_recording(self, paste=False):
+            future = Future()
+            future.set_result(SessionResult.success(1, text="done"))
+            return future
+
+        def stop_recording(self, paste=False):
+            raise AssertionError("hotkey completion must not stop shared state")
+
+    widget = FakeWidget()
+    service = HotkeyService(FutureApi(), widget=widget, hide_delay=0)
+    service.press()
+    service.release()
+    wait_for_hide(widget, timeout=0.5)
+    assert widget.calls == ["recording", "processing", "done", "hide"]
+
+
+def test_repress_records_while_first_transcribes_and_preserves_widget_owner(tmp_path):
+    import threading
+
+    first_transcribing = threading.Event()
+    allow_first = threading.Event()
+    recorders = []
+    pasted = []
+    calls = 0
+
+    def recorder_factory():
+        recorder = FakeRecorder()
+        recorder.stopped = threading.Event()
+        original_stop = recorder.stop
+
+        def stop():
+            result = original_stop()
+            recorder.stopped.set()
+            return result
+
+        recorder.stop = stop
+        recorders.append(recorder)
+        return recorder
+
+    def transcribe_audio(wav):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_transcribing.set()
+            assert allow_first.wait(2)
+            return "first"
+        return "second"
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"paste": True}))
+    api = Api(
+        config_path=cfg,
+        history=HistoryStore(tmp_path / "rapid.jsonl"),
+        recorder_factory=recorder_factory,
+        transcribe_fn=transcribe_audio,
+        paste_fn=lambda text: pasted.append(text) or True,
+        clipboard_fn=lambda text: None,
+    )
+    widget = FakeWidget()
+    service = HotkeyService(api, widget=widget, hide_delay=0)
+    try:
+        service.press()
+        service.release()
+        assert first_transcribing.wait(2)
+
+        service.press()
+        assert widget.calls[-1] == "recording"
+        service.release()
+        assert recorders[1].stopped.wait(2)
+        assert pasted == []
+
+        allow_first.set()
+        wait_for_hide(widget)
+        assert pasted == ["First", " Second"]
+        assert widget.calls[-2:] == ["done", "hide"]
+        assert widget.calls.count("done") == 1
+    finally:
+        allow_first.set()
+        service.stop()
+        api.close()
+
+
 def test_widget_disabled_via_config(tmp_path):
     widget = FakeWidget()
     api = make_api(tmp_path, config={"show_widget": False})

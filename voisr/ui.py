@@ -426,25 +426,32 @@ class HotkeyService:
         show = self._widget_enabled()
         if show:
             self._widget.show_processing()
-        # Transcription takes seconds; it must NOT run inside the pynput
-        # callback: macOS disables event taps whose callbacks stall, and
-        # pynput never re-enables them (the hotkey would die after one use).
-        import threading
-        threading.Thread(target=self._finish, args=(show, self._epoch),
-                         daemon=True).start()
+        future = self._api._release_recording(paste=True)
+        threading.Thread(
+            target=self._finish,
+            args=(future, show, self._epoch),
+            name=f"voisr-widget-{self._epoch}",
+            daemon=True,
+        ).start()
 
-    def _finish(self, show: bool, epoch: int) -> None:
-        result = self._api.stop_recording(paste=True)
-        if show and epoch == self._epoch:
+    def _finish(self, future, show: bool, epoch: int) -> None:
+        try:
+            result = future.result().to_api_dict()
+        except Exception as error:
+            result = {"error": f"processing failed: {error}"[:250]}
+        if not show or epoch != self._epoch:
+            return
+        try:
             if "error" in result:
                 self._widget.show_error()
             else:
                 self._widget.show_done()
             if self._hide_delay:
-                import time
                 time.sleep(self._hide_delay)
-            if epoch == self._epoch:  # a newer recording owns the widget now
+            if epoch == self._epoch:
                 self._widget.hide()
+        except Exception:
+            pass
 
     def _resolve_target(self, key_name=None):
         """Return (vk, label) for the push-to-talk key.
