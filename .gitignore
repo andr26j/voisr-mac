@@ -10,3 +10,4 @@ data/*.jsonl
 
 # brainstorming session artifacts
 .superpowers/
+.worktrees/
