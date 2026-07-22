@@ -51,6 +51,10 @@ On first recording, macOS will ask for Microphone access — allow it once.
 ./venv/bin/python -m voisr.app --no-paste
 ```
 
+You can release and immediately hold the hotkey again while an earlier
+dictation is transcribing. Voisr queues each recording and adds it to history
+and pastes it in the order recorded.
+
 ## Configuration (`config.json`)
 
 ```json

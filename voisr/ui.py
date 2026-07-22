@@ -902,6 +902,7 @@ def main():
         webview.start(on_started)
     finally:
         service.stop()
+        api.close()
 
 
 if __name__ == "__main__":

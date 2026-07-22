@@ -42,22 +42,31 @@ def deliver(text: str, paste: bool) -> None:
 
 
 def toggle_mode(cfg) -> None:
-    rec = Recorder(cfg["device"])
+    recorder = Recorder(cfg["device"])
+    wav = None
     print("Toggle mode. Enter = start/stop recording, Ctrl-C to quit.")
-    while True:
-        input("  [Enter] to START recording... ")
-        fd, wav_path = tempfile.mkstemp(suffix=".wav")
-        os.close(fd)  # the recorder writes by path; keeping fd open leaks one per dictation
-        wav = Path(wav_path)
-        rec.start(wav)
-        input("  recording — [Enter] to STOP... ")
-        err = rec.stop()
-        if not wav.exists() or wav.stat().st_size < 1000:
-            print(f"  recording failed (mic permission?): {err.strip()[:200]}")
+    try:
+        while True:
+            input("  [Enter] to START recording... ")
+            fd, wav_path = tempfile.mkstemp(suffix=".wav")
+            os.close(fd)
+            wav = Path(wav_path)
+            try:
+                recorder.start(wav)
+                input("  recording — [Enter] to STOP... ")
+                err = recorder.stop()
+                if not wav.exists() or wav.stat().st_size < 1000:
+                    print(f"  recording failed (mic permission?): {err.strip()[:200]}")
+                    continue
+                deliver(process_audio(wav, cfg["dictionary"]), cfg["paste"])
+            finally:
+                recorder.cancel()
+                wav.unlink(missing_ok=True)
+                wav = None
+    finally:
+        recorder.close()
+        if wav is not None:
             wav.unlink(missing_ok=True)
-            continue
-        deliver(process_audio(wav, cfg["dictionary"]), cfg["paste"])
-        wav.unlink(missing_ok=True)
 
 
 def hotkey_mode(cfg, config_path) -> None:
@@ -71,13 +80,16 @@ def hotkey_mode(cfg, config_path) -> None:
     request_permissions()
     api = Api(config_path=config_path, recorder_factory=default_recorder)
     service = HotkeyService(api)
-    service.start()  # config-driven: prefers captured hotkey_vk
-    print(f"Hold [{cfg['hotkey']}] to talk. Ctrl-C to quit. ({service.status})")
     try:
+        service.start()  # config-driven: prefers captured hotkey_vk
+        print(f"Hold [{cfg['hotkey']}] to talk. Ctrl-C to quit. ({service.status})")
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
+        pass
+    finally:
         service.stop()
+        api.close()
 
 
 def main() -> None:
