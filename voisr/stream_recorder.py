@@ -68,21 +68,35 @@ class StreamRecorder:
         with self._lock:
             data = b"".join(self._frames)
             self._frames = []
-        with wave.open(self._out, "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(self.SAMPLERATE)
-            w.writeframes(data)
+            self._bytes = 0
+        out, self._out = self._out, None
+        with wave.open(out, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(self.SAMPLERATE)
+            wav.writeframes(data)
         return ""
 
     def _close_stream(self) -> None:
-        if self._stream is not None:
-            try:
-                self._stream.stop()
-                self._stream.close()
-            finally:
-                self._stream = None
+        stream, self._stream = self._stream, None
+        if stream is None:
+            return
+        try:
+            stream.stop()
+        finally:
+            stream.close()
+
+    def cancel(self) -> None:
+        """Close the mic and discard buffered audio; safe to repeat."""
+        self._recording = False
+        try:
+            self._close_stream()
+        except Exception:
+            pass
+        with self._lock:
+            self._frames = []
+            self._bytes = 0
+        self._out = None
 
     def close(self) -> None:
-        self._recording = False
-        self._close_stream()
+        self.cancel()

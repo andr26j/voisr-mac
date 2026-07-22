@@ -24,16 +24,52 @@ class Recorder:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
+    @staticmethod
+    def _close_stderr(proc) -> None:
+        if proc.stderr is not None:
+            try:
+                proc.stderr.close()
+            except Exception:
+                pass
+
     def stop(self) -> str:
-        """Stop recording; returns ffmpeg's stderr (empty on clean capture)."""
-        if not self.proc:
+        """Gracefully stop capture, finalize the WAV, and return stderr."""
+        proc, self.proc = self.proc, None
+        if proc is None:
             raise RuntimeError("not recording")
-        self.proc.send_signal(signal.SIGINT)  # graceful: finalizes the WAV header
         try:
-            self.proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self.proc.kill()
-            self.proc.wait()
-        err = self.proc.stderr.read().decode() if self.proc.stderr else ""
-        self.proc = None
-        return err
+            if proc.poll() is None:
+                proc.send_signal(signal.SIGINT)
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            return proc.stderr.read().decode() if proc.stderr else ""
+        finally:
+            self._close_stderr(proc)
+
+    def cancel(self) -> None:
+        """Stop capture without requiring a usable WAV; safe to repeat."""
+        proc, self.proc = self.proc, None
+        if proc is None:
+            return
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait()
+            except Exception:
+                pass
+        finally:
+            self._close_stderr(proc)
+
+    def close(self) -> None:
+        self.cancel()
