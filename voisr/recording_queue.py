@@ -127,17 +127,31 @@ class RecordingQueue:
                     raise RecordingQueueError("start", "already recording")
                 finalizing = self._capture_finalizing
                 if finalizing is None:
-                    wav_path = self._temp_path_factory()
+                    try:
+                        wav_path = self._temp_path_factory()
+                    except Exception as error:
+                        raise RecordingQueueError(
+                            "start", f"recorder failed: {error}"[:200]
+                        )
+
                     recorder = None
                     try:
                         recorder = self._recorder_factory()
                         recorder.start(wav_path)
-                    except Exception as error:
+                    except Exception:
                         self._safe_cancel(recorder)
-                        self._remove_wav(wav_path)
-                        raise RecordingQueueError(
-                            "start", f"recorder failed: {error}"[:200]
-                        )
+                        recorder = None
+                        try:
+                            if self._fallback_recorder_factory is None:
+                                raise RuntimeError("no fallback recorder available")
+                            recorder = self._fallback_recorder_factory()
+                            recorder.start(wav_path)
+                        except Exception as fallback_error:
+                            self._safe_cancel(recorder)
+                            self._remove_wav(wav_path)
+                            raise RecordingQueueError(
+                                "start", f"recorder failed: {fallback_error}"[:200]
+                            )
 
                     session = RecordingSession(
                         sequence=self._next_sequence,

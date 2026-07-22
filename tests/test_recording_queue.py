@@ -238,3 +238,144 @@ def test_cancelled_completion_does_not_stop_later_sessions(tmp_path):
         first.completion.allow_done_to_return.set()
         if second_future is not None and second_future.done():
             queue.close()
+
+
+class ExplodingStartRecorder(FakeRecorder):
+    def start(self, path):
+        self.path = path
+        raise RuntimeError("primary unavailable")
+
+
+class ExplodingStopRecorder(FakeRecorder):
+    def stop(self):
+        self.stopped.set()
+        raise RuntimeError("stop exploded")
+
+
+def test_start_fallback_is_owned_only_by_that_session(tmp_path):
+    primary = ExplodingStartRecorder()
+    fallback = FakeRecorder()
+    queue = RecordingQueue(
+        recorder_factory=lambda: primary,
+        fallback_recorder_factory=lambda: fallback,
+        processor=lambda session: SessionResult.success(session.sequence),
+        temp_path_factory=lambda: tmp_path / "fallback.wav",
+    )
+    try:
+        session = queue.start()
+        assert session.recorder is fallback
+        assert primary.cancelled is True
+        assert queue.release(False, {}).result(timeout=2).stage is None
+    finally:
+        queue.close()
+
+
+def test_stop_and_processor_failures_do_not_stall_later_sessions(tmp_path):
+    available = iter([ExplodingStopRecorder(), FakeRecorder(), FakeRecorder()])
+    recorders = []
+    processor_calls = 0
+
+    def recorder_factory():
+        recorder = next(available)
+        recorders.append(recorder)
+        return recorder
+
+    def processor(session):
+        nonlocal processor_calls
+        processor_calls += 1
+        if processor_calls == 1:
+            raise RuntimeError("unexpected processor failure")
+        return SessionResult.success(session.sequence, text="recovered")
+
+    queue = RecordingQueue(
+        recorder_factory=recorder_factory,
+        fallback_recorder_factory=None,
+        processor=processor,
+        temp_path_factory=lambda: tmp_path / f"failure-{len(recorders) + 1}.wav",
+    )
+    try:
+        queue.start()
+        stopped = queue.release(False, {})
+        queue.start()
+        processor_failed = queue.release(False, {})
+        queue.start()
+        recovered = queue.release(False, {})
+
+        assert stopped.result(timeout=2).stage == "stop"
+        assert processor_failed.result(timeout=2).stage == "transcription"
+        assert recovered.result(timeout=2).to_api_dict()["text"] == "recovered"
+    finally:
+        queue.close()
+
+
+def test_close_cancels_active_and_drains_released_session(tmp_path):
+    process_started = threading.Event()
+    allow_process = threading.Event()
+    recorders = []
+
+    def factory():
+        recorder = FakeRecorder()
+        recorders.append(recorder)
+        return recorder
+
+    def processor(session):
+        process_started.set()
+        assert allow_process.wait(2)
+        return SessionResult.success(session.sequence, text="done")
+
+    queue = RecordingQueue(
+        recorder_factory=factory,
+        fallback_recorder_factory=None,
+        processor=processor,
+        temp_path_factory=lambda: tmp_path / f"close-{len(recorders) + 1}.wav",
+    )
+    queue.start()
+    released = queue.release(False, {})
+    assert process_started.wait(2)
+    active = queue.start()
+
+    close_finished = threading.Event()
+
+    def close_queue():
+        try:
+            queue.close()
+        finally:
+            close_finished.set()
+
+    closer = threading.Thread(target=close_queue)
+    closer.start()
+
+    try:
+        assert close_finished.wait(0.1) is False
+        assert active.recorder.cancelled_event.wait(2)
+    finally:
+        allow_process.set()
+        closer.join(2)
+
+    assert released.result(timeout=2).to_api_dict()["text"] == "done"
+    assert active.wav_path.exists() is False
+    assert close_finished.is_set()
+    assert queue._finalizers == set()
+    assert queue._worker.is_alive() is False
+    queue.close()
+
+
+def test_temp_wav_failure_is_a_structured_start_error(tmp_path):
+    from voisr.recording_queue import RecordingQueueError
+
+    queue = RecordingQueue(
+        recorder_factory=FakeRecorder,
+        fallback_recorder_factory=None,
+        processor=lambda session: SessionResult.success(session.sequence),
+        temp_path_factory=lambda: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    try:
+        try:
+            queue.start()
+        except RecordingQueueError as error:
+            assert error.stage == "start"
+            assert "disk full" in str(error)
+        else:
+            raise AssertionError("start should report temporary-file failure")
+    finally:
+        queue.close()
