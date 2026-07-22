@@ -1,7 +1,6 @@
 import json
-import os
 import re
-import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -10,7 +9,12 @@ from voisr.cleanup import clean
 from voisr.history import HistoryStore
 from voisr.inject import paste_at_cursor, set_clipboard
 from voisr.recorder import Recorder
-from voisr.transcriber import transcribe
+from voisr.recording_queue import (
+    RecordingQueue,
+    RecordingQueueError,
+    RecordingSession,
+    SessionResult,
+)
 
 
 def default_recorder():
@@ -579,41 +583,51 @@ class Api:
     SPACE_JOIN_WINDOW_S = 300  # only join dictations this close together
 
     def __init__(self, config_path=ROOT / "config.json",
-                 history=None, recorder=None, transcribe_fn=None,
+                 history=None, recorder_factory=default_recorder,
+                 transcribe_fn=None,
                  clock=time.monotonic, hotkey_service=None,
                  fallback_recorder_factory=Recorder,
                  capture_fn=capture_next_key,
-                 paste_fn=paste_at_cursor):
+                 paste_fn=paste_at_cursor,
+                 clipboard_fn=set_clipboard):
         self._config_path = Path(config_path)
         self._history = history or HistoryStore(ROOT / "data" / "history.jsonl")
-        self._recorder = recorder or default_recorder()
-        self._fallback_recorder_factory = fallback_recorder_factory
-        self._transcribe_fn = transcribe_fn or self._default_transcribe
+        self._transcribe_fn = transcribe_fn
         self._clock = clock
         self._hotkey_service = hotkey_service
         self._capture_fn = capture_fn
         self._paste_fn = paste_fn
-        self._wav = None
-        self._t0 = None
+        self._clipboard_fn = clipboard_fn
         self._last_paste_text = None
         self._last_paste_ts = None
-        self._typed_since_paste = False
+        self._typing_generation = 0
+        self._last_paste_typing_generation = 0
+        self._paste_state_lock = threading.Lock()
         self._window = None
+        self._recordings = RecordingQueue(
+            recorder_factory=recorder_factory,
+            fallback_recorder_factory=fallback_recorder_factory,
+            processor=self._process_session,
+            clock=clock,
+        )
 
-    def _default_transcribe(self, wav):
-        """Transcribe with the best local model, biased toward the user's
-        dictionary vocabulary (names/jargon transcribe correctly first try)."""
+    def _default_transcribe(self, wav, cfg):
+        """Transcribe with the release-time model and dictionary prompt."""
         from voisr.transcriber import resolve_model, transcribe as _transcribe
-        cfg = self.get_config()
         vocab = sorted({v for v in (cfg.get("dictionary") or {}).values()})
         prompt = ("Glossary: " + ", ".join(vocab) + ".") if vocab else None
         return _transcribe(wav, model_path=resolve_model(cfg.get("model")),
                            prompt=prompt)
 
+    def _transcribe_audio(self, wav, cfg):
+        if self._transcribe_fn is not None:
+            return self._transcribe_fn(wav)
+        return self._default_transcribe(wav, cfg)
+
     def note_user_typing(self):
-        """Called by the key listener when any non-hotkey key is typed;
-        suppresses smart joining of the next dictation."""
-        self._typed_since_paste = True
+        """Record manual typing without blocking the event-tap callback."""
+        with self._paste_state_lock:
+            self._typing_generation += 1
 
     def attach_hotkey_service(self, service):
         self._hotkey_service = service
@@ -661,73 +675,75 @@ class Api:
             if svc is not None:
                 svc.start()
 
-    def start_recording(self):
-        if self._wav is not None:
-            return {"error": "already recording"}
-        fd, wav_path = tempfile.mkstemp(suffix=".wav")
-        os.close(fd)  # the recorder writes by path; keeping fd open leaks one per dictation
-        wav = Path(wav_path)
+    def _process_session(self, session: RecordingSession) -> SessionResult:
+        wav = session.wav_path
+        cfg = session.context
+        duration = max((session.released_at - session.started_at), 0.1)
+        if not wav.exists() or wav.stat().st_size < 1000:
+            detail = session.capture_stderr.strip()[:120]
+            return SessionResult.failure(
+                session.sequence, "audio",
+                f"recording failed (mic permission?) {detail}".rstrip())
+        peak = wav_peak(wav)
+        if 0 <= peak < 60:
+            return SessionResult.failure(
+                session.sequence, "audio",
+                "no audio captured — allow Voisr to use the Microphone in "
+                "System Settings → Privacy & Security, then try again")
         try:
-            self._recorder.start(wav)
-        except Exception:
-            # e.g. the stream backend can't load; self-heal onto ffmpeg
-            try:
-                fallback = self._fallback_recorder_factory()
-                fallback.start(wav)
-                self._recorder = fallback
-            except Exception as e:
-                wav.unlink(missing_ok=True)
-                return {"error": f"recorder failed: {e}"[:200]}
-        self._wav = wav
-        self._t0 = self._clock()
-        return {"recording": True}
+            raw = self._transcribe_audio(wav, cfg)
+            text = clean(raw, dictionary=cfg.get("dictionary", {}))
+        except Exception as error:
+            return SessionResult.failure(
+                session.sequence, "transcription",
+                f"transcription failed: {error}"[:250])
+        if not text:
+            return SessionResult.failure(
+                session.sequence, "transcription",
+                "nothing transcribed — try speaking a bit longer")
 
-    def stop_recording(self, paste=False):
-        if self._wav is None:
-            return {"error": "not recording"}
-        wav, self._wav = self._wav, None
-        try:
-            err = self._recorder.stop()
-        except Exception as e:
-            wav.unlink(missing_ok=True)
-            return {"error": f"recorder failed: {e}"[:200]}
-        duration = max(self._clock() - self._t0, 0.1)
-        try:
-            if not wav.exists() or wav.stat().st_size < 1000:
-                return {"error": f"recording failed (mic permission?) {err.strip()[:120]}"}
-            peak = wav_peak(wav)
-            if 0 <= peak < 60:
-                # digital silence: whisper would hallucinate ("You", "Thank you")
-                return {"error": "no audio captured — allow Voisr to use the "
-                                 "Microphone in System Settings → Privacy & "
-                                 "Security, then try again"}
-            cfg = self.get_config()
-            try:
-                text = clean(self._transcribe_fn(wav), dictionary=cfg.get("dictionary", {}))
-            except Exception as e:
-                return {"error": f"transcription failed: {e}"[:250]}
-            if not text:
-                return {"error": "nothing transcribed — try speaking a bit longer"}
-            item = self._history.add(text, duration_s=duration)
-            self._notify_dictation()
-            pasted = False
-            if paste and cfg.get("paste"):
-                lead = ""
-                if (self._last_paste_text
-                        and not self._typed_since_paste
-                        and self._clock() - self._last_paste_ts <= self.SPACE_JOIN_WINDOW_S
-                        and not self._last_paste_text[-1].isspace()):
-                    lead = " "  # joining consecutive dictations, like Wispr
-                pasted = self._paste_fn(lead + text)
-                if pasted:
+        item = self._history.add(text, duration_s=duration)
+        self._notify_dictation()
+        pasted = False
+        if session.paste_requested and cfg.get("paste"):
+            with self._paste_state_lock:
+                typing_generation = self._typing_generation
+                join = (
+                    self._last_paste_text
+                    and typing_generation == self._last_paste_typing_generation
+                    and self._clock() - self._last_paste_ts <= self.SPACE_JOIN_WINDOW_S
+                    and not self._last_paste_text[-1].isspace()
+                )
+            pasted = self._paste_fn((" " if join else "") + text)
+            if pasted:
+                with self._paste_state_lock:
                     self._last_paste_text = text
                     self._last_paste_ts = self._clock()
-                    self._typed_since_paste = False
-            if not pasted:
-                set_clipboard(text)
-            return {"text": text, "item": item, "copied": True, "pasted": pasted}
-        finally:
-            wav.unlink(missing_ok=True)
+                    self._last_paste_typing_generation = typing_generation
+        if not pasted:
+            self._clipboard_fn(text)
+        return SessionResult.success(
+            session.sequence, text=text, item=item,
+            copied=True, pasted=pasted)
+
+    def start_recording(self):
+        try:
+            session = self._recordings.start()
+        except RecordingQueueError as error:
+            return {"error": str(error)}
+        return {"recording": True, "session_id": session.sequence}
+
+    def _release_recording(self, paste=False):
+        return self._recordings.release(
+            paste_requested=paste,
+            context=self.get_config(),
+        )
+
+    def stop_recording(self, paste=False):
+        return self._release_recording(paste).result().to_api_dict()
+
+    def close(self):
+        self._recordings.close()
 
     def get_history(self):
         return self._history.list()

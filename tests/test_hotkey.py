@@ -24,10 +24,11 @@ class FakeHotkeyService:
 def make_api(tmp_path, service=None):
     return Api(config_path=tmp_path / "config.json",
                history=HistoryStore(tmp_path / "h.jsonl"),
-               recorder=FakeRecorder(),
+               recorder_factory=FakeRecorder,
                transcribe_fn=lambda wav: "hello",
                clock=lambda: 1.0,
-               hotkey_service=service)
+               hotkey_service=service,
+               clipboard_fn=lambda text: None)
 
 
 def test_hotkey_options_shape():

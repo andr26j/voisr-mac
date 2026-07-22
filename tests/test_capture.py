@@ -50,9 +50,9 @@ def cb_factory():
 def make_api(tmp_path, **kw):
     return Api(config_path=tmp_path / "config.json",
                history=HistoryStore(tmp_path / "h.jsonl"),
-               recorder=FakeRecorder(),
+               recorder_factory=FakeRecorder,
                transcribe_fn=lambda wav: "hello",
-               clock=lambda: 1.0, **kw)
+               clock=lambda: 1.0, clipboard_fn=lambda text: None, **kw)
 
 
 def wait_for_hide(widget, timeout=3.0):

@@ -25,10 +25,11 @@ def make_api(tmp_path, texts, paste_log):
 
     return Api(config_path=tmp_path / "config.json",
                history=HistoryStore(tmp_path / "h.jsonl"),
-               recorder=FakeRecorder(),
+               recorder_factory=FakeRecorder,
                transcribe_fn=lambda wav: next(it),
                clock=lambda: 1.0,
-               paste_fn=fake_paste)
+               paste_fn=fake_paste,
+               clipboard_fn=lambda text: None)
 
 
 def dictate(api):

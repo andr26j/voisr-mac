@@ -45,9 +45,10 @@ def make_api(tmp_path, config=None):
         cfg_path.write_text(json.dumps(config))
     return Api(config_path=cfg_path,
                history=HistoryStore(tmp_path / "h.jsonl"),
-               recorder=FakeRecorder(),
+               recorder_factory=FakeRecorder,
                transcribe_fn=lambda wav: "hello widget",
-               clock=lambda: 1.0)
+               clock=lambda: 1.0,
+               clipboard_fn=lambda text: None)
 
 
 def test_show_widget_defaults_true(tmp_path):
@@ -131,7 +132,7 @@ def test_press_does_not_claim_someone_elses_recording(tmp_path):
     svc = HotkeyService(api, widget=widget, hide_delay=0)
     svc.press()                    # must fail to start and not mark pressed
     svc.release()                  # must not stop the dashboard's recording
-    assert api._wav is not None    # dashboard recording still running
+    assert api._recordings.has_active_capture is True
     assert "processing" not in widget.calls
 
 
@@ -157,7 +158,7 @@ def test_push_to_talk_end_to_end_real_transcription(tmp_path, spoken_wav):
     (tmp_path / "config.json").write_text('{"paste": false}')
     api = Api(config_path=tmp_path / "config.json",
               history=HistoryStore(tmp_path / "h.jsonl"),
-              recorder=SpeechRecorder(), transcribe_fn=transcribe,
+              recorder_factory=SpeechRecorder, transcribe_fn=transcribe,
               clock=_time.monotonic)
     widget = FakeWidget()
     svc = HotkeyService(api, widget=widget, hide_delay=0)
@@ -185,13 +186,15 @@ def test_recorder_failure_falls_back_and_recovers(tmp_path):
     fallback = FakeRecorder()
     api = Api(config_path=tmp_path / "config.json",
               history=HistoryStore(tmp_path / "h.jsonl"),
-              recorder=ExplodingRecorder(),
+              recorder_factory=ExplodingRecorder,
               transcribe_fn=lambda wav: "recovered",
               clock=lambda: 1.0,
-              fallback_recorder_factory=lambda: fallback)
+              fallback_recorder_factory=lambda: fallback,
+              clipboard_fn=lambda text: None)
     res = api.start_recording()
     assert res.get("recording") is True
-    assert api._recorder is fallback
+    assert api._recordings.has_active_capture is True
+    assert fallback.path is not None
     out = api.stop_recording()
     assert out["text"] == "Recovered"
 
@@ -199,13 +202,14 @@ def test_recorder_failure_falls_back_and_recovers(tmp_path):
 def test_recorder_failure_without_fallback_returns_error(tmp_path):
     api = Api(config_path=tmp_path / "config.json",
               history=HistoryStore(tmp_path / "h.jsonl"),
-              recorder=ExplodingRecorder(),
+              recorder_factory=ExplodingRecorder,
               transcribe_fn=lambda wav: "x",
               clock=lambda: 1.0,
-              fallback_recorder_factory=ExplodingRecorder)
+              fallback_recorder_factory=ExplodingRecorder,
+              clipboard_fn=lambda text: None)
     res = api.start_recording()
     assert "error" in res
-    assert api._wav is None  # not stuck in a phantom recording state
+    assert api._recordings.has_active_capture is False
 
 
 def test_restart_survives_dead_listener(tmp_path):
@@ -314,9 +318,9 @@ def test_silent_recording_reports_mic_problem_not_hallucination(tmp_path):
 
     api = Api(config_path=tmp_path / "config.json",
               history=HistoryStore(tmp_path / "h.jsonl"),
-              recorder=SilentRecorder(),
+              recorder_factory=SilentRecorder,
               transcribe_fn=lambda wav: "You",  # whisper hallucinates on silence
-              clock=lambda: 1.0)
+              clock=lambda: 1.0, clipboard_fn=lambda text: None)
     api.start_recording()
     res = api.stop_recording()
     assert "error" in res and "Microphone" in res["error"]
@@ -334,9 +338,9 @@ def test_real_audio_passes_silence_gate(tmp_path):
 
     api = Api(config_path=tmp_path / "config.json",
               history=HistoryStore(tmp_path / "h.jsonl"),
-              recorder=NoisyRecorder(),
+              recorder_factory=NoisyRecorder,
               transcribe_fn=lambda wav: "real words",
-              clock=lambda: 1.0)
+              clock=lambda: 1.0, clipboard_fn=lambda text: None)
     api.start_recording()
     res = api.stop_recording()
     assert res["text"] == "Real words"
