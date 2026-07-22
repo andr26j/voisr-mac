@@ -89,7 +89,7 @@ def test_second_capture_finalizes_while_first_processes_but_completes_fifo(tmp_p
         queue.close()
 
 
-def test_start_is_accepted_while_previous_capture_finalizes(tmp_path):
+def test_start_waits_for_capture_handoff_but_not_previous_processing(tmp_path):
     stop_started = threading.Event()
     allow_stop = threading.Event()
     stop_finished = threading.Event()
@@ -122,11 +122,22 @@ def test_start_is_accepted_while_previous_capture_finalizes(tmp_path):
         fallback_recorder_factory=None,
         processor=processor,
         temp_path_factory=lambda: tmp_path / f"capture-{len(recorders) + 1}.wav",
+        max_in_flight=3,
     )
     try:
         queue.start()
         first_future = queue.release(True, {})
         assert stop_started.wait(2)
+
+        reservation_made = threading.Event()
+
+        class ObservedStartEvent(threading.Event):
+            def clear(self):
+                super().clear()
+                reservation_made.set()
+
+        queue._start_done = ObservedStartEvent()
+        queue._start_done.set()
 
         second_session = []
 
@@ -136,13 +147,21 @@ def test_start_is_accepted_while_previous_capture_finalizes(tmp_path):
 
         start_thread = threading.Thread(target=start_second)
         start_thread.start()
-        assert second_started.wait(2)
+        assert reservation_made.wait(2)
+        assert second_started.is_set() is False
+        assert len(recorders) == 1
+        assert queue._in_flight == 2
+        with pytest.raises(RecordingQueueError) as error:
+            queue.start()
+        assert error.value.stage == "start"
+        assert "already recording" in str(error.value)
         assert stop_finished.is_set() is False
         assert first_processing.is_set() is False
 
         allow_stop.set()
         assert stop_finished.wait(2)
         assert first_processing.wait(2)
+        assert second_started.wait(2)
         assert first_future.done() is False
 
         second_future = queue.release(True, {})
@@ -154,6 +173,45 @@ def test_start_is_accepted_while_previous_capture_finalizes(tmp_path):
         allow_stop.set()
         unblock_processing.set()
         start_thread.join(timeout=2)
+        queue.close()
+
+
+def test_completion_callback_can_start_at_released_capacity(tmp_path):
+    recorders = []
+    callback_started = threading.Event()
+    callback_error = []
+
+    def recorder_factory():
+        recorder = FakeRecorder()
+        recorders.append(recorder)
+        return recorder
+
+    queue = RecordingQueue(
+        recorder_factory=recorder_factory,
+        fallback_recorder_factory=None,
+        processor=lambda session: SessionResult.success(session.sequence),
+        temp_path_factory=lambda: tmp_path / f"callback-{len(recorders) + 1}.wav",
+        max_in_flight=1,
+    )
+    try:
+        queue.start()
+        first = queue.release(False, {})
+
+        def start_again(_future):
+            try:
+                queue.start()
+            except Exception as error:
+                callback_error.append(error)
+            finally:
+                callback_started.set()
+
+        first.add_done_callback(start_again)
+        assert callback_started.wait(2)
+        assert callback_error == []
+        assert len(recorders) == 2
+        second = queue.release(False, {})
+        assert second.result(timeout=2).sequence == 2
+    finally:
         queue.close()
 
 
@@ -263,6 +321,35 @@ def test_failed_start_releases_its_capacity_reservation(tmp_path):
     try:
         with pytest.raises(RecordingQueueError):
             queue.start()
+        assert queue.start().sequence == 1
+    finally:
+        queue.close()
+
+
+def test_start_exception_after_recorder_creation_releases_reservation(tmp_path):
+    recorder = FakeRecorder()
+    wav_path = tmp_path / "clock-failure.wav"
+
+    def temp_path():
+        wav_path.touch()
+        return wav_path
+
+    queue = RecordingQueue(
+        recorder_factory=lambda: recorder,
+        fallback_recorder_factory=None,
+        processor=lambda session: SessionResult.success(session.sequence),
+        clock=lambda: (_ for _ in ()).throw(RuntimeError("clock failed")),
+        temp_path_factory=temp_path,
+        max_in_flight=1,
+    )
+    try:
+        with pytest.raises(RecordingQueueError) as error:
+            queue.start()
+        assert error.value.stage == "start"
+        assert recorder.cancelled is True
+        assert wav_path.exists() is False
+        assert queue._in_flight == 0
+        queue._clock = lambda: 1.0
         assert queue.start().sequence == 1
     finally:
         queue.close()
