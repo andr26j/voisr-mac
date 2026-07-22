@@ -98,6 +98,64 @@ def test_hotkey_ctrl_c_stops_listener_then_closes_api(monkeypatch):
     assert events[-2:] == ["service-stopped", "api-closed"]
 
 
+def test_hotkey_stop_failure_still_closes_api(monkeypatch):
+    events = []
+
+    class FakeApi:
+        def __init__(self, **kwargs):
+            pass
+
+        def close(self):
+            events.append("api-closed")
+
+    class FakeService:
+        status = "active"
+
+        def __init__(self, api):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            events.append("service-stopped")
+            raise RuntimeError("listener stop failed")
+
+    monkeypatch.setattr("voisr.ui.Api", FakeApi)
+    monkeypatch.setattr("voisr.ui.HotkeyService", FakeService)
+    monkeypatch.setattr("voisr.ui.request_permissions", lambda: None)
+    monkeypatch.setattr("time.sleep", lambda seconds: (_ for _ in ()).throw(KeyboardInterrupt))
+
+    with pytest.raises(RuntimeError, match="listener stop failed"):
+        app.hotkey_mode({"hotkey": "alt_r"}, "/tmp/config.json")
+
+    assert events == ["service-stopped", "api-closed"]
+
+
+def test_hotkey_service_constructor_failure_closes_api(monkeypatch):
+    events = []
+
+    class FakeApi:
+        def __init__(self, **kwargs):
+            events.append("api-created")
+
+        def close(self):
+            events.append("api-closed")
+
+    class FailingService:
+        def __init__(self, api):
+            raise RuntimeError("listener unavailable")
+
+    monkeypatch.setattr("voisr.ui.Api", FakeApi)
+    monkeypatch.setattr("voisr.ui.HotkeyService", FailingService)
+    monkeypatch.setattr("voisr.ui.request_permissions", lambda: None)
+
+    with pytest.raises(RuntimeError, match="listener unavailable"):
+        app.hotkey_mode({"hotkey": "alt_r"}, "/tmp/config.json")
+
+    assert events == ["api-created", "api-closed"]
+
+
 def test_gui_shutdown_stops_listener_then_closes_api(monkeypatch):
     from voisr import ui
 
@@ -143,3 +201,114 @@ def test_gui_shutdown_stops_listener_then_closes_api(monkeypatch):
         ui.main()
 
     assert events[-2:] == ["service-stopped", "api-closed"]
+
+
+def test_gui_stop_failure_still_closes_api(monkeypatch):
+    from voisr import ui
+
+    events = []
+
+    class FakeApi:
+        def attach_hotkey_service(self, service):
+            pass
+
+        def attach_window(self, window):
+            pass
+
+        def close(self):
+            events.append("api-closed")
+
+    class FakeService:
+        def __init__(self, api, widget):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            events.append("service-stopped")
+            raise RuntimeError("listener stop failed")
+
+    class FakeWidget:
+        def create(self):
+            pass
+
+    def start(callback):
+        callback()
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(ui, "Api", FakeApi)
+    monkeypatch.setattr(ui, "HotkeyService", FakeService)
+    monkeypatch.setattr(ui, "RecordingWidget", FakeWidget)
+    monkeypatch.setattr("voisr.inject.prepare_paste_controller", lambda: None)
+    monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "webview", SimpleNamespace(
+        create_window=lambda *args, **kwargs: object(), start=start))
+
+    with pytest.raises(RuntimeError, match="listener stop failed"):
+        ui.main()
+
+    assert events == ["service-stopped", "api-closed"]
+
+
+def test_gui_service_constructor_failure_closes_api(monkeypatch):
+    from voisr import ui
+
+    events = []
+
+    class FakeApi:
+        def close(self):
+            events.append("api-closed")
+
+    class FailingService:
+        def __init__(self, api, widget):
+            raise RuntimeError("listener unavailable")
+
+    monkeypatch.setattr(ui, "Api", FakeApi)
+    monkeypatch.setattr(ui, "HotkeyService", FailingService)
+    monkeypatch.setattr("voisr.inject.prepare_paste_controller", lambda: None)
+    monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "webview", SimpleNamespace())
+
+    with pytest.raises(RuntimeError, match="listener unavailable"):
+        ui.main()
+
+    assert events == ["api-closed"]
+
+
+def test_gui_window_constructor_failure_stops_listener_and_closes_api(monkeypatch):
+    from voisr import ui
+
+    events = []
+
+    class FakeApi:
+        def attach_hotkey_service(self, service):
+            pass
+
+        def close(self):
+            events.append("api-closed")
+
+    class FakeService:
+        def __init__(self, api, widget):
+            pass
+
+        def stop(self):
+            events.append("service-stopped")
+
+    class FakeWidget:
+        def create(self):
+            pass
+
+    monkeypatch.setattr(ui, "Api", FakeApi)
+    monkeypatch.setattr(ui, "HotkeyService", FakeService)
+    monkeypatch.setattr(ui, "RecordingWidget", FakeWidget)
+    monkeypatch.setattr("voisr.inject.prepare_paste_controller", lambda: None)
+    monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "webview", SimpleNamespace(
+        create_window=lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("window unavailable"))))
+
+    with pytest.raises(RuntimeError, match="window unavailable"):
+        ui.main()
+
+    assert events == ["service-stopped", "api-closed"]

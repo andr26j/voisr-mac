@@ -77,10 +77,12 @@ def hotkey_mode(cfg, config_path) -> None:
 
     from voisr.ui import Api, HotkeyService, default_recorder, request_permissions
 
-    request_permissions()
-    api = Api(config_path=config_path, recorder_factory=default_recorder)
-    service = HotkeyService(api)
+    api = None
+    service = None
     try:
+        request_permissions()
+        api = Api(config_path=config_path, recorder_factory=default_recorder)
+        service = HotkeyService(api)
         service.start()  # config-driven: prefers captured hotkey_vk
         print(f"Hold [{cfg['hotkey']}] to talk. Ctrl-C to quit. ({service.status})")
         while True:
@@ -88,8 +90,12 @@ def hotkey_mode(cfg, config_path) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        service.stop()
-        api.close()
+        try:
+            if service is not None:
+                service.stop()
+        finally:
+            if api is not None:
+                api.close()
 
 
 def main() -> None:

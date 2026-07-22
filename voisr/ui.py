@@ -881,28 +881,34 @@ def main():
           f"whisper: {whisper})", flush=True)
     from voisr.inject import prepare_paste_controller
     prepare_paste_controller()  # main thread, fast, non-blocking (TIS APIs)
-    api = Api()
-    widget = RecordingWidget()
-    service = HotkeyService(api, widget=widget)
-    api.attach_hotkey_service(service)
-    window = webview.create_window("Voisr", str(WEB_DIR / "index.html"),
-                                   js_api=api, width=1060, height=700, min_size=(860, 560))
-    api.attach_window(window)
-    widget.create()
-
-    def on_started():
-        # Runs on a worker thread AFTER the GUI run loop is up, so the
-        # Input Monitoring / Accessibility prompts can display and blocking
-        # calls never freeze startup. The mic is NOT opened here — it opens
-        # only during an actual dictation, so the "mic in use" indicator is
-        # off while idle.
-        service.start()  # config-driven: prefers captured hotkey_vk
-
+    api = None
+    service = None
     try:
+        api = Api()
+        widget = RecordingWidget()
+        service = HotkeyService(api, widget=widget)
+        api.attach_hotkey_service(service)
+        window = webview.create_window("Voisr", str(WEB_DIR / "index.html"),
+                                       js_api=api, width=1060, height=700, min_size=(860, 560))
+        api.attach_window(window)
+        widget.create()
+
+        def on_started():
+            # Runs on a worker thread AFTER the GUI run loop is up, so the
+            # Input Monitoring / Accessibility prompts can display and blocking
+            # calls never freeze startup. The mic is NOT opened here — it opens
+            # only during an actual dictation, so the "mic in use" indicator is
+            # off while idle.
+            service.start()  # config-driven: prefers captured hotkey_vk
+
         webview.start(on_started)
     finally:
-        service.stop()
-        api.close()
+        try:
+            if service is not None:
+                service.stop()
+        finally:
+            if api is not None:
+                api.close()
 
 
 if __name__ == "__main__":
