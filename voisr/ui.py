@@ -224,7 +224,7 @@ class RecordingWidget:
     _CB_STATIONARY = 1 << 4
     _CB_FULLSCREEN_AUX = 1 << 8
     _SCREEN_SAVER_LEVEL = 1000
-    _supports_ownership_guard = True
+    _supports_ownership_action = True
 
     def __init__(self):
         self._panel = None
@@ -287,31 +287,35 @@ class RecordingWidget:
             print(f"Voisr widget: build failed: {e}", flush=True)
 
     def _set(self, state: str, theme: str | None = None,
-             color: str | None = None, is_current=None) -> None:
+             color: str | None = None, is_current=None, if_current=None) -> None:
         try:
             from PyObjCTools import AppHelper
 
             def go():
-                if is_current is not None and not is_current():
-                    return
-                if self._panel is None:
-                    self._build()
-                if self._webview is None:
-                    return
-                if theme is not None:
-                    # sanitize_* whitelist both values — config.json content
-                    # can never be interpolated into JS verbatim
+                def apply():
+                    if self._panel is None:
+                        self._build()
+                    if self._webview is None:
+                        return
+                    if theme is not None:
+                        # sanitize_* whitelist both values — config.json content
+                        # can never be interpolated into JS verbatim
+                        self._webview.evaluateJavaScript_completionHandler_(
+                            f'setTheme("{sanitize_pill_theme(theme)}")', None)
+                        safe = sanitize_pill_color(color)
+                        self._webview.evaluateJavaScript_completionHandler_(
+                            f'setColor("{safe}")' if safe else "setColor(null)", None)
+                    self._panel.setAlphaValue_(1.0)   # fade in (window stays resident)
                     self._webview.evaluateJavaScript_completionHandler_(
-                        f'setTheme("{sanitize_pill_theme(theme)}")', None)
-                    safe = sanitize_pill_color(color)
-                    self._webview.evaluateJavaScript_completionHandler_(
-                        f'setColor("{safe}")' if safe else "setColor(null)", None)
-                self._panel.setAlphaValue_(1.0)   # fade in (window stays resident)
-                self._webview.evaluateJavaScript_completionHandler_(
-                    f'setState("{state}")', None)
-                self._panel.orderFrontRegardless()
-                if state == "recording":
-                    self._check_visible()
+                        f'setState("{state}")', None)
+                    self._panel.orderFrontRegardless()
+                    if state == "recording":
+                        self._check_visible()
+
+                if if_current is not None:
+                    if_current(apply)
+                elif is_current is None or is_current():
+                    apply()
 
             AppHelper.callAfter(go)
         except Exception:
@@ -338,31 +342,36 @@ class RecordingWidget:
             pass
 
     def show_recording(self, theme: str = "classic", color: str | None = None,
-                       is_current=None):
-        self._set("recording", theme=theme, color=color, is_current=is_current)
+                       is_current=None, if_current=None):
+        self._set("recording", theme=theme, color=color, is_current=is_current,
+                  if_current=if_current)
 
-    def show_processing(self, is_current=None):
-        self._set("processing", is_current=is_current)
+    def show_processing(self, is_current=None, if_current=None):
+        self._set("processing", is_current=is_current, if_current=if_current)
 
-    def show_done(self, is_current=None):
-        self._set("done", is_current=is_current)
+    def show_done(self, is_current=None, if_current=None):
+        self._set("done", is_current=is_current, if_current=if_current)
 
-    def show_error(self, is_current=None):
-        self._set("error", is_current=is_current)
+    def show_error(self, is_current=None, if_current=None):
+        self._set("error", is_current=is_current, if_current=if_current)
 
-    def hide(self, is_current=None):
+    def hide(self, is_current=None, if_current=None):
         try:
             from PyObjCTools import AppHelper
 
             def go():
-                if is_current is not None and not is_current():
-                    return
-                if self._panel is not None:
-                    # Fade out but stay resident on all Spaces — do NOT orderOut.
-                    # orderOut drops the window's Space membership, and the next
-                    # orderFront intermittently fails to rejoin a fullscreen Space
-                    # (onActiveSpace=False → the pill never appears).
-                    self._panel.setAlphaValue_(0.0)
+                def apply():
+                    if self._panel is not None:
+                        # Fade out but stay resident on all Spaces — do NOT orderOut.
+                        # orderOut drops the window's Space membership, and the next
+                        # orderFront intermittently fails to rejoin a fullscreen Space
+                        # (onActiveSpace=False → the pill never appears).
+                        self._panel.setAlphaValue_(0.0)
+
+                if if_current is not None:
+                    if_current(apply)
+                elif is_current is None or is_current():
+                    apply()
 
             AppHelper.callAfter(go)
         except Exception:
@@ -412,15 +421,16 @@ class HotkeyService:
     def _widget_enabled(self) -> bool:
         return self._widget is not None and bool(self._api.get_config().get("show_widget", True))
 
-    def _owns_widget(self, epoch: int) -> bool:
+    def _run_widget_action(self, epoch: int, action) -> None:
         with self._state_lock:
-            return epoch == self._epoch
+            if epoch == self._epoch:
+                action()
 
     def _widget_action(self, name: str, epoch: int, *args, **kwargs) -> None:
         method = getattr(self._widget, name)
-        if getattr(self._widget, "_supports_ownership_guard", False):
+        if getattr(self._widget, "_supports_ownership_action", False):
             method(*args, **kwargs,
-                   is_current=lambda: self._owns_widget(epoch))
+                   if_current=lambda action: self._run_widget_action(epoch, action))
         else:
             method(*args, **kwargs)
 
