@@ -62,6 +62,29 @@ def test_ffmpeg_cancel_terminates_waits_and_is_idempotent():
     assert recorder.proc is None
 
 
+def test_ffmpeg_stop_failure_keeps_process_for_cancel_to_reap():
+    class SignalFailureProcess(FakeProcess):
+        def send_signal(self, signal):
+            raise RuntimeError("signal failed")
+
+    proc = SignalFailureProcess()
+    recorder = Recorder()
+    recorder.proc = proc
+
+    try:
+        recorder.stop()
+    except RuntimeError as error:
+        assert str(error) == "signal failed"
+    else:
+        raise AssertionError("stop should expose signal failure")
+
+    assert recorder.proc is proc
+    recorder.cancel()
+    assert proc.terminated is True
+    assert proc.waited is True
+    assert recorder.proc is None
+
+
 def test_stream_cancel_closes_and_discards_capture_even_if_stop_raises():
     stream = ExplodingStream()
     recorder = StreamRecorder()

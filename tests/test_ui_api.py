@@ -1,4 +1,7 @@
 import json
+import threading
+
+import pytest
 
 from voisr.history import HistoryStore
 from voisr.ui import Api
@@ -316,7 +319,95 @@ def test_clipboard_failure_returns_text_and_history_then_advances(tmp_path):
         assert first["text"] == "Recoverable text"
         assert first["item"]["text"] == "Recoverable text"
         assert first["error"].startswith("delivery failed:")
+        assert first["copied"] is False
         assert second["text"] == "Recoverable text"
         assert "error" not in second
     finally:
+        api.close()
+
+
+@pytest.mark.parametrize("failure", ["history", "paste", "clipboard"])
+def test_admitted_session_after_delivery_failure_completes_in_fifo_order(
+    tmp_path, failure
+):
+    first_processing = threading.Event()
+    allow_first = threading.Event()
+    transcriptions = 0
+    clipboard = []
+    pasted = []
+    paste_attempts = 0
+
+    class FirstHistoryFails:
+        def __init__(self):
+            self.items = []
+
+        def add(self, text, duration_s):
+            if not self.items:
+                self.items.append("failed")
+                raise OSError("history unavailable")
+            self.items.append(text)
+            return {"text": text}
+
+        def list(self):
+            return []
+
+    def transcribe_audio(wav):
+        nonlocal transcriptions
+        transcriptions += 1
+        if transcriptions == 1:
+            first_processing.set()
+            assert allow_first.wait(2)
+            return "first"
+        return "second"
+
+    def paste(text):
+        nonlocal paste_attempts
+        paste_attempts += 1
+        if failure == "paste" and paste_attempts == 1:
+            raise OSError("paste unavailable")
+        pasted.append(text)
+        return True
+
+    def copy(text):
+        if failure == "clipboard" and not clipboard:
+            clipboard.append("failed")
+            raise OSError("clipboard unavailable")
+        clipboard.append(text)
+
+    history = FirstHistoryFails() if failure == "history" else HistoryStore(
+        tmp_path / f"{failure}.jsonl"
+    )
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"paste": failure == "paste"}))
+    api = Api(
+        config_path=cfg,
+        history=history,
+        recorder_factory=FakeRecorder,
+        transcribe_fn=transcribe_audio,
+        paste_fn=paste,
+        clipboard_fn=copy,
+    )
+    try:
+        api.start_recording()
+        first = api._release_recording(paste=True)
+        assert first_processing.wait(2)
+        api.start_recording()
+        second = api._release_recording(paste=True)
+        assert second.done() is False
+
+        allow_first.set()
+        first_result = first.result(timeout=2).to_api_dict()
+        second_result = second.result(timeout=2).to_api_dict()
+        assert [first_result["text"], second_result["text"]] == ["First", "Second"]
+        assert "error" not in second_result
+        if failure == "history":
+            assert first_result["warning"].startswith("history failed:")
+        elif failure == "paste":
+            assert first_result["pasted"] is False and first_result["copied"] is True
+            assert second_result["pasted"] is True
+        else:
+            assert first_result["copied"] is False
+            assert first_result["error"].startswith("delivery failed:")
+    finally:
+        allow_first.set()
         api.close()

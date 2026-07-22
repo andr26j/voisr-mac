@@ -1,6 +1,8 @@
 import threading
 from concurrent.futures import Future
 
+import pytest
+
 from voisr.recording_queue import RecordingQueue, RecordingQueueError, SessionResult
 
 
@@ -87,7 +89,7 @@ def test_second_capture_finalizes_while_first_processes_but_completes_fifo(tmp_p
         queue.close()
 
 
-def test_start_waits_for_previous_stop_but_not_previous_processing(tmp_path):
+def test_start_is_accepted_while_previous_capture_finalizes(tmp_path):
     stop_started = threading.Event()
     allow_stop = threading.Event()
     stop_finished = threading.Event()
@@ -134,12 +136,13 @@ def test_start_waits_for_previous_stop_but_not_previous_processing(tmp_path):
 
         start_thread = threading.Thread(target=start_second)
         start_thread.start()
-        assert second_started.wait(0.1) is False
+        assert second_started.wait(2)
+        assert stop_finished.is_set() is False
+        assert first_processing.is_set() is False
 
         allow_stop.set()
         assert stop_finished.wait(2)
         assert first_processing.wait(2)
-        assert second_started.wait(2)
         assert first_future.done() is False
 
         second_future = queue.release(True, {})
@@ -151,6 +154,238 @@ def test_start_waits_for_previous_stop_but_not_previous_processing(tmp_path):
         allow_stop.set()
         unblock_processing.set()
         start_thread.join(timeout=2)
+        queue.close()
+
+
+def test_capacity_is_validated(tmp_path):
+    for capacity in (0, -1, True, "2"):
+        with pytest.raises(ValueError):
+            RecordingQueue(
+                recorder_factory=FakeRecorder,
+                fallback_recorder_factory=None,
+                processor=lambda session: SessionResult.success(session.sequence),
+                temp_path_factory=lambda: tmp_path / "invalid.wav",
+                max_in_flight=capacity,
+            )
+
+
+def test_capacity_counts_active_pending_and_worker_owned_sessions(tmp_path):
+    processing = threading.Event()
+    allow_processing = threading.Event()
+    recorders = []
+
+    def recorder_factory():
+        recorder = FakeRecorder()
+        recorders.append(recorder)
+        return recorder
+
+    def processor(session):
+        if session.sequence == 1:
+            processing.set()
+            assert allow_processing.wait(2)
+        return SessionResult.success(session.sequence, text=str(session.sequence))
+
+    queue = RecordingQueue(
+        recorder_factory=recorder_factory,
+        fallback_recorder_factory=None,
+        processor=processor,
+        temp_path_factory=lambda: tmp_path / f"capacity-{len(recorders) + 1}.wav",
+        max_in_flight=2,
+    )
+    try:
+        queue.start()
+        first = queue.release(False, {})
+        assert processing.wait(2)
+
+        queue.start()
+        second = queue.release(False, {})
+        with pytest.raises(RecordingQueueError) as error:
+            queue.start()
+        assert error.value.stage == "start"
+        assert "busy" in str(error.value)
+
+        allow_processing.set()
+        assert first.result(timeout=2).sequence == 1
+        assert second.result(timeout=2).sequence == 2
+    finally:
+        allow_processing.set()
+        queue.close()
+
+
+def test_capacity_recovers_after_worker_completion(tmp_path):
+    processing = threading.Event()
+    allow_processing = threading.Event()
+    queue = RecordingQueue(
+        recorder_factory=FakeRecorder,
+        fallback_recorder_factory=None,
+        processor=lambda session: (
+            processing.set(),
+            allow_processing.wait(2),
+            SessionResult.success(session.sequence),
+        )[-1],
+        temp_path_factory=lambda: tmp_path / "recovery.wav",
+        max_in_flight=1,
+    )
+    try:
+        queue.start()
+        first = queue.release(False, {})
+        assert processing.wait(2)
+        with pytest.raises(RecordingQueueError):
+            queue.start()
+
+        allow_processing.set()
+        first.result(timeout=2)
+        queue.start()
+        second = queue.release(False, {})
+        assert second.result(timeout=2).sequence == 2
+    finally:
+        allow_processing.set()
+        queue.close()
+
+
+def test_failed_start_releases_its_capacity_reservation(tmp_path):
+    attempts = 0
+
+    def recorder_factory():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return ExplodingStartRecorder()
+        return FakeRecorder()
+
+    queue = RecordingQueue(
+        recorder_factory=recorder_factory,
+        fallback_recorder_factory=None,
+        processor=lambda session: SessionResult.success(session.sequence),
+        temp_path_factory=lambda: tmp_path / "failed-admission.wav",
+        max_in_flight=1,
+    )
+    try:
+        with pytest.raises(RecordingQueueError):
+            queue.start()
+        assert queue.start().sequence == 1
+    finally:
+        queue.close()
+
+
+def test_close_releases_active_capacity_once(tmp_path):
+    recorder = FakeRecorder()
+    queue = RecordingQueue(
+        recorder_factory=lambda: recorder,
+        fallback_recorder_factory=None,
+        processor=lambda session: SessionResult.success(session.sequence),
+        temp_path_factory=lambda: tmp_path / "active-close.wav",
+        max_in_flight=1,
+    )
+    queue.start()
+    queue.close()
+    queue.close()
+
+    assert recorder.cancelled is True
+    assert queue._in_flight == 0
+
+
+def test_completion_and_close_do_not_release_capacity_twice(tmp_path):
+    processing = threading.Event()
+    allow_processing = threading.Event()
+
+    def processor(session):
+        processing.set()
+        assert allow_processing.wait(2)
+        return SessionResult.success(session.sequence)
+
+    queue = RecordingQueue(
+        recorder_factory=FakeRecorder,
+        fallback_recorder_factory=None,
+        processor=processor,
+        temp_path_factory=lambda: tmp_path / "once.wav",
+        max_in_flight=1,
+    )
+    try:
+        queue.start()
+        completion = queue.release(False, {})
+        assert processing.wait(2)
+        allow_processing.set()
+        completion.result(timeout=2)
+        assert queue._in_flight == 0
+    finally:
+        allow_processing.set()
+        queue.close()
+    assert queue._in_flight == 0
+
+
+def test_finalizer_start_failure_cancels_and_cleans_then_next_capture_works(
+    tmp_path, monkeypatch
+):
+    recorders = []
+    original_start = threading.Thread.start
+    fail_finalizer = True
+
+    def recorder_factory():
+        recorder = FakeRecorder()
+        recorders.append(recorder)
+        return recorder
+
+    def start_thread(thread):
+        if fail_finalizer and thread.name.startswith("voisr-capture-"):
+            raise RuntimeError("thread unavailable")
+        return original_start(thread)
+
+    def temp_path():
+        path = tmp_path / f"thread-{len(recorders) + 1}.wav"
+        path.touch()
+        return path
+
+    monkeypatch.setattr(threading.Thread, "start", start_thread)
+    queue = RecordingQueue(
+        recorder_factory=recorder_factory,
+        fallback_recorder_factory=None,
+        processor=lambda session: SessionResult.success(session.sequence),
+        temp_path_factory=temp_path,
+        max_in_flight=1,
+    )
+    try:
+        first_session = queue.start()
+        failed = queue.release(False, {})
+        failed_result = failed.result(timeout=2)
+        assert failed_result.stage == "stop"
+        assert recorders[0].cancelled is True
+        assert first_session.wav_path.exists() is False
+        assert queue._in_flight == 0
+
+        fail_finalizer = False
+        queue.start()
+        assert queue.release(False, {}).result(timeout=2).stage is None
+    finally:
+        queue.close()
+
+
+def test_stop_failure_cancels_cleans_and_allows_following_capture(tmp_path):
+    recorders = [ExplodingStopRecorder(), FakeRecorder()]
+
+    def temp_path():
+        path = tmp_path / f"stop-{len(recorders) + 1}.wav"
+        path.touch()
+        return path
+
+    queue = RecordingQueue(
+        recorder_factory=lambda: recorders.pop(0),
+        fallback_recorder_factory=None,
+        processor=lambda session: SessionResult.success(session.sequence),
+        temp_path_factory=temp_path,
+        max_in_flight=1,
+    )
+    try:
+        first_session = queue.start()
+        failed = queue.release(False, {})
+        assert failed.result(timeout=2).stage == "stop"
+        assert first_session.recorder.cancelled is True
+        assert first_session.wav_path.exists() is False
+        assert queue._in_flight == 0
+
+        queue.start()
+        assert queue.release(False, {}).result(timeout=2).stage is None
+    finally:
         queue.close()
 
 
@@ -451,6 +686,7 @@ def test_concurrent_close_waits_for_owner_and_releases_both_callers(tmp_path):
     assert queue._finalizers == set()
     assert queue._worker.is_alive() is False
     assert released.wav_path.exists() is False
+    assert queue._in_flight == 0
 
 
 def test_temp_wav_failure_is_a_structured_start_error(tmp_path):

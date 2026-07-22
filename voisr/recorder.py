@@ -34,9 +34,10 @@ class Recorder:
 
     def stop(self) -> str:
         """Gracefully stop capture, finalize the WAV, and return stderr."""
-        proc, self.proc = self.proc, None
+        proc = self.proc
         if proc is None:
             raise RuntimeError("not recording")
+        reaped = False
         try:
             if proc.poll() is None:
                 proc.send_signal(signal.SIGINT)
@@ -45,15 +46,20 @@ class Recorder:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
-            return proc.stderr.read().decode() if proc.stderr else ""
+            reaped = True
+            output = proc.stderr.read().decode() if proc.stderr else ""
         finally:
-            self._close_stderr(proc)
+            if reaped:
+                self.proc = None
+                self._close_stderr(proc)
+        return output
 
     def cancel(self) -> None:
         """Stop capture without requiring a usable WAV; safe to repeat."""
-        proc, self.proc = self.proc, None
+        proc = self.proc
         if proc is None:
             return
+        reaped = False
         try:
             if proc.poll() is None:
                 proc.terminate()
@@ -62,14 +68,18 @@ class Recorder:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
+            reaped = True
         except Exception:
             try:
                 proc.kill()
                 proc.wait()
+                reaped = True
             except Exception:
-                pass
+                return
         finally:
-            self._close_stderr(proc)
+            if reaped:
+                self.proc = None
+                self._close_stderr(proc)
 
     def close(self) -> None:
         self.cancel()
