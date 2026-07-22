@@ -702,9 +702,17 @@ class Api:
                 session.sequence, "transcription",
                 "nothing transcribed — try speaking a bit longer")
 
-        item = self._history.add(text, duration_s=duration)
-        self._notify_dictation()
+        item = None
+        warning = None
+        try:
+            item = self._history.add(text, duration_s=duration)
+            self._notify_dictation()
+        except Exception as error:
+            warning = f"history failed: {error}"[:250]
+
         pasted = False
+        paste_error = None
+        typing_generation = None
         if session.paste_requested and cfg.get("paste"):
             with self._paste_state_lock:
                 typing_generation = self._typing_generation
@@ -714,17 +722,37 @@ class Api:
                     and self._clock() - self._last_paste_ts <= self.SPACE_JOIN_WINDOW_S
                     and not self._last_paste_text[-1].isspace()
                 )
-            pasted = self._paste_fn((" " if join else "") + text)
+            try:
+                pasted = self._paste_fn((" " if join else "") + text)
+            except Exception as error:
+                paste_error = error
             if pasted:
                 with self._paste_state_lock:
                     self._last_paste_text = text
                     self._last_paste_ts = self._clock()
                     self._last_paste_typing_generation = typing_generation
+
+        copied = pasted
+        clipboard_error = None
         if not pasted:
-            self._clipboard_fn(text)
-        return SessionResult.success(
-            session.sequence, text=text, item=item,
-            copied=True, pasted=pasted)
+            try:
+                self._clipboard_fn(text)
+                copied = True
+            except Exception as error:
+                clipboard_error = error
+
+        fields = {"text": text, "copied": copied, "pasted": pasted}
+        if item is not None:
+            fields["item"] = item
+        if warning is not None:
+            fields["warning"] = warning
+        if clipboard_error is not None:
+            detail = clipboard_error if paste_error is None else (
+                f"{paste_error}; clipboard fallback failed: {clipboard_error}")
+            return SessionResult.failure(
+                session.sequence, "delivery",
+                f"delivery failed: {detail}"[:250], **fields)
+        return SessionResult.success(session.sequence, **fields)
 
     def start_recording(self):
         try:

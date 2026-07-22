@@ -230,3 +230,93 @@ def test_release_snapshots_dictionary_before_queue_wait(tmp_path):
     finally:
         allow_first.set()
         api.close()
+
+
+class ExplodingHistory:
+    def add(self, text, duration_s):
+        raise OSError("history disk unavailable")
+
+    def list(self):
+        return []
+
+
+def test_history_failure_warns_but_still_delivers(tmp_path):
+    copied = []
+    api = Api(
+        config_path=tmp_path / "config.json",
+        history=ExplodingHistory(),
+        recorder_factory=FakeRecorder,
+        transcribe_fn=lambda wav: "still usable",
+        clipboard_fn=copied.append,
+        clock=iter([1.0, 2.0]).__next__,
+    )
+    try:
+        api.start_recording()
+        result = api.stop_recording()
+        assert result["text"] == "Still usable"
+        assert result["warning"].startswith("history failed:")
+        assert "item" not in result
+        assert copied == ["Still usable"]
+    finally:
+        api.close()
+
+
+def test_paste_failure_uses_clipboard_and_queue_continues(tmp_path):
+    copied = []
+    calls = iter([RuntimeError("paste exploded"), None])
+
+    def paste(text):
+        failure = next(calls)
+        if failure:
+            raise failure
+        return True
+
+    api = Api(
+        config_path=tmp_path / "config.json",
+        history=HistoryStore(tmp_path / "paste.jsonl"),
+        recorder_factory=FakeRecorder,
+        transcribe_fn=lambda wav: "hello",
+        paste_fn=paste,
+        clipboard_fn=copied.append,
+    )
+    api.set_config({"paste": True})
+    try:
+        api.start_recording()
+        first = api.stop_recording(paste=True)
+        api.start_recording()
+        second = api.stop_recording(paste=True)
+        assert first["pasted"] is False and first["copied"] is True
+        assert copied == ["Hello"]
+        assert second["pasted"] is True
+    finally:
+        api.close()
+
+
+def test_clipboard_failure_returns_text_and_history_then_advances(tmp_path):
+    calls = 0
+
+    def clipboard(text):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("pasteboard unavailable")
+
+    api = Api(
+        config_path=tmp_path / "config.json",
+        history=HistoryStore(tmp_path / "clipboard.jsonl"),
+        recorder_factory=FakeRecorder,
+        transcribe_fn=lambda wav: "recoverable text",
+        clipboard_fn=clipboard,
+    )
+    try:
+        api.start_recording()
+        first = api.stop_recording()
+        api.start_recording()
+        second = api.stop_recording()
+        assert first["text"] == "Recoverable text"
+        assert first["item"]["text"] == "Recoverable text"
+        assert first["error"].startswith("delivery failed:")
+        assert second["text"] == "Recoverable text"
+        assert "error" not in second
+    finally:
+        api.close()
