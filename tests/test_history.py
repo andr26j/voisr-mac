@@ -26,6 +26,16 @@ def _add_from_store(store, text):
     store.add(text, 1.0)
 
 
+def _construct_store_after_start(path, start_event, result_queue):
+    start_event.wait()
+    try:
+        HistoryStore(path).close()
+    except BaseException as error:
+        result_queue.put(repr(error))
+    else:
+        result_queue.put(None)
+
+
 def _enter_nested_mutation_lock(path):
     store = HistoryStore(path)
     with store._mutation_lock():
@@ -257,9 +267,8 @@ def test_store_recovers_owner_restrictive_umask_with_usable_private_parent(
     path = tmp_path / "owner-restrictive" / "h.jsonl"
     old_umask = os.umask(0o700)
     try:
-        store = HistoryStore(path)
-        assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
-        assert store.lock_path.exists()
+        with pytest.raises(PermissionError):
+            HistoryStore(path)
     finally:
         os.umask(old_umask)
         if path.parent.exists():
@@ -279,11 +288,11 @@ def test_store_does_not_change_existing_symlink_parent_target_mode(tmp_path):
     assert stat.S_IMODE((target / "new-parent").stat().st_mode) == 0o700
 
 
-def test_store_does_not_chmod_target_after_created_parent_is_replaced_by_symlink(
+def test_store_does_not_chmod_victim_after_created_parent_is_replaced(
         tmp_path, monkeypatch):
-    target = tmp_path / "unrelated"
-    target.mkdir()
-    target.chmod(0o755)
+    victim = tmp_path / "unrelated"
+    victim.mkdir()
+    victim.chmod(0o755)
     parent = tmp_path / "race"
     path = parent / "h.jsonl"
     original_mkdir = history_module.os.mkdir
@@ -292,7 +301,7 @@ def test_store_does_not_chmod_target_after_created_parent_is_replaced_by_symlink
         result = original_mkdir(directory, *args, **kwargs)
         if directory == parent.name:
             parent.rmdir()
-            parent.symlink_to(target, target_is_directory=True)
+            victim.rename(parent)
         return result
 
     monkeypatch.setattr(history_module.os, "mkdir", create_then_replace_parent)
@@ -300,8 +309,9 @@ def test_store_does_not_chmod_target_after_created_parent_is_replaced_by_symlink
     with pytest.raises(OSError):
         HistoryStore(path)
 
-    assert parent.is_symlink()
-    assert stat.S_IMODE(target.stat().st_mode) == 0o755
+    assert stat.S_IMODE(parent.stat().st_mode) == 0o755
+    assert not (parent / "h.jsonl").exists()
+    assert not (parent / "h.jsonl.lock").exists()
 
 
 def test_huge_integer_timestamp_is_ignored_without_bricking_history_operations(
@@ -680,7 +690,7 @@ def test_mutation_lock_closes_fd_when_unlock_fails(tmp_path, monkeypatch):
         with store._mutation_lock():
             pass
 
-    assert len(closed) == 1
+    assert len(closed) == 2  # sidecar plus its duplicated parent-dir lease
 
 
 def test_store_path_stays_relative_while_writes_use_symlink_target(tmp_path,
@@ -920,6 +930,119 @@ def test_real_and_symlink_process_writers_share_target_sidecar(tmp_path):
     }
     assert target.with_name("target.jsonl.lock").exists()
     assert not alias.with_name("alias.jsonl.lock").exists()
+
+
+def test_lock_creation_retries_only_the_create_then_open_race(tmp_path,
+                                                               monkeypatch):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    store.lock_path.unlink()
+    original_open = history_module.os.open
+    attempts = 0
+
+    def create_then_disappear(name, flags, *args, **kwargs):
+        nonlocal attempts
+        if name == store.lock_path.name and flags & os.O_CREAT:
+            attempts += 1
+            if attempts == 1 and flags & os.O_EXCL:
+                raise FileExistsError()
+            if attempts == 1:
+                raise FileNotFoundError()
+        return original_open(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr(history_module.os, "open", create_then_disappear)
+
+    store._create_or_tighten_lock_file()
+
+    assert attempts == 2
+    assert store.lock_path.exists()
+
+
+@pytest.mark.filterwarnings(
+    "ignore:This process .* is multi-threaded.*:DeprecationWarning"
+)
+def test_repeated_concurrent_constructors_create_one_safe_sidecar(tmp_path):
+    path = tmp_path / "h.jsonl"
+    context = multiprocessing.get_context("fork")
+
+    for _ in range(4):
+        start = context.Event()
+        results = context.Queue()
+        processes = [
+            context.Process(target=_construct_store_after_start,
+                            args=(path, start, results))
+            for _ in range(12)
+        ]
+        try:
+            for process in processes:
+                process.start()
+            start.set()
+            for process in processes:
+                process.join(timeout=5)
+                assert process.exitcode == 0
+            assert [results.get(timeout=1) for _ in processes] == [None] * len(processes)
+        finally:
+            for process in processes:
+                if process.is_alive():
+                    process.terminate()
+                process.join(timeout=1)
+        path.with_name(path.name + ".lock").unlink()
+
+
+def test_close_does_not_redirect_an_active_operation_to_a_reused_fd(tmp_path,
+                                                                     monkeypatch):
+    path = tmp_path / "h.jsonl"
+    store = HistoryStore(path)
+    store.add("old", 1.0)
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    entered = threading.Event()
+    release = threading.Event()
+    original_open_regular = history_module._open_regular_at
+    paused = False
+
+    def pause_history_open(parent_fd, name, *args, **kwargs):
+        nonlocal paused
+        if name == store._name and not paused:
+            paused = True
+            entered.set()
+            assert release.wait(timeout=2)
+        return original_open_regular(parent_fd, name, *args, **kwargs)
+
+    monkeypatch.setattr(history_module, "_open_regular_at", pause_history_open)
+    thread = threading.Thread(target=store.add, args=("new", 1.0))
+    thread.start()
+    assert entered.wait(timeout=2)
+    base_fd = store._parent_fd
+    store.close()
+    reused_fd = os.open(replacement, os.O_RDONLY | os.O_DIRECTORY)
+    assert reused_fd == base_fd
+    try:
+        release.set()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+    finally:
+        release.set()
+        os.close(reused_fd)
+
+    assert {item["text"] for item in HistoryStore(path).list()} == {"old", "new"}
+    assert not (replacement / "h.jsonl").exists()
+
+
+def test_spawned_store_does_not_serialize_parent_fd_or_lock(tmp_path):
+    path = tmp_path / "h.jsonl"
+    store = HistoryStore(path)
+    context = multiprocessing.get_context("spawn")
+    process = context.Process(target=_add_from_store, args=(store, "spawned"))
+    try:
+        process.start()
+        process.join(timeout=10)
+        assert process.exitcode == 0
+    finally:
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=2)
+
+    assert [item["text"] for item in store.list()] == ["spawned"]
 
 
 @pytest.mark.parametrize("kind", ["directory", "fifo"])

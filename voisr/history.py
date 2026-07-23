@@ -25,6 +25,7 @@ _FORK_EPOCH = 0
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK
 _FILE_READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
 _FILE_WRITE_FLAGS = os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+_LOCK_CREATE_RETRIES = 32
 
 
 def _thread_lock_for(path: Path) -> threading.RLock:
@@ -108,6 +109,13 @@ def _close_tracked(fd: int) -> None:
             os.close(fd)
 
 
+def _dup_tracked(fd: int) -> int:
+    with _FORK_FD_GUARD:
+        duplicate = os.dup(fd)
+        _track_lock_fd(duplicate)
+        return duplicate
+
+
 def _open_regular_at(parent_fd: int, name: str, flags: int,
                      mode: int | None = None) -> int:
     fd = _open_tracked(name, flags, mode, dir_fd=parent_fd)
@@ -118,6 +126,21 @@ def _open_regular_at(parent_fd: int, name: str, flags: int,
     except BaseException:
         _close_tracked(fd)
         raise
+
+
+def _open_or_create_regular_lock_at(parent_fd: int, name: str) -> int:
+    """Create a sidecar once, retrying only its create-then-open race."""
+    create_flags = os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK
+    open_flags = os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK
+    for _ in range(_LOCK_CREATE_RETRIES):
+        try:
+            return _open_regular_at(parent_fd, name, create_flags, 0o600)
+        except FileExistsError:
+            try:
+                return _open_regular_at(parent_fd, name, open_flags)
+            except FileNotFoundError:
+                continue
+    raise OSError("history sidecar changed too often while opening")
 
 
 def _ensure_private_parent(path: Path) -> int:
@@ -136,14 +159,15 @@ def _ensure_private_parent(path: Path) -> int:
                     created = True
                 except FileExistsError:
                     pass
-                if created:
-                    os.chmod(component, 0o700, dir_fd=fd, follow_symlinks=False)
                 child_fd = _open_tracked(component, _DIRECTORY_FLAGS, dir_fd=fd)
             try:
                 child_stat = os.fstat(child_fd)
                 if not stat.S_ISDIR(child_stat.st_mode):
                     raise OSError("history parent is not a directory")
                 if created:
+                    if (child_stat.st_uid != os.geteuid()
+                            or stat.S_IMODE(child_stat.st_mode) & 0o077):
+                        raise OSError("new history parent changed before validation")
                     os.fchmod(child_fd, 0o700)
                     if stat.S_IMODE(os.fstat(child_fd).st_mode) != 0o700:
                         raise OSError("new history parent has unexpected mode")
@@ -197,12 +221,16 @@ class HistoryStore:
         self.path = Path(path)
         self._path = Path(os.path.abspath(self.path)).resolve(strict=False)
         self._name = self._path.name
-        self._parent_fd = _ensure_private_parent(self._path)
+        self._lifecycle_lock = threading.RLock()
+        self._owner_pid = os.getpid()
+        self._parent_fd = None
         self._parent_epoch = _FORK_EPOCH
+        self._parent_fd = _ensure_private_parent(self._path)
         self.lock_path = self._path.with_name(self._path.name + ".lock")
         try:
-            self._tighten_existing_history_file()
-            self._create_or_tighten_lock_file()
+            with self._parent_fd_lease() as parent_fd:
+                self._tighten_existing_history_file(parent_fd)
+                self._create_or_tighten_lock_file(parent_fd)
         except BaseException:
             self.close()
             raise
@@ -214,21 +242,52 @@ class HistoryStore:
             pass
 
     def close(self) -> None:
-        fd = getattr(self, "_parent_fd", None)
-        if fd is not None:
+        self._ensure_current_process()
+        with self._lifecycle_lock:
+            fd = self._parent_fd
             self._parent_fd = None
-            if getattr(self, "_parent_epoch", None) == _FORK_EPOCH:
+            if fd is not None:
                 _close_tracked(fd)
 
-    def _parent_fd_for(self) -> int:
-        if self._parent_fd is None or self._parent_epoch != _FORK_EPOCH:
-            self._parent_fd = _ensure_private_parent(self._path)
-            self._parent_epoch = _FORK_EPOCH
-        return self._parent_fd
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_parent_fd"] = None
+        state["_lifecycle_lock"] = None
+        state["_parent_epoch"] = _FORK_EPOCH
+        state["_owner_pid"] = None
+        return state
 
-    def _tighten_existing_history_file(self) -> None:
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._parent_fd = None
+        self._lifecycle_lock = threading.RLock()
+        self._parent_epoch = _FORK_EPOCH
+        self._owner_pid = os.getpid()
+
+    def _ensure_current_process(self) -> None:
+        if (getattr(self, "_owner_pid", None) != os.getpid()
+                or getattr(self, "_parent_epoch", None) != _FORK_EPOCH):
+            self._parent_fd = None
+            self._parent_epoch = _FORK_EPOCH
+            self._owner_pid = os.getpid()
+            self._lifecycle_lock = threading.RLock()
+
+    @contextlib.contextmanager
+    def _parent_fd_lease(self):
+        self._ensure_current_process()
+        with self._lifecycle_lock:
+            if self._parent_fd is None:
+                self._parent_fd = _ensure_private_parent(self._path)
+                self._parent_epoch = _FORK_EPOCH
+            lease_fd = _dup_tracked(self._parent_fd)
         try:
-            fd = _open_regular_at(self._parent_fd_for(), self._name,
+            yield lease_fd
+        finally:
+            _close_tracked(lease_fd)
+
+    def _tighten_existing_history_file(self, parent_fd: int) -> None:
+        try:
+            fd = _open_regular_at(parent_fd, self._name,
                                   _FILE_READ_FLAGS)
         except FileNotFoundError:
             return
@@ -237,11 +296,12 @@ class HistoryStore:
         finally:
             _close_tracked(fd)
 
-    def _create_or_tighten_lock_file(self) -> None:
-        fd = _open_regular_at(
-            self._parent_fd_for(), self.lock_path.name,
-            os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600,
-        )
+    def _create_or_tighten_lock_file(self, parent_fd: int | None = None) -> None:
+        if parent_fd is None:
+            with self._parent_fd_lease() as lease_fd:
+                self._create_or_tighten_lock_file(lease_fd)
+            return
+        fd = _open_or_create_regular_lock_at(parent_fd, self.lock_path.name)
         try:
             os.fchmod(fd, 0o600)
         finally:
@@ -262,10 +322,8 @@ class HistoryStore:
                     states[path_key] = (fd, depth)
                 return
 
-            fd = _open_regular_at(
-                self._parent_fd_for(), self.lock_path.name,
-                os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600,
-            )
+            with self._parent_fd_lease() as parent_fd:
+                fd = _open_or_create_regular_lock_at(parent_fd, self.lock_path.name)
             locked = False
             try:
                 os.fchmod(fd, 0o600)
@@ -282,20 +340,20 @@ class HistoryStore:
                     _close_tracked(fd)
 
     def _read(self) -> list[dict]:
-        try:
-            fd = _open_regular_at(self._parent_fd_for(), self._name,
-                                  _FILE_READ_FLAGS)
-        except FileNotFoundError:
-            return []
-        try:
-            chunks = []
-            while True:
-                chunk = os.read(fd, 64 * 1024)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-        finally:
-            _close_tracked(fd)
+        with self._parent_fd_lease() as parent_fd:
+            try:
+                fd = _open_regular_at(parent_fd, self._name, _FILE_READ_FLAGS)
+            except FileNotFoundError:
+                return []
+            try:
+                chunks = []
+                while True:
+                    chunk = os.read(fd, 64 * 1024)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+            finally:
+                _close_tracked(fd)
         contents = b"".join(chunks).decode("utf-8")
         items = []
         for line in contents.splitlines():
@@ -311,40 +369,40 @@ class HistoryStore:
 
     def _write_atomic(self, items: list[dict]) -> None:
         payload = "".join(json.dumps(item) + "\n" for item in items).encode("utf-8")
-        parent_fd = self._parent_fd_for()
-        temp_name = None
-        fd = -1
-        try:
-            while True:
-                candidate = f".{self._name}.{uuid.uuid4().hex}.tmp"
-                try:
-                    fd = _open_regular_at(
-                        parent_fd, candidate,
-                        os.O_CREAT | os.O_EXCL | _FILE_WRITE_FLAGS, 0o600,
-                    )
-                    temp_name = candidate
-                    break
-                except FileExistsError:
-                    continue
-            os.fchmod(fd, 0o600)
-            written = 0
-            while written < len(payload):
-                written += os.write(fd, payload[written:])
-            os.fsync(fd)
-            _close_tracked(fd)
-            fd = -1
-            os.replace(temp_name, self._name, src_dir_fd=parent_fd,
-                       dst_dir_fd=parent_fd)
+        with self._parent_fd_lease() as parent_fd:
             temp_name = None
-            os.fsync(parent_fd)
-        finally:
-            if fd >= 0:
+            fd = -1
+            try:
+                while True:
+                    candidate = f".{self._name}.{uuid.uuid4().hex}.tmp"
+                    try:
+                        fd = _open_regular_at(
+                            parent_fd, candidate,
+                            os.O_CREAT | os.O_EXCL | _FILE_WRITE_FLAGS, 0o600,
+                        )
+                        temp_name = candidate
+                        break
+                    except FileExistsError:
+                        continue
+                os.fchmod(fd, 0o600)
+                written = 0
+                while written < len(payload):
+                    written += os.write(fd, payload[written:])
+                os.fsync(fd)
                 _close_tracked(fd)
-            if temp_name is not None:
-                try:
-                    os.unlink(temp_name, dir_fd=parent_fd)
-                except FileNotFoundError:
-                    pass
+                fd = -1
+                os.replace(temp_name, self._name, src_dir_fd=parent_fd,
+                           dst_dir_fd=parent_fd)
+                temp_name = None
+                os.fsync(parent_fd)
+            finally:
+                if fd >= 0:
+                    _close_tracked(fd)
+                if temp_name is not None:
+                    try:
+                        os.unlink(temp_name, dir_fd=parent_fd)
+                    except FileNotFoundError:
+                        pass
 
     def _mutate(self, change):
         with self._mutation_lock():
