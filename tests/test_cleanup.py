@@ -220,3 +220,13 @@ def test_double_quote_wrapper_closes_after_internal_quote_data():
 def test_unmatched_opening_quote_keeps_the_maximal_url_candidate():
     raw = '"https://example.com/pathnow'
     assert clean(raw, {"now": "later"}) == raw
+
+
+def test_unmatched_double_quote_wrapper_preserves_internal_single_quote():
+    raw = '"https://example.com/path?x=\''
+    assert clean(raw, {"'": "X"}) == raw
+
+
+def test_unmatched_single_quote_wrapper_preserves_internal_double_quote():
+    raw = "'https://example.com/path?x=\""
+    assert clean(raw, {'"': "X"}) == raw

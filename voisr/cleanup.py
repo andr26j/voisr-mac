@@ -22,6 +22,7 @@ def _split_url_suffix(token: str, opening_quote: str | None = None) -> tuple[str
     opening = {"(": ")", "[": "]", "{": "}"}
     closing = {value: key for key, value in opening.items()}
     closing_quote_index = token.rfind(opening_quote) if opening_quote else -1
+    preserve_unmatched_quote_context = opening_quote is not None and closing_quote_index < 0
     stack: list[str] = []
     for index, char in enumerate(token):
         if char in opening:
@@ -33,7 +34,7 @@ def _split_url_suffix(token: str, opening_quote: str | None = None) -> tuple[str
                 return token[:index], token[index:]
         elif index == closing_quote_index:
             return token[:index], token[index:]
-        elif char in "'\"":
+        elif not preserve_unmatched_quote_context and char in "'\"":
             suffix = token[index + 1 :]
             if token.count(char) % 2 and (not suffix or suffix[0] in ",.;:!?)]}"):
                 return token[:index], token[index:]
