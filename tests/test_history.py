@@ -1,9 +1,12 @@
 import contextlib
+import gc
 import json
 import multiprocessing
 import os
 import stat
 import threading
+import weakref
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
@@ -146,7 +149,7 @@ def test_replace_failure_preserves_history_bytes_and_removes_temp_file(tmp_path,
     store.add("committed", 1.0)
     before = path.read_bytes()
 
-    def fail_replace(*args):
+    def fail_replace(*args, **kwargs):
         raise OSError("replace failed")
 
     monkeypatch.setattr(history_module.os, "replace", fail_replace)
@@ -283,16 +286,16 @@ def test_store_does_not_chmod_target_after_created_parent_is_replaced_by_symlink
     target.chmod(0o755)
     parent = tmp_path / "race"
     path = parent / "h.jsonl"
-    original_mkdir = history_module.Path.mkdir
+    original_mkdir = history_module.os.mkdir
 
     def create_then_replace_parent(directory, *args, **kwargs):
         result = original_mkdir(directory, *args, **kwargs)
-        if directory == parent:
+        if directory == parent.name:
             parent.rmdir()
             parent.symlink_to(target, target_is_directory=True)
         return result
 
-    monkeypatch.setattr(history_module.Path, "mkdir", create_then_replace_parent)
+    monkeypatch.setattr(history_module.os, "mkdir", create_then_replace_parent)
 
     with pytest.raises(OSError):
         HistoryStore(path)
@@ -917,3 +920,124 @@ def test_real_and_symlink_process_writers_share_target_sidecar(tmp_path):
     }
     assert target.with_name("target.jsonl.lock").exists()
     assert not alias.with_name("alias.jsonl.lock").exists()
+
+
+@pytest.mark.parametrize("kind", ["directory", "fifo"])
+def test_special_history_path_is_rejected_without_chmod_or_blocking(tmp_path, kind):
+    path = tmp_path / "h.jsonl"
+    if kind == "directory":
+        path.mkdir(mode=0o755)
+    else:
+        os.mkfifo(path, 0o644)
+    before_mode = stat.S_IMODE(path.lstat().st_mode)
+
+    with pytest.raises(OSError):
+        HistoryStore(path)
+
+    assert stat.S_IMODE(path.lstat().st_mode) == before_mode
+
+
+def test_preexisting_lock_symlink_is_rejected_without_touching_target(tmp_path):
+    path = tmp_path / "h.jsonl"
+    target = tmp_path / "lock-target"
+    target.write_text("do not chmod", encoding="utf-8")
+    target.chmod(0o644)
+    lock_path = path.with_name(path.name + ".lock")
+    lock_path.symlink_to(target)
+
+    with pytest.raises(OSError):
+        HistoryStore(path)
+
+    assert lock_path.is_symlink()
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
+
+
+def test_replaced_lock_symlink_is_rejected_without_touching_target(tmp_path):
+    path = tmp_path / "h.jsonl"
+    store = HistoryStore(path)
+    target = tmp_path / "lock-target"
+    target.write_text("do not chmod", encoding="utf-8")
+    target.chmod(0o644)
+    store.lock_path.unlink()
+    store.lock_path.symlink_to(target)
+
+    with pytest.raises(OSError):
+        store.add("not written", 1.0)
+
+    assert store.lock_path.is_symlink()
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
+
+
+def test_store_uses_its_opened_parent_after_parent_name_is_replaced(tmp_path):
+    parent = tmp_path / "history-parent"
+    parent.mkdir()
+    path = parent / "h.jsonl"
+    store = HistoryStore(path)
+    moved_parent = tmp_path / "history-parent-moved"
+    parent.rename(moved_parent)
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    parent.symlink_to(replacement, target_is_directory=True)
+
+    store.add("kept in opened parent", 1.0)
+
+    assert [item["text"] for item in HistoryStore(moved_parent / "h.jsonl").list()] == [
+        "kept in opened parent"
+    ]
+    assert not (replacement / "h.jsonl").exists()
+
+
+@pytest.mark.parametrize("duration_s", [-1, True, float("nan"), float("inf")])
+def test_invalid_add_duration_raises_without_changing_history_bytes(tmp_path,
+                                                                     duration_s):
+    path = tmp_path / "h.jsonl"
+    store = HistoryStore(path)
+    store.add("committed", 1.0)
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError):
+        store.add("not committed", duration_s)
+
+    assert path.read_bytes() == before
+
+
+def test_stats_handles_huge_words_and_subnormal_durations_exactly(tmp_path):
+    words = 10 ** 4_000
+    duration_s = float.fromhex("0x0.0000000000001p-1022")
+    path = tmp_path / "h.jsonl"
+    path.write_text(json.dumps({
+        "id": "huge",
+        "ts": 1.0,
+        "text": "x",
+        "words": words,
+        "duration_s": duration_s,
+    }) + "\n", encoding="utf-8")
+
+    stats = HistoryStore(path).stats()
+
+    assert stats["total_words"] == words
+    assert stats["avg_wpm"] == round(Fraction(words * 60, 1) / Fraction(duration_s))
+
+
+def test_path_lock_registry_releases_unused_locks(tmp_path):
+    path = tmp_path / "h.jsonl"
+    key = str(path.resolve())
+    lock = history_module._thread_lock_for(path)
+    reference = weakref.ref(lock)
+
+    del lock
+    gc.collect()
+
+    assert reference() is None
+    assert key not in history_module._PATH_LOCKS
+
+
+def test_literal_tilde_path_is_not_expanded(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    supplied_path = Path("~") / "h.jsonl"
+
+    store = HistoryStore(supplied_path)
+    store.add("literal tilde", 1.0)
+
+    assert store.path == supplied_path
+    assert (tmp_path / "~" / "h.jsonl").exists()
