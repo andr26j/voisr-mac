@@ -17,7 +17,8 @@ PROTECTED_TOKEN_RE = re.compile(
     | (?<![\w.])[-+]?(?:\d+\.\d+|\.\d+)(?![\w.])   # signed decimal
     | (?<![\w.])[-+]?\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\w.])  # grouped number
     | \bv?\d+(?:[.,]\d+)+\b                          # decimal/version/grouped number
-    | \b(?=(?:[a-z]{1,3}\.)*[a-z]\.)(?:[a-z]{1,3}\.){2,}  # abbreviation
+    | \bph\.d\.                                             # degree
+    | \b(?:[a-z]\.){2,}                                     # abbreviation
     | \b(?:dr|mr|mrs|ms|prof|sr|jr|st)\.               # title
     """,
     re.IGNORECASE | re.VERBOSE,
@@ -81,7 +82,7 @@ def _protected_spans(text: str):
 
 
 def _placeholder_namespace(content: str) -> str:
-    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256(content.encode("utf-8", "surrogatepass")).hexdigest()[:16]
     counter = 0
     while True:
         namespace = f"\uE000{digest}{counter:x}\uE001"

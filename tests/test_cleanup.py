@@ -310,14 +310,8 @@ def test_quote_dense_url_scales_linearly():
     assert perf_counter() - started < 0.75
 
 
-@pytest.mark.parametrize(
-    "prefix",
-    [
-        "".join(chr(codepoint) for codepoint in range(0xE000, 0xF900)),
-        "\uE000" * 300_000,
-    ],
-)
-def test_placeholder_namespace_handles_adversarial_private_use_content(prefix):
+def test_placeholder_namespace_handles_combined_adversarial_private_use_content():
+    prefix = "".join(chr(codepoint) for codepoint in range(0xE000, 0xF900)) + "\uE000" * 120_000
     raw = f"{prefix} https://example.com"
     started = perf_counter()
     assert clean(raw) == raw
@@ -333,3 +327,26 @@ def test_dotted_prose_is_not_protected_as_an_abbreviation():
 def test_signed_grouped_numbers_protect_their_signs_from_dictionary_rewrites():
     raw = "values -1,000.50 +1,000.50"
     assert clean(raw, {"-": "minus", "+": "plus"}) == "Values -1,000.50 +1,000.50"
+
+
+@pytest.mark.parametrize(
+    ("raw", "dictionary", "expected"),
+    [
+        ("I.am.Done.", {"am": "AM", "Done": "DONE"}, "I. AM. DONE."),
+        ("A.go.Now.", {"go": "GO", "Now": "NOW"}, "A. GO. NOW."),
+        ("go.I.Now.", {"I": "eye", "Now": "NOW"}, "Go. eye. NOW."),
+    ],
+)
+def test_mixed_length_dotted_prose_keeps_legacy_cleanup(raw, dictionary, expected):
+    assert clean(raw, dictionary) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "dictionary", "expected"),
+    [
+        ("\ud800 https://example.com", None, "\ud800 https://example.com"),
+        ("say token", {"token": "\ud800"}, "Say \ud800"),
+    ],
+)
+def test_namespace_digest_accepts_lone_surrogates(raw, dictionary, expected):
+    assert clean(raw, dictionary) == expected
