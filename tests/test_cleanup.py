@@ -1,3 +1,5 @@
+from time import perf_counter
+
 import pytest
 
 from voisr.cleanup import clean
@@ -230,3 +232,65 @@ def test_unmatched_double_quote_wrapper_preserves_internal_single_quote():
 def test_unmatched_single_quote_wrapper_preserves_internal_double_quote():
     raw = "'https://example.com/path?x=\""
     assert clean(raw, {'"': "X"}) == raw
+
+
+@pytest.mark.parametrize(
+    ("raw", "dictionary"),
+    [
+        ("https://one.test)https://two.test/a.b", {"two": "TWO"}),
+        ("https://one.test)a@b.com", {"b": "B"}),
+    ],
+)
+def test_url_suffix_rescan_protects_structured_tokens_after_wrapper(raw, dictionary):
+    assert clean(raw, dictionary) == raw
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("value .5 -.5 +0.5", "Value .5 -.5 +0.5"),
+        ("Dr. Ada Ph.D.", "Dr. Ada Ph.D."),
+        ("mail élise@exämple.世界", "Mail élise@exämple.世界"),
+        ("mail user@example.xn--p1ai", "Mail user@example.xn--p1ai"),
+    ],
+)
+def test_preserves_expanded_practical_structured_tokens(raw, expected):
+    assert clean(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("opening", "closing"),
+    [
+        ("(", ")"),
+        ("[", "]"),
+        ("{", "}"),
+        ("<", ">"),
+        ('"', '"'),
+        ("'", "'"),
+        ("“", "”"),
+        ("‘", "’"),
+        ("«", "»"),
+        ("‹", "›"),
+    ],
+)
+def test_wrapped_url_leaves_following_prose_unprotected(opening, closing):
+    raw = f"{opening}https://example.com{closing}now"
+    assert clean(raw, {"now": "later"}) == f"{opening}https://example.com{closing}later"
+
+
+def test_angle_wrapped_url_leaves_punctuation_and_prose_unprotected():
+    assert clean("<https://example.com>,now", {"now": "later"}) == (
+        "<https://example.com>, later"
+    )
+
+
+def test_time_preserves_meridiem_period_before_smart_quote_closer():
+    raw = "wait 10:30 p.m.”now"
+    assert clean(raw, {"now": "later"}) == "Wait 10:30 p.m.”later"
+
+
+def test_many_structured_tokens_scale_near_linearly():
+    raw = " ".join(["1.2"] * 2_000)
+    started = perf_counter()
+    assert clean(raw) == raw
+    assert perf_counter() - started < 2
