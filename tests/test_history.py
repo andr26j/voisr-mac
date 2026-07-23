@@ -1,7 +1,9 @@
 import contextlib
 import json
 import multiprocessing
+import os
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +27,26 @@ def _enter_nested_mutation_lock(path):
     with store._mutation_lock():
         with store._mutation_lock():
             pass
+
+
+def _exit_if_fd_is_not_file(fd, device, inode):
+    try:
+        descriptor_stat = os.fstat(fd)
+    except OSError:
+        raise SystemExit(1)
+    if (descriptor_stat.st_dev, descriptor_stat.st_ino) != (device, inode):
+        raise SystemExit(1)
+    raise SystemExit(0)
+
+
+def _exit_if_fd_is_file(fd, device, inode):
+    try:
+        descriptor_stat = os.fstat(fd)
+    except OSError:
+        raise SystemExit(0)
+    if (descriptor_stat.st_dev, descriptor_stat.st_ino) == (device, inode):
+        raise SystemExit(1)
+    raise SystemExit(0)
 
 
 def test_add_and_list(tmp_path):
@@ -108,12 +130,19 @@ def test_independent_process_writers_keep_every_record(tmp_path):
         context.Process(target=_add_many, args=(path, f"p{index}", 10, start))
         for index in range(8)
     ]
-    for process in processes:
-        process.start()
-    start.set()
-    for process in processes:
-        process.join(timeout=10)
-        assert process.exitcode == 0
+    try:
+        for process in processes:
+            process.start()
+        start.set()
+        for process in processes:
+            process.join(timeout=10)
+            assert process.exitcode == 0
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=2)
+            assert not process.is_alive()
 
     items = HistoryStore(path).list()
     assert len(items) == 80
@@ -384,3 +413,242 @@ def test_mutation_lock_closes_fd_when_unlock_fails(tmp_path, monkeypatch):
             pass
 
     assert len(closed) == 1
+
+
+def test_store_path_stays_relative_while_writes_use_symlink_target(tmp_path,
+                                                                    monkeypatch):
+    target = tmp_path / "target.jsonl"
+    alias = tmp_path / "alias.jsonl"
+    alias.symlink_to(target)
+    monkeypatch.chdir(tmp_path)
+    supplied_path = Path("alias.jsonl")
+
+    store = HistoryStore(supplied_path)
+    store.add("through alias", 1.0)
+
+    assert store.path == supplied_path
+    assert store.lock_path == target.with_name("target.jsonl.lock")
+    assert alias.is_symlink()
+    assert [item["text"] for item in HistoryStore(target).list()] == [
+        "through alias"
+    ]
+
+
+@pytest.mark.filterwarnings(
+    "ignore:This process .* is multi-threaded.*:DeprecationWarning"
+)
+def test_fork_does_not_close_reused_fd_after_sidecar_close(tmp_path, monkeypatch):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    sidecar_fds = []
+    reopened_fds = []
+    sidecar_closed = threading.Event()
+    allow_close = threading.Event()
+    fork_entered = threading.Event()
+    allow_fork = threading.Event()
+    worker_done = threading.Event()
+    errors = []
+    original_track = history_module._track_lock_fd
+    original_close = history_module.os.close
+    original_open = history_module.os.open
+    original_fork = history_module.os.fork
+    parent_pid = os.getpid()
+
+    def track_sidecar(fd):
+        sidecar_fds.append(fd)
+        original_track(fd)
+
+    def pause_after_close(fd):
+        if os.getpid() != parent_pid or fd not in sidecar_fds:
+            return original_close(fd)
+        original_close(fd)
+        reopened_fd = original_open(os.devnull, os.O_RDONLY)
+        reopened_fds.append(reopened_fd)
+        assert reopened_fd == fd
+        sidecar_closed.set()
+        assert allow_close.wait(timeout=2)
+
+    def pause_before_fork():
+        fork_entered.set()
+        assert allow_fork.wait(timeout=2)
+        return original_fork()
+
+    monkeypatch.setattr(history_module, "_track_lock_fd", track_sidecar)
+    monkeypatch.setattr(history_module.os, "close", pause_after_close)
+    monkeypatch.setattr(history_module.os, "fork", pause_before_fork)
+
+    def release_lock():
+        try:
+            with store._mutation_lock():
+                pass
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            worker_done.set()
+
+    worker = threading.Thread(target=release_lock)
+    context = multiprocessing.get_context("fork")
+    process = None
+    starter_done = threading.Event()
+
+    def start_process():
+        nonlocal process
+        try:
+            assert reopened_fds
+            descriptor_stat = os.fstat(reopened_fds[0])
+            process = context.Process(target=_exit_if_fd_is_not_file,
+                                      args=(reopened_fds[0], descriptor_stat.st_dev,
+                                            descriptor_stat.st_ino))
+            process.start()
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            starter_done.set()
+
+    worker.start()
+    assert sidecar_closed.wait(timeout=2)
+    starter = threading.Thread(target=start_process)
+    starter.start()
+    assert fork_entered.wait(timeout=2)
+    try:
+        allow_fork.set()
+        allow_close.set()
+        assert starter_done.wait(timeout=2)
+        assert worker_done.wait(timeout=2)
+        assert process is not None
+        process.join(timeout=2)
+        assert process.exitcode == 0
+        assert not errors
+    finally:
+        allow_fork.set()
+        allow_close.set()
+        starter.join(timeout=2)
+        worker.join(timeout=2)
+        if process is not None and process.is_alive():
+            process.terminate()
+            process.join(timeout=2)
+        if reopened_fds:
+            original_close(reopened_fds[0])
+        assert not starter.is_alive()
+        assert not worker.is_alive()
+        assert process is None or not process.is_alive()
+
+
+@pytest.mark.filterwarnings(
+    "ignore:This process .* is multi-threaded.*:DeprecationWarning"
+)
+def test_fork_does_not_inherit_sidecar_fd_before_tracking(tmp_path, monkeypatch):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    opened_fds = []
+    opened = threading.Event()
+    allow_tracking = threading.Event()
+    fork_entered = threading.Event()
+    allow_fork = threading.Event()
+    worker_done = threading.Event()
+    errors = []
+    original_track = history_module._track_lock_fd
+    original_fork = history_module.os.fork
+
+    def pause_before_tracking(fd):
+        opened_fds.append(fd)
+        opened.set()
+        assert allow_tracking.wait(timeout=2)
+        original_track(fd)
+
+    def pause_before_fork():
+        fork_entered.set()
+        assert allow_fork.wait(timeout=2)
+        return original_fork()
+
+    monkeypatch.setattr(history_module, "_track_lock_fd", pause_before_tracking)
+    monkeypatch.setattr(history_module.os, "fork", pause_before_fork)
+
+    def add_item():
+        try:
+            store.add("item", 1.0)
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            worker_done.set()
+
+    worker = threading.Thread(target=add_item)
+    context = multiprocessing.get_context("fork")
+    process = None
+    starter_done = threading.Event()
+
+    def start_process():
+        nonlocal process
+        try:
+            assert opened_fds
+            descriptor_stat = os.fstat(opened_fds[0])
+            process = context.Process(target=_exit_if_fd_is_file,
+                                      args=(opened_fds[0], descriptor_stat.st_dev,
+                                            descriptor_stat.st_ino))
+            process.start()
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            starter_done.set()
+
+    worker.start()
+    assert opened.wait(timeout=2)
+    starter = threading.Thread(target=start_process)
+    starter.start()
+    assert fork_entered.wait(timeout=2)
+    try:
+        allow_fork.set()
+        allow_tracking.set()
+        assert starter_done.wait(timeout=2)
+        assert worker_done.wait(timeout=2)
+        assert process is not None
+        process.join(timeout=2)
+        assert process.exitcode == 0
+        assert not errors
+    finally:
+        allow_fork.set()
+        allow_tracking.set()
+        starter.join(timeout=2)
+        worker.join(timeout=2)
+        if process is not None and process.is_alive():
+            process.terminate()
+            process.join(timeout=2)
+        assert not starter.is_alive()
+        assert not worker.is_alive()
+        assert process is None or not process.is_alive()
+
+
+@pytest.mark.filterwarnings(
+    "ignore:This process .* is multi-threaded.*:DeprecationWarning"
+)
+def test_real_and_symlink_process_writers_share_target_sidecar(tmp_path):
+    target = tmp_path / "target.jsonl"
+    alias = tmp_path / "alias.jsonl"
+    alias.symlink_to(target)
+    context = multiprocessing.get_context("fork")
+    start = context.Event()
+    processes = [
+        context.Process(target=_add_many, args=(path, prefix, 10, start))
+        for path, prefix in ((target, "real"), (alias, "alias"))
+    ]
+    try:
+        for process in processes:
+            process.start()
+        start.set()
+        for process in processes:
+            process.join(timeout=10)
+            assert process.exitcode == 0
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=2)
+            assert not process.is_alive()
+
+    items = HistoryStore(target).list()
+    assert alias.is_symlink()
+    assert len(items) == 20
+    assert {item["text"] for item in items} == {
+        *(f"real-{index}" for index in range(10)),
+        *(f"alias-{index}" for index in range(10)),
+    }
+    assert target.with_name("target.jsonl.lock").exists()
+    assert not alias.with_name("alias.jsonl.lock").exists()

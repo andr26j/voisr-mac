@@ -12,7 +12,7 @@ from pathlib import Path
 
 _PATH_LOCKS_GUARD = threading.Lock()
 _PATH_LOCKS: dict[str, threading.RLock] = {}
-_OPEN_LOCK_FDS_GUARD = threading.Lock()
+_FORK_FD_GUARD = threading.Lock()
 _OPEN_LOCK_FDS: set[int] = set()
 _MUTATION_STATES = threading.local()
 
@@ -32,46 +32,57 @@ def _mutation_states() -> dict[str, tuple[int, int]]:
 
 
 def _track_lock_fd(fd: int) -> None:
-    with _OPEN_LOCK_FDS_GUARD:
-        _OPEN_LOCK_FDS.add(fd)
+    _OPEN_LOCK_FDS.add(fd)
 
 
 def _untrack_lock_fd(fd: int) -> None:
-    with _OPEN_LOCK_FDS_GUARD:
-        _OPEN_LOCK_FDS.discard(fd)
+    _OPEN_LOCK_FDS.discard(fd)
 
 
-def _reset_locks_after_fork() -> None:
+def _before_fork() -> None:
+    _FORK_FD_GUARD.acquire()
+
+
+def _after_fork_parent() -> None:
+    _FORK_FD_GUARD.release()
+
+
+def _after_fork_child() -> None:
     global _PATH_LOCKS_GUARD, _PATH_LOCKS
-    global _OPEN_LOCK_FDS_GUARD, _OPEN_LOCK_FDS, _MUTATION_STATES
+    global _FORK_FD_GUARD, _OPEN_LOCK_FDS, _MUTATION_STATES
 
-    for fd in _OPEN_LOCK_FDS:
+    for fd in tuple(_OPEN_LOCK_FDS):
         try:
             os.close(fd)
         except OSError:
             pass
     _PATH_LOCKS_GUARD = threading.Lock()
     _PATH_LOCKS = {}
-    _OPEN_LOCK_FDS_GUARD = threading.Lock()
     _OPEN_LOCK_FDS = set()
     _MUTATION_STATES = threading.local()
+    _FORK_FD_GUARD = threading.Lock()
 
 
-os.register_at_fork(after_in_child=_reset_locks_after_fork)
+os.register_at_fork(
+    before=_before_fork,
+    after_in_parent=_after_fork_parent,
+    after_in_child=_after_fork_child,
+)
 
 
 class HistoryStore:
     """Append-only JSONL store of dictations with derived usage stats."""
 
     def __init__(self, path):
-        self.path = Path(path).expanduser().resolve(strict=False)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.lock_path = self.path.with_name(self.path.name + ".lock")
+        self.path = Path(path)
+        self._path = self.path.expanduser().resolve(strict=False)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self.lock_path = self._path.with_name(self._path.name + ".lock")
 
     @contextlib.contextmanager
     def _mutation_lock(self):
-        path_key = str(self.path)
-        with _thread_lock_for(self.path):
+        path_key = str(self._path)
+        with _thread_lock_for(self._path):
             states = _mutation_states()
             state = states.get(path_key)
             if state is not None:
@@ -83,8 +94,9 @@ class HistoryStore:
                     states[path_key] = (fd, depth)
                 return
 
-            fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-            _track_lock_fd(fd)
+            with _FORK_FD_GUARD:
+                fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+                _track_lock_fd(fd)
             locked = False
             try:
                 os.fchmod(fd, 0o600)
@@ -98,14 +110,15 @@ class HistoryStore:
                     if locked:
                         fcntl.flock(fd, fcntl.LOCK_UN)
                 finally:
-                    try:
-                        os.close(fd)
-                    finally:
-                        _untrack_lock_fd(fd)
+                    with _FORK_FD_GUARD:
+                        try:
+                            _untrack_lock_fd(fd)
+                        finally:
+                            os.close(fd)
 
     def _read(self) -> list[dict]:
         try:
-            contents = self.path.read_text(encoding="utf-8")
+            contents = self._path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return []
         items = []
@@ -121,8 +134,8 @@ class HistoryStore:
     def _write_atomic(self, items: list[dict]) -> None:
         payload = "".join(json.dumps(item) + "\n" for item in items)
         fd, temp_name = tempfile.mkstemp(
-            dir=self.path.parent,
-            prefix=f".{self.path.name}.",
+            dir=self._path.parent,
+            prefix=f".{self._path.name}.",
             suffix=".tmp",
         )
         temp_path = Path(temp_name)
@@ -133,9 +146,9 @@ class HistoryStore:
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temp_path, self.path)
+            os.replace(temp_path, self._path)
             temp_path = None
-            directory_fd = os.open(self.path.parent, os.O_RDONLY)
+            directory_fd = os.open(self._path.parent, os.O_RDONLY)
             try:
                 os.fsync(directory_fd)
             finally:
