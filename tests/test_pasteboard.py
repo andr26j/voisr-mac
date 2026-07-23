@@ -114,7 +114,6 @@ class FakePasteboard:
                 self.after_failed_write()
             return False
         self.items = list(items)
-        self.count += 1
         if self.after_write is not None:
             self.after_write()
         return True
@@ -356,6 +355,19 @@ def test_owned_write_and_restore_round_trip_all_raw_items():
     assert adapter.restore_if_unchanged(snapshot, owner_count) is True
     assert snapshot_items(board) == tuple(
         tuple(item.payloads) for item in snapshot.items
+    )
+
+
+def test_temporary_write_returns_clear_generation_as_owner():
+    board = FakePasteboard()
+
+    owner = make_adapter(board).write_text_if_unchanged(
+        "dictation", PasteboardSnapshot(10, ()))
+
+    assert owner == 11
+    assert board.count == 11
+    assert snapshot_items(board) == (
+        (("public.utf8-plain-text", b"dictation"),),
     )
 
 

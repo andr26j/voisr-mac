@@ -23,9 +23,7 @@ def _clear_if_unchanged(board, expected_count):
 
 
 def _observe_test_write(board, test_owner):
-    expected_owner = test_owner[0] + 1
-    test_owner[0] = expected_owner
-    return int(board.changeCount()) == expected_owner
+    return int(board.changeCount()) == test_owner[0]
 
 
 class FakeRoundtripPasteboard:
@@ -54,7 +52,7 @@ def test_roundtrip_cleanup_keeps_expected_token_when_write_observation_fails():
 
         def restore_if_unchanged(self, original, owner_count):
             self.restore_calls.append(owner_count)
-            if owner_count == 12:
+            if owner_count == 11:
                 self.value = original
 
     board = FakeRoundtripPasteboard(count=12)
@@ -70,7 +68,7 @@ def test_roundtrip_cleanup_keeps_expected_token_when_write_observation_fails():
     finally:
         adapter.restore_if_unchanged(original, test_owner[0])
 
-    assert adapter.restore_calls == [12]
+    assert adapter.restore_calls == [11]
     assert adapter.value == original
 
 
@@ -129,3 +127,40 @@ def test_clipboard_roundtrip():
     finally:
         if test_owner[0] is not None:
             adapter.restore_if_unchanged(original, test_owner[0])
+
+
+def test_private_clipboard_roundtrip_uses_clear_generation():
+    AppKit = pytest.importorskip("AppKit")
+    Foundation = pytest.importorskip("Foundation")
+    board = None
+    try:
+        board = AppKit.NSPasteboard.pasteboardWithUniqueName()
+        if board is None:
+            pytest.skip("private pasteboard unavailable")
+        adapter = AppKitPasteboard(board=board)
+        original_items = [
+            _item(AppKit.NSPasteboardItem, Foundation.NSData, [
+                ("public.utf8-plain-text", b"original"),
+                ("public.html", b"<b>original</b>"),
+            ]),
+            _item(AppKit.NSPasteboardItem, Foundation.NSData, [
+                ("com.example.binary", b"\x00\xff"),
+            ]),
+        ]
+        original_owner = int(board.clearContents())
+        if int(board.changeCount()) != original_owner:
+            pytest.skip("clipboard changed during private test setup")
+        assert board.writeObjects_(original_items)
+        original = adapter.snapshot()
+
+        owner = adapter.write_text_if_unchanged("dictation", original)
+
+        assert owner == int(board.changeCount())
+        assert adapter.restore_if_unchanged(original, owner) is True
+        restored = adapter.snapshot()
+        assert restored.items == original.items
+    except ClipboardPreservationError as error:
+        pytest.skip(f"pasteboard service unavailable: {error}")
+    finally:
+        if board is not None:
+            board.releaseGlobally()

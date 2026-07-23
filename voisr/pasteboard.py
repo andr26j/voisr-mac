@@ -176,21 +176,18 @@ class AppKitPasteboard:
                     "temporary clipboard write failed") from error
 
             clear_count = None
-            wrote = False
             try:
                 clear_count = int(self._board.clearContents())
                 if not self._is_owned(clear_count):
                     raise ClipboardPreservationError(
                         "clipboard changed during temporary write")
-                wrote = self._board.writeObjects_([item])
-                if not wrote:
+                if not self._board.writeObjects_([item]):
                     raise ClipboardPreservationError(
                         "temporary clipboard write failed")
-                expected_owner = clear_count + 1
-                if not self._is_owned(expected_owner):
+                if not self._is_owned(clear_count):
                     raise ClipboardPreservationError(
                         "clipboard ownership lost during temporary write")
-                return expected_owner
+                return clear_count
             except BaseException as error:
                 if clear_count is None:
                     if isinstance(error, ClipboardPreservationError):
@@ -199,8 +196,7 @@ class AppKitPasteboard:
                         raise ClipboardPreservationError(
                             "temporary clipboard write failed") from error
                     raise
-                expected_count = clear_count + 1 if wrote else clear_count
-                self._repair_after_clear(snapshot, expected_count, error)
+                self._repair_after_clear(snapshot, clear_count, error)
 
     def restore_if_unchanged(self, snapshot, expected_change_count):
         try:
