@@ -180,3 +180,57 @@ def test_paste_command_exception_restores_before_reporting():
         )
 
     assert adapter.calls[-1][0] == "restore"
+
+
+def test_wait_exception_restores_then_reports_paste_landed():
+    adapter = FakeAdapter()
+    wait_error = RuntimeError("wait interrupted")
+
+    with pytest.raises(PasteDeliveryError) as caught:
+        inject._paste_with_adapter(
+            "hello", adapter=adapter,
+            post_cmd_v=lambda: True,
+            applescript_cmd_v=lambda: False,
+            sleeper=lambda delay: (_ for _ in ()).throw(wait_error),
+        )
+
+    assert caught.value.pasted is True
+    assert caught.value.fallback_safe is False
+    assert caught.value.__cause__ is wait_error
+    assert adapter.calls[-1][0] == "restore"
+
+
+def test_wait_and_restore_failures_both_report_paste_landed():
+    adapter = FakeAdapter()
+    adapter.restore_error = OSError("restore unavailable")
+    wait_error = RuntimeError("wait interrupted")
+
+    with pytest.raises(PasteDeliveryError) as caught:
+        inject._paste_with_adapter(
+            "hello", adapter=adapter,
+            post_cmd_v=lambda: True,
+            applescript_cmd_v=lambda: False,
+            sleeper=lambda delay: (_ for _ in ()).throw(wait_error),
+        )
+
+    assert caught.value.pasted is True
+    assert "wait interrupted" in str(caught.value)
+    assert "restore unavailable" in str(caught.value)
+    assert caught.value.__cause__ is wait_error
+    assert adapter.calls[-1][0] == "restore"
+
+
+def test_keyboard_interrupt_restores_then_reraises_original():
+    adapter = FakeAdapter()
+    interrupt = KeyboardInterrupt()
+
+    with pytest.raises(KeyboardInterrupt) as caught:
+        inject._paste_with_adapter(
+            "hello", adapter=adapter,
+            post_cmd_v=lambda: True,
+            applescript_cmd_v=lambda: False,
+            sleeper=lambda delay: (_ for _ in ()).throw(interrupt),
+        )
+
+    assert caught.value is interrupt
+    assert adapter.calls[-1][0] == "restore"

@@ -69,23 +69,33 @@ def _applescript_cmd_v() -> bool:
     return proc.returncode == 0
 
 
+def _restore_after_failure(adapter, snapshot, owner_count, error, *,
+                           message, pasted):
+    try:
+        adapter.restore_if_unchanged(snapshot, owner_count)
+    except Exception as restore_error:
+        if isinstance(error, Exception):
+            raise PasteDeliveryError(
+                f"{message} and clipboard restore failed: {error}; "
+                f"{restore_error}",
+                pasted=pasted,
+            ) from error
+    if isinstance(error, Exception):
+        raise PasteDeliveryError(
+            f"{message}: {error}", pasted=pasted) from error
+    raise error
+
+
 def _paste_with_adapter(text, *, adapter, post_cmd_v,
                         applescript_cmd_v, sleeper) -> bool:
     snapshot = adapter.snapshot()
     owner_count = adapter.write_text_if_unchanged(text, snapshot)
     try:
         pasted = post_cmd_v() or applescript_cmd_v()
-    except Exception as error:
-        try:
-            adapter.restore_if_unchanged(snapshot, owner_count)
-        except Exception as restore_error:
-            raise PasteDeliveryError(
-                f"paste command failed and clipboard restore failed: "
-                f"{restore_error}",
-                pasted=False,
-            ) from error
-        raise PasteDeliveryError(
-            f"paste command failed: {error}", pasted=False) from error
+    except BaseException as error:
+        _restore_after_failure(
+            adapter, snapshot, owner_count, error,
+            message="paste command failed", pasted=False)
     if not pasted:
         try:
             adapter.restore_if_unchanged(snapshot, owner_count)
@@ -97,7 +107,12 @@ def _paste_with_adapter(text, *, adapter, post_cmd_v,
             ) from restore_error
         raise PasteDeliveryError(
             "paste was blocked; clipboard preserved", pasted=False)
-    sleeper(PASTE_GRACE_S)
+    try:
+        sleeper(PASTE_GRACE_S)
+    except BaseException as error:
+        _restore_after_failure(
+            adapter, snapshot, owner_count, error,
+            message="dictation pasted but clipboard wait failed", pasted=True)
     try:
         adapter.restore_if_unchanged(snapshot, owner_count)
     except Exception as error:
@@ -111,8 +126,10 @@ def _paste_with_adapter(text, *, adapter, post_cmd_v,
 def paste_at_cursor(text: str, restore_clipboard: bool = True) -> bool:
     """Put text on the clipboard and paste it into the frontmost app.
 
-    Returns False if pasting was blocked (missing permissions); the text
-    then stays on the clipboard for a manual paste."""
+    With restoration enabled (the default), a blocked paste raises a
+    preservation-aware PasteDeliveryError. Set restore_clipboard=False to
+    leave text available for a manual paste and receive False when blocked.
+    """
     if not restore_clipboard:
         set_clipboard(text)
         return _post_cmd_v() or _applescript_cmd_v()
