@@ -1,8 +1,23 @@
+import contextlib
+import fcntl
 import json
+import os
+import tempfile
+import threading
 import time
 import uuid
 from datetime import date, timedelta
 from pathlib import Path
+
+
+_PATH_LOCKS_GUARD = threading.Lock()
+_PATH_LOCKS: dict[str, threading.RLock] = {}
+
+
+def _thread_lock_for(path: Path) -> threading.RLock:
+    key = str(path.resolve())
+    with _PATH_LOCKS_GUARD:
+        return _PATH_LOCKS.setdefault(key, threading.RLock())
 
 
 class HistoryStore:
@@ -11,12 +26,31 @@ class HistoryStore:
     def __init__(self, path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.lock_path = self.path.with_name(self.path.name + ".lock")
+        self._thread_lock = _thread_lock_for(self.path)
+
+    @contextlib.contextmanager
+    def _mutation_lock(self):
+        with self._thread_lock:
+            fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            locked = False
+            try:
+                os.fchmod(fd, 0o600)
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                locked = True
+                yield
+            finally:
+                if locked:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
 
     def _read(self) -> list[dict]:
-        if not self.path.exists():
+        try:
+            contents = self.path.read_text(encoding="utf-8")
+        except FileNotFoundError:
             return []
         items = []
-        for line in self.path.read_text().splitlines():
+        for line in contents.splitlines():
             if not line.strip():
                 continue
             try:
@@ -25,22 +59,62 @@ class HistoryStore:
                 continue  # a torn line (crash mid-write) must not brick the store
         return items
 
-    def _write(self, items: list[dict]) -> None:
-        self.path.write_text("".join(json.dumps(i) + "\n" for i in items))
+    def _write_atomic(self, items: list[dict]) -> None:
+        payload = "".join(json.dumps(item) + "\n" for item in items)
+        fd, temp_name = tempfile.mkstemp(
+            dir=self.path.parent,
+            prefix=f".{self.path.name}.",
+            suffix=".tmp",
+        )
+        temp_path = Path(temp_name)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd = -1
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, self.path)
+            temp_path = None
+            directory_fd = os.open(self.path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            if fd >= 0:
+                os.close(fd)
+            if temp_path is not None:
+                try:
+                    temp_path.unlink()
+                except FileNotFoundError:
+                    pass
+
+    def _mutate(self, change):
+        with self._mutation_lock():
+            items = self._read()
+            result = change(items)
+            self._write_atomic(items)
+            return result
 
     def add(self, text: str, duration_s: float) -> dict:
         item = {"id": uuid.uuid4().hex, "ts": time.time(),
                 "text": text, "words": len(text.split()), "duration_s": duration_s}
-        items = self._read()
-        items.append(item)
-        self._write(items)
-        return item
+
+        def append(items):
+            items.append(item)
+            return item
+
+        return self._mutate(append)
 
     def list(self) -> list[dict]:
         return sorted(self._read(), key=lambda i: i["ts"], reverse=True)
 
     def delete(self, item_id: str) -> None:
-        self._write([i for i in self._read() if i["id"] != item_id])
+        def remove(items):
+            items[:] = [item for item in items if item["id"] != item_id]
+
+        self._mutate(remove)
 
     def stats(self) -> dict:
         items = self._read()
