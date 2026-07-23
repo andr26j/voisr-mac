@@ -1,13 +1,29 @@
 import subprocess
 import time
 
+from voisr.pasteboard import (
+    AppKitPasteboard,
+    ClipboardPreservationError,
+    PasteDeliveryError,
+)
+
+
+COMMAND_TIMEOUT_S = 2.0
+PASTE_GRACE_S = 0.3
+
 
 def set_clipboard(text: str) -> None:
-    subprocess.run(["pbcopy"], input=text.encode(), check=True)
+    subprocess.run(
+        ["pbcopy"], input=text.encode("utf-8"), check=True,
+        timeout=COMMAND_TIMEOUT_S,
+    )
 
 
 def get_clipboard() -> str:
-    return subprocess.run(["pbpaste"], capture_output=True).stdout.decode()
+    return subprocess.run(
+        ["pbpaste"], capture_output=True, check=True,
+        timeout=COMMAND_TIMEOUT_S,
+    ).stdout.decode("utf-8")
 
 
 _controller = None
@@ -49,8 +65,47 @@ def _applescript_cmd_v() -> bool:
     proc = subprocess.run(
         ["osascript", "-e",
          'tell application "System Events" to keystroke "v" using command down'],
-        capture_output=True, text=True)
+        capture_output=True, text=True, timeout=COMMAND_TIMEOUT_S)
     return proc.returncode == 0
+
+
+def _paste_with_adapter(text, *, adapter, post_cmd_v,
+                        applescript_cmd_v, sleeper) -> bool:
+    snapshot = adapter.snapshot()
+    owner_count = adapter.write_text_if_unchanged(text, snapshot)
+    try:
+        pasted = post_cmd_v() or applescript_cmd_v()
+    except Exception as error:
+        try:
+            adapter.restore_if_unchanged(snapshot, owner_count)
+        except Exception as restore_error:
+            raise PasteDeliveryError(
+                f"paste command failed and clipboard restore failed: "
+                f"{restore_error}",
+                pasted=False,
+            ) from error
+        raise PasteDeliveryError(
+            f"paste command failed: {error}", pasted=False) from error
+    if not pasted:
+        try:
+            adapter.restore_if_unchanged(snapshot, owner_count)
+        except Exception as restore_error:
+            raise PasteDeliveryError(
+                f"paste was blocked and clipboard restore failed: "
+                f"{restore_error}",
+                pasted=False,
+            ) from restore_error
+        raise PasteDeliveryError(
+            "paste was blocked; clipboard preserved", pasted=False)
+    sleeper(PASTE_GRACE_S)
+    try:
+        adapter.restore_if_unchanged(snapshot, owner_count)
+    except Exception as error:
+        raise PasteDeliveryError(
+            f"dictation pasted but clipboard restore failed: {error}",
+            pasted=True,
+        ) from error
+    return True
 
 
 def paste_at_cursor(text: str, restore_clipboard: bool = True) -> bool:
@@ -58,10 +113,13 @@ def paste_at_cursor(text: str, restore_clipboard: bool = True) -> bool:
 
     Returns False if pasting was blocked (missing permissions); the text
     then stays on the clipboard for a manual paste."""
-    old = get_clipboard() if restore_clipboard else None
-    set_clipboard(text)
-    ok = _post_cmd_v() or _applescript_cmd_v()
-    if restore_clipboard and ok:
-        time.sleep(0.3)  # let the paste land before swapping the clipboard back
-        set_clipboard(old)
-    return ok
+    if not restore_clipboard:
+        set_clipboard(text)
+        return _post_cmd_v() or _applescript_cmd_v()
+    return _paste_with_adapter(
+        text,
+        adapter=AppKitPasteboard(),
+        post_cmd_v=_post_cmd_v,
+        applescript_cmd_v=_applescript_cmd_v,
+        sleeper=time.sleep,
+    )
