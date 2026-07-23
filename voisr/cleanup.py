@@ -19,17 +19,22 @@ PROTECTED_TOKEN_RE = re.compile(
 
 
 def _split_url_suffix(token: str) -> tuple[str, str]:
-    opening = {")": "(", "]": "[", "}": "{"}
-    end = len(token)
-    while end:
-        char = token[end - 1]
-        if char in opening and token[:end].count(char) > token[:end].count(opening[char]):
-            end -= 1
-        elif char in "'\"" and token[:end].count(char) % 2:
-            end -= 1
-        else:
-            break
-    return token[:end], token[end:]
+    opening = {"(": ")", "[": "]", "{": "}"}
+    closing = {value: key for key, value in opening.items()}
+    stack: list[str] = []
+    for index, char in enumerate(token):
+        if char in opening:
+            stack.append(char)
+        elif char in closing:
+            if stack and stack[-1] == closing[char]:
+                stack.pop()
+            else:
+                return token[:index], token[index:]
+        elif char in "'\"":
+            suffix = token[index + 1 :]
+            if token.count(char) % 2 and (not suffix or suffix[0] in ",.;:!?)]}"):
+                return token[:index], token[index:]
+    return token, ""
 
 
 def _protected_spans(text: str):
@@ -49,20 +54,6 @@ def _placeholder(text: str, protected: dict[str, str]) -> str:
         length += 1
 
 
-def _protect_tokens(text: str) -> tuple[str, dict[str, str]]:
-    protected: dict[str, str] = {}
-    parts: list[str] = []
-    last = 0
-    for start, end, token in _protected_spans(text):
-        parts.append(text[last:start])
-        placeholder = _placeholder(text, protected)
-        protected[placeholder] = token
-        parts.append(placeholder)
-        last = end
-    parts.append(text[last:])
-    return "".join(parts), protected
-
-
 def _apply_dictionary(text: str, dictionary: dict[str, str] | None) -> str:
     out = text
     for spoken, written in (dictionary or {}).items():
@@ -77,15 +68,31 @@ def _apply_dictionary(text: str, dictionary: dict[str, str] | None) -> str:
     return out
 
 
-def _transform_unprotected_segments(text: str, dictionary: dict[str, str] | None) -> str:
-    parts: list[str] = []
+def _protect_original_spans(
+    text: str, dictionary: dict[str, str] | None
+) -> tuple[str, dict[str, str]]:
+    spans = list(_protected_spans(text))
+    gaps: list[str] = []
     last = 0
-    for start, end, token in _protected_spans(text):
-        parts.append(_apply_dictionary(FILLER_RE.sub("", text[last:start]), dictionary))
-        parts.append(token)
+    for start, end, _ in spans:
+        gaps.append(_apply_dictionary(FILLER_RE.sub("", text[last:start]), dictionary))
         last = end
-    parts.append(_apply_dictionary(FILLER_RE.sub("", text[last:]), dictionary))
-    return "".join(parts)
+    gaps.append(_apply_dictionary(FILLER_RE.sub("", text[last:]), dictionary))
+
+    reserved_parts = [text]
+    for gap, (_, _, token) in zip(gaps, spans):
+        reserved_parts.extend((gap, token))
+    reserved_parts.append(gaps[-1])
+    reserved = "".join(reserved_parts)
+    protected: dict[str, str] = {}
+    parts: list[str] = []
+    for gap, (_, _, token) in zip(gaps, spans):
+        parts.append(gap)
+        placeholder = _placeholder(reserved, protected)
+        protected[placeholder] = token
+        parts.append(placeholder)
+    parts.append(gaps[-1])
+    return "".join(parts), protected
 
 
 def _restore_tokens(text: str, protected: dict[str, str]) -> str:
@@ -99,8 +106,7 @@ def clean(text: str, dictionary: dict[str, str] | None = None) -> str:
     apply the user's spoken->written dictionary, capitalize the first letter."""
     if not text.strip():
         return ""
-    out = _transform_unprotected_segments(text, dictionary)
-    out, protected = _protect_tokens(out)
+    out, protected = _protect_original_spans(text, dictionary)
     out = re.sub(r"\s+", " ", out).strip()
     out = re.sub(r"\s+([,.;:!?])", r"\1", out)
     out = re.sub(r"^[,.;:\s]+", "", out)

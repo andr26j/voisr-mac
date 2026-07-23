@@ -154,3 +154,37 @@ def test_dictionary_phrases_apply_around_multiple_protected_spans():
     assert clean(raw, {"trade mate": "TradeMate"}) == (
         "Ask TradeMate at a@trade.com then visit https://trade.com TradeMate"
     )
+
+
+@pytest.mark.parametrize(
+    ("written", "expected"),
+    [
+        ("https://example.com", "Say https: //example. com"),
+        ("a@example.com", "Say a@example. com"),
+    ],
+)
+def test_dictionary_generated_structured_text_keeps_base_cleanup_behavior(written, expected):
+    assert clean("say token", {"token": written}) == expected
+
+
+def test_dictionary_replacements_keep_cascade_order():
+    assert clean("say alpha", {"alpha": "beta", "beta": "gamma"}) == "Say gamma"
+
+
+def test_unmatched_closing_parenthesis_and_suffix_are_unprotected():
+    assert clean("(https://example.com),now") == "(https://example.com), now"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ('"https://example.com",now', '"https://example.com", now'),
+        ("'https://example.com'.now", "'https://example.com'. now"),
+    ],
+)
+def test_closing_quote_and_following_text_are_unprotected(raw, expected):
+    assert clean(raw) == expected
+
+
+def test_url_keeps_balanced_parentheses_and_maximal_uri_punctuation():
+    assert clean("open https://example.com/a(b),now") == "Open https://example.com/a(b),now"
