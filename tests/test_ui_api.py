@@ -502,3 +502,38 @@ def test_preservation_failure_resolves_then_next_queued_paste_runs(tmp_path):
         assert attempts == 2
     finally:
         api.close()
+
+
+def test_paste_landed_error_keeps_smart_spacing_for_next_dictation(tmp_path):
+    pasted = []
+    copied = []
+
+    def paste(text):
+        pasted.append(text)
+        if len(pasted) == 1:
+            raise PasteDeliveryError(
+                "restore failed", pasted=True, fallback_safe=False)
+        return True
+
+    api = Api(
+        config_path=tmp_path / "config.json",
+        history=HistoryStore(tmp_path / "paste-landed.jsonl"),
+        recorder_factory=FakeRecorder,
+        transcribe_fn=lambda wav: "queued",
+        paste_fn=paste,
+        clipboard_fn=copied.append,
+        clock=lambda: 1.0,
+    )
+    api.set_config({"paste": True})
+    try:
+        api.start_recording()
+        first = api.stop_recording(paste=True)
+        api.start_recording()
+        second = api.stop_recording(paste=True)
+        assert first["error"].startswith("delivery failed:")
+        assert first["pasted"] is True and first["copied"] is True
+        assert second["pasted"] is True
+        assert pasted == ["Queued", " Queued"]
+        assert copied == []
+    finally:
+        api.close()

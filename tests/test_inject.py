@@ -40,14 +40,14 @@ class FakeRoundtripPasteboard:
         return clear_count
 
 
-def test_clipboard_roundtrip_setup_skips_stale_clipboard_before_clear():
+def test_roundtrip_setup_skips_stale_clipboard_before_clear():
     board = FakeRoundtripPasteboard(count=11)
 
     assert _clear_if_unchanged(board, expected_count=10) is None
     assert board.clear_calls == 0
 
 
-def test_clipboard_roundtrip_setup_skips_external_change_after_clear():
+def test_roundtrip_setup_skips_external_change_after_clear():
     board = FakeRoundtripPasteboard()
     board.after_clear = lambda: setattr(board, "count", board.count + 1)
 

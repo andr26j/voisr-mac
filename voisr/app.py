@@ -41,6 +41,9 @@ def deliver(text: str, paste: bool) -> None:
         except PasteDeliveryError as error:
             if error.pasted:
                 print(f"pasted: {text} (clipboard warning: {error})")
+            elif error.fallback_safe:
+                set_clipboard(text)
+                print(f"copied to clipboard (paste blocked or disabled): {text}")
             else:
                 print(f"delivery failed; {error}: {text}")
             return
