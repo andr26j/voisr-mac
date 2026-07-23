@@ -80,6 +80,7 @@ def _restore_after_failure(adapter, snapshot, owner_count, error, *,
                 f"{restore_error}",
                 pasted=pasted,
             ) from error
+        raise error from restore_error
     if isinstance(error, Exception):
         raise PasteDeliveryError(
             f"{message}: {error}", pasted=pasted) from error

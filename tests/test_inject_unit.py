@@ -234,3 +234,21 @@ def test_keyboard_interrupt_restores_then_reraises_original():
 
     assert caught.value is interrupt
     assert adapter.calls[-1][0] == "restore"
+
+
+def test_keyboard_interrupt_chains_restore_failure_without_replacement():
+    adapter = FakeAdapter()
+    adapter.restore_error = OSError("restore unavailable")
+    interrupt = KeyboardInterrupt()
+
+    with pytest.raises(KeyboardInterrupt) as caught:
+        inject._paste_with_adapter(
+            "hello", adapter=adapter,
+            post_cmd_v=lambda: True,
+            applescript_cmd_v=lambda: False,
+            sleeper=lambda delay: (_ for _ in ()).throw(interrupt),
+        )
+
+    assert caught.value is interrupt
+    assert str(caught.value.__cause__) == "restore unavailable"
+    assert adapter.calls[-1][0] == "restore"
