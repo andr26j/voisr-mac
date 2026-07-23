@@ -244,7 +244,9 @@ def test_store_creates_each_missing_parent_with_private_mode(tmp_path):
 
     for directory in (tmp_path / "missing", tmp_path / "missing" / "nested",
                       path.parent):
-        assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+        mode = stat.S_IMODE(directory.stat().st_mode)
+        assert mode & 0o077 == 0
+        assert mode == 0o700
 
 
 def test_store_does_not_change_existing_symlink_parent_target_mode(tmp_path):
@@ -258,6 +260,30 @@ def test_store_does_not_change_existing_symlink_parent_target_mode(tmp_path):
 
     assert stat.S_IMODE(target.stat().st_mode) == 0o755
     assert stat.S_IMODE((target / "new-parent").stat().st_mode) == 0o700
+
+
+def test_store_does_not_chmod_target_after_created_parent_is_replaced_by_symlink(
+        tmp_path, monkeypatch):
+    target = tmp_path / "unrelated"
+    target.mkdir()
+    target.chmod(0o755)
+    parent = tmp_path / "race"
+    path = parent / "h.jsonl"
+    original_mkdir = history_module.Path.mkdir
+
+    def create_then_replace_parent(directory, *args, **kwargs):
+        result = original_mkdir(directory, *args, **kwargs)
+        if directory == parent:
+            parent.rmdir()
+            parent.symlink_to(target, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(history_module.Path, "mkdir", create_then_replace_parent)
+
+    HistoryStore(path)
+
+    assert parent.is_symlink()
+    assert stat.S_IMODE(target.stat().st_mode) == 0o755
 
 
 def test_huge_integer_timestamp_is_ignored_without_bricking_history_operations(

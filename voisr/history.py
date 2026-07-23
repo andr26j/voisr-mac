@@ -44,7 +44,6 @@ def _ensure_private_parent(path: Path) -> None:
             directory.mkdir(mode=0o700)
         except FileExistsError:
             continue
-        os.chmod(directory, 0o700)
 
 
 def _valid_record(item) -> bool:
