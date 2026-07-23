@@ -48,6 +48,7 @@ def make_api(tmp_path, config=None):
                recorder_factory=FakeRecorder,
                transcribe_fn=lambda wav: "hello widget",
                clock=lambda: 1.0,
+               paste_fn=lambda text: True,
                clipboard_fn=lambda text: None)
 
 

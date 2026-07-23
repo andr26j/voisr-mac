@@ -8,6 +8,7 @@ from voisr.app import load_config
 from voisr.cleanup import clean
 from voisr.history import HistoryStore
 from voisr.inject import paste_at_cursor, set_clipboard
+from voisr.pasteboard import PasteDeliveryError
 from voisr.recorder import Recorder
 from voisr.recording_queue import (
     RecordingQueue,
@@ -755,6 +756,7 @@ class Api:
 
         pasted = False
         paste_error = None
+        fallback_safe = True
         typing_generation = None
         if session.paste_requested and cfg.get("paste"):
             with self._paste_state_lock:
@@ -767,6 +769,10 @@ class Api:
                 )
             try:
                 pasted = self._paste_fn((" " if join else "") + text)
+            except PasteDeliveryError as error:
+                pasted = error.pasted
+                fallback_safe = error.fallback_safe
+                paste_error = error
             except Exception as error:
                 paste_error = error
             if pasted:
@@ -777,7 +783,7 @@ class Api:
 
         copied = pasted
         clipboard_error = None
-        if not pasted:
+        if not pasted and fallback_safe:
             try:
                 self._clipboard_fn(text)
                 copied = True
@@ -789,6 +795,10 @@ class Api:
             fields["item"] = item
         if warning is not None:
             fields["warning"] = warning
+        if isinstance(paste_error, PasteDeliveryError):
+            return SessionResult.failure(
+                session.sequence, "delivery",
+                f"delivery failed: {paste_error}"[:250], **fields)
         if clipboard_error is not None:
             detail = clipboard_error if paste_error is None else (
                 f"{paste_error}; clipboard fallback failed: {clipboard_error}")

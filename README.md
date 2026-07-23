@@ -7,7 +7,7 @@ A local-only macOS clone of [Wispr Flow](https://wisprflow.ai)'s core loop: **ho
 1. **Capture** — records your mic while you hold the hotkey (or between Enter presses in toggle mode)
 2. **Transcribe** — on-device speech-to-text via whisper.cpp (`ggml-base.en`)
 3. **Clean up** — strips filler words (um, uh, hmm…), normalizes spacing/punctuation, capitalizes, and applies your custom dictionary (e.g. `"trademake" → "TradeMate"` for names the ASR mishears)
-4. **Insert** — pastes the result at the cursor of the frontmost app (Cmd-V via System Events), restoring your clipboard afterwards. If pasting is blocked, the text stays on the clipboard.
+4. **Insert** — pastes the result at the cursor of the frontmost app (Cmd-V via System Events), restoring your clipboard afterwards. If a default paste is blocked, your original clipboard is preserved and the dictation remains in history; use `paste: false` or `--no-paste` for clipboard-only/manual paste.
 
 ## Setup
 

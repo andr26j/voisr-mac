@@ -7,6 +7,7 @@ from pathlib import Path
 
 from voisr.cleanup import clean
 from voisr.inject import paste_at_cursor, set_clipboard
+from voisr.pasteboard import PasteDeliveryError
 from voisr.recorder import Recorder
 from voisr.transcriber import transcribe
 
@@ -34,11 +35,20 @@ def deliver(text: str, paste: bool) -> None:
     if not text:
         print("(nothing transcribed)")
         return
-    if paste and paste_at_cursor(text):
-        print(f"pasted: {text}")
-    else:
-        set_clipboard(text)
-        print(f"copied to clipboard (paste blocked or disabled): {text}")
+    if paste:
+        try:
+            pasted = paste_at_cursor(text)
+        except PasteDeliveryError as error:
+            if error.pasted:
+                print(f"pasted: {text} (clipboard warning: {error})")
+            else:
+                print(f"delivery failed; {error}: {text}")
+            return
+        if pasted:
+            print(f"pasted: {text}")
+            return
+    set_clipboard(text)
+    print(f"copied to clipboard (paste blocked or disabled): {text}")
 
 
 def toggle_mode(cfg) -> None:

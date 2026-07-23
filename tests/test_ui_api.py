@@ -4,6 +4,7 @@ import threading
 import pytest
 
 from voisr.history import HistoryStore
+from voisr.pasteboard import PasteDeliveryError
 from voisr.ui import Api
 
 
@@ -410,4 +411,94 @@ def test_admitted_session_after_delivery_failure_completes_in_fifo_order(
             assert first_result["error"].startswith("delivery failed:")
     finally:
         allow_first.set()
+        api.close()
+
+
+def test_preserved_clipboard_error_suppresses_plain_text_fallback(tmp_path):
+    copied = []
+
+    def paste(text):
+        raise PasteDeliveryError(
+            "unrepresentable clipboard", pasted=False, fallback_safe=False)
+
+    api = Api(
+        config_path=tmp_path / "config.json",
+        history=HistoryStore(tmp_path / "preserved.jsonl"),
+        recorder_factory=FakeRecorder,
+        transcribe_fn=lambda wav: "safe in history",
+        paste_fn=paste,
+        clipboard_fn=copied.append,
+    )
+    api.set_config({"paste": True})
+    try:
+        api.start_recording()
+        result = api.stop_recording(paste=True)
+        assert result["pasted"] is False
+        assert result["copied"] is False
+        assert result["item"]["text"] == "Safe in history"
+        assert result["error"].startswith("delivery failed:")
+        assert copied == []
+    finally:
+        api.close()
+
+
+def test_restore_error_reports_paste_landed_without_fallback(tmp_path):
+    copied = []
+
+    def paste(text):
+        raise PasteDeliveryError(
+            "restore failed", pasted=True, fallback_safe=False)
+
+    api = Api(
+        config_path=tmp_path / "config.json",
+        history=HistoryStore(tmp_path / "restore.jsonl"),
+        recorder_factory=FakeRecorder,
+        transcribe_fn=lambda wav: "already delivered",
+        paste_fn=paste,
+        clipboard_fn=copied.append,
+    )
+    api.set_config({"paste": True})
+    try:
+        api.start_recording()
+        result = api.stop_recording(paste=True)
+        assert result["pasted"] is True
+        assert result["copied"] is True
+        assert result["error"].startswith("delivery failed:")
+        assert copied == []
+    finally:
+        api.close()
+
+
+def test_preservation_failure_resolves_then_next_queued_paste_runs(tmp_path):
+    attempts = 0
+    copied = []
+
+    def paste(text):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise PasteDeliveryError(
+                "snapshot failed", pasted=False, fallback_safe=False)
+        return True
+
+    api = Api(
+        config_path=tmp_path / "config.json",
+        history=HistoryStore(tmp_path / "queue-preserved.jsonl"),
+        recorder_factory=FakeRecorder,
+        transcribe_fn=lambda wav: "queued",
+        paste_fn=paste,
+        clipboard_fn=copied.append,
+    )
+    api.set_config({"paste": True})
+    try:
+        api.start_recording()
+        first = api.stop_recording(paste=True)
+        api.start_recording()
+        second = api.stop_recording(paste=True)
+        assert first["error"].startswith("delivery failed:")
+        assert first["copied"] is False
+        assert second["pasted"] is True
+        assert copied == []
+        assert attempts == 2
+    finally:
         api.close()
