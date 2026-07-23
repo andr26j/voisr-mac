@@ -1,4 +1,6 @@
 from contextlib import nullcontext
+from types import SimpleNamespace
+import sys
 
 import pytest
 
@@ -19,34 +21,50 @@ class FakeData:
 
 
 class FakeItem:
-    def __init__(self, payloads=None, unreadable=()):
+    def __init__(self, payloads=None, unreadable=(), on_data_for_type=None,
+                 on_set_data=None, on_set_string=None):
         self.payloads = dict(payloads or ())
         self.unreadable = set(unreadable)
+        self.on_data_for_type = on_data_for_type
+        self.on_set_data = on_set_data
+        self.on_set_string = on_set_string
 
     def types(self):
         return list(self.payloads)
 
     def dataForType_(self, type_name):
+        if self.on_data_for_type is not None:
+            self.on_data_for_type()
         if type_name in self.unreadable:
             return None
         return FakeData(self.payloads[type_name])
 
     def setData_forType_(self, data, type_name):
+        if self.on_set_data is not None:
+            self.on_set_data()
         self.payloads[str(type_name)] = bytes(data)
         return True
 
     def setString_forType_(self, text, type_name):
+        if self.on_set_string is not None:
+            self.on_set_string()
         self.payloads[str(type_name)] = text.encode("utf-8")
         return True
 
 
 class FakeItemClass:
+    on_set_data = None
+    on_set_string = None
+
     @classmethod
     def alloc(cls):
         return cls()
 
     def init(self):
-        return FakeItem()
+        return FakeItem(
+            on_set_data=type(self).on_set_data,
+            on_set_string=type(self).on_set_string,
+        )
 
 
 class FakeNSData:
@@ -60,7 +78,9 @@ class FakePasteboard:
         self.items = list(items)
         self.count = 10
         self.clear_calls = 0
+        self.write_calls = 0
         self.write_outcomes = []
+        self.after_clear = None
 
     def changeCount(self):
         return self.count
@@ -72,9 +92,13 @@ class FakePasteboard:
         self.clear_calls += 1
         self.items = []
         self.count += 1
-        return self.count
+        clear_count = self.count
+        if self.after_clear is not None:
+            self.after_clear()
+        return clear_count
 
     def writeObjects_(self, items):
+        self.write_calls += 1
         if self.write_outcomes and not self.write_outcomes.pop(0):
             return False
         self.items = list(items)
@@ -82,10 +106,10 @@ class FakePasteboard:
         return True
 
 
-def make_adapter(board):
+def make_adapter(board, item_class=FakeItemClass):
     return AppKitPasteboard(
         board=board,
-        item_class=FakeItemClass,
+        item_class=item_class,
         data_class=FakeNSData,
         string_type="public.utf8-plain-text",
         pool_factory=nullcontext,
@@ -133,6 +157,61 @@ def test_snapshot_failure_does_not_clear_clipboard():
     assert board.items[0].payloads["public.png"] == b"image"
 
 
+def test_snapshot_rejects_change_during_enumeration_without_clearing():
+    board = FakePasteboard()
+    board.items = [FakeItem(
+        [("public.png", b"image")],
+        on_data_for_type=lambda: setattr(board, "count", board.count + 1),
+    )]
+
+    with pytest.raises(ClipboardPreservationError, match="changed"):
+        make_adapter(board).snapshot()
+
+    assert board.clear_calls == 0
+    assert board.items[0].payloads["public.png"] == b"image"
+
+
+def test_snapshot_and_restore_empty_pasteboard():
+    board = FakePasteboard()
+    adapter = make_adapter(board)
+    snapshot = adapter.snapshot()
+
+    owner_count = adapter.write_text_if_unchanged("dictation", snapshot)
+
+    assert adapter.restore_if_unchanged(snapshot, owner_count) is True
+    assert board.items == []
+
+
+def test_snapshot_and_restore_type_less_item():
+    board = FakePasteboard([FakeItem()])
+    adapter = make_adapter(board)
+    snapshot = adapter.snapshot()
+
+    owner_count = adapter.write_text_if_unchanged("dictation", snapshot)
+
+    assert adapter.restore_if_unchanged(snapshot, owner_count) is True
+    assert snapshot_items(board) == ((),)
+
+
+def test_constructor_rejects_unavailable_general_pasteboard(monkeypatch):
+    class FakeNSPasteboard:
+        @classmethod
+        def generalPasteboard(cls):
+            return None
+
+    monkeypatch.setitem(sys.modules, "AppKit", SimpleNamespace(
+        NSPasteboard=FakeNSPasteboard,
+        NSPasteboardItem=FakeItemClass,
+        NSPasteboardTypeString="public.utf8-plain-text",
+    ))
+    monkeypatch.setitem(sys.modules, "Foundation", SimpleNamespace(
+        NSData=FakeNSData,
+    ))
+
+    with pytest.raises(ClipboardPreservationError, match="unavailable"):
+        AppKitPasteboard()
+
+
 def rich_snapshot():
     return PasteboardSnapshot(10, (
         PasteboardItemSnapshot((
@@ -158,6 +237,65 @@ def test_write_aborts_when_source_change_count_changed():
         adapter.write_text_if_unchanged("dictation", snapshot)
 
     assert board.clear_calls == 0
+
+
+def test_write_aborts_when_item_creation_loses_ownership():
+    board = FakePasteboard()
+
+    class StringMutatingItemClass(FakeItemClass):
+        on_set_string = lambda: setattr(board, "count", board.count + 1)
+
+    adapter = make_adapter(board, StringMutatingItemClass)
+    snapshot = PasteboardSnapshot(10, ())
+
+    with pytest.raises(ClipboardPreservationError, match="changed"):
+        adapter.write_text_if_unchanged("dictation", snapshot)
+
+    assert board.clear_calls == 0
+
+
+def test_restore_aborts_when_item_creation_loses_ownership():
+    board = FakePasteboard()
+
+    class DataMutatingItemClass(FakeItemClass):
+        on_set_data = lambda: setattr(board, "count", board.count + 1)
+
+    adapter = make_adapter(board, DataMutatingItemClass)
+
+    assert adapter.restore_if_unchanged(rich_snapshot(), 10) is False
+    assert board.clear_calls == 0
+
+
+def test_write_aborts_when_external_change_follows_clear():
+    board = FakePasteboard()
+
+    def external_change():
+        board.items = [FakeItem([("public.utf8-plain-text", b"newer")])]
+        board.count += 1
+
+    board.after_clear = external_change
+    adapter = make_adapter(board)
+
+    with pytest.raises(ClipboardPreservationError, match="changed"):
+        adapter.write_text_if_unchanged("dictation", PasteboardSnapshot(10, ()))
+
+    assert board.write_calls == 0
+    assert board.items[0].payloads["public.utf8-plain-text"] == b"newer"
+
+
+def test_restore_aborts_when_external_change_follows_clear():
+    board = FakePasteboard()
+
+    def external_change():
+        board.items = [FakeItem([("public.utf8-plain-text", b"newer")])]
+        board.count += 1
+
+    board.after_clear = external_change
+    adapter = make_adapter(board)
+
+    assert adapter.restore_if_unchanged(rich_snapshot(), 10) is False
+    assert board.write_calls == 0
+    assert board.items[0].payloads["public.utf8-plain-text"] == b"newer"
 
 
 def test_owned_write_and_restore_round_trip_all_raw_items():
