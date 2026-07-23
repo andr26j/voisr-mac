@@ -7,10 +7,16 @@ FILLER_RE = re.compile(
 
 PROTECTED_TOKEN_RE = re.compile(
     r"""
-    (?:https?://|www\.)[^\s]+                         # URL
+    (?<![a-z0-9._%+-])                                 # URL start boundary
+    (?:https?://|www\.)
+    (?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}
+    (?::\d{1,5})?
+    (?:/[a-z0-9._~/%@+$&'()*=-]*)?
+    (?:\?[a-z0-9._~/%@+$&'()*=-]*)?
+    (?:\#[a-z0-9._~/%@+$&'()*=-]*)?
     | [a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}          # email
     | \b(?:\d{1,3}\.){3}\d{1,3}\b                   # IPv4-shaped token
-    | \b\d{1,2}:\d{2}(?::\d{2})?(?:\s?[ap]\.?m\.?)?\b  # time
+    | \b\d{1,2}:\d{2}(?::\d{2})?(?:\s?[ap]\.?m\.?)?(?=\s|$|[,.;:!?])  # time
     | \bv?\d+(?:[.,]\d+)+\b                          # decimal/version/grouped number
     | \b(?:[a-z]\.){2,}                               # dotted abbreviation
     """,
@@ -18,11 +24,20 @@ PROTECTED_TOKEN_RE = re.compile(
 )
 
 
+def _placeholder(text: str, protected: dict[str, str]) -> str:
+    length = 1
+    while True:
+        placeholder = "\uE000" + "\uE001" * length + "\uE002"
+        if placeholder not in text and placeholder not in protected:
+            return placeholder
+        length += 1
+
+
 def _protect_tokens(text: str) -> tuple[str, dict[str, str]]:
     protected: dict[str, str] = {}
 
     def replace(match: re.Match[str]) -> str:
-        placeholder = chr(0xE000 + len(protected))
+        placeholder = _placeholder(text, protected)
         protected[placeholder] = match.group(0)
         return placeholder
 

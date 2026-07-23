@@ -82,3 +82,23 @@ def test_preserves_a_structured_token_at_the_start():
 
 def test_spaces_punctuation_adjacent_to_structured_tokens():
     assert clean("contact a@b.com,now") == "Contact a@b.com, now"
+
+
+def test_url_does_not_swallow_adjacent_comma_and_prose():
+    assert clean("visit https://example.com,now") == "Visit https://example.com, now"
+
+
+def test_url_does_not_swallow_terminal_exclamation_and_prose():
+    assert clean("visit https://example.com!now") == "Visit https://example.com! now"
+
+
+def test_non_url_www_substring_is_not_protected():
+    assert clean("say notwww.example.com now") == "Say notwww. example. com now"
+
+
+def test_time_preserves_final_period_in_meridiem():
+    assert clean("wait 10:30 p.m.,now") == "Wait 10:30 p.m., now"
+
+
+def test_literal_private_use_character_does_not_collide_with_placeholder():
+    assert clean("\uE000 https://example.com") == "\uE000 https://example.com"
