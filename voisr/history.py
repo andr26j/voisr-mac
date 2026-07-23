@@ -3,6 +3,7 @@ import fcntl
 import json
 import math
 import os
+import stat
 import tempfile
 import threading
 import time
@@ -44,6 +45,18 @@ def _ensure_private_parent(path: Path) -> None:
             directory.mkdir(mode=0o700)
         except FileExistsError:
             continue
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        try:
+            fd = os.open(directory, flags)
+        except PermissionError:
+            os.chmod(directory, 0o700, follow_symlinks=False)
+            fd = os.open(directory, flags)
+        try:
+            os.fchmod(fd, 0o700)
+            if stat.S_IMODE(os.fstat(fd).st_mode) != 0o700:
+                raise OSError("new history parent has unexpected mode")
+        finally:
+            os.close(fd)
 
 
 def _valid_record(item) -> bool:
