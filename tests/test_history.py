@@ -255,13 +255,12 @@ def test_store_recovers_owner_restrictive_umask_with_usable_private_parent(
     old_umask = os.umask(0o700)
     try:
         store = HistoryStore(path)
+        assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+        assert store.lock_path.exists()
     finally:
         os.umask(old_umask)
         if path.parent.exists():
             path.parent.chmod(0o700)
-
-    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
-    assert store.lock_path.exists()
 
 
 def test_store_does_not_change_existing_symlink_parent_target_mode(tmp_path):
