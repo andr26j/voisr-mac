@@ -1,3 +1,4 @@
+import hashlib
 import re
 
 FILLER_RE = re.compile(
@@ -8,13 +9,15 @@ FILLER_RE = re.compile(
 PROTECTED_TOKEN_RE = re.compile(
     r"""
     (?P<url>(?<![\w._%+-])(?:https?://|www\.)[^\s]+)  # URL
-    | [\w.!#$%&'*+/=?^`{|}~-]+@                       # email
+    | (?<![\w.!#$%&'*+/=?^`{|}~-])                    # email start
+      (?>[\w.!#$%&'*+/=?^`{|}~-]+)@
       [^\W_](?:[^\W_]|-)*(?:\.[^\W_](?:[^\W_]|-)*)+
     | \b(?:\d{1,3}\.){3}\d{1,3}\b                   # IPv4-shaped token
     | \b\d{1,2}:\d{2}(?::\d{2})?(?:\s?[ap]\.?m\.?)?(?=$|[^\w])  # time
     | (?<![\w.])[-+]?(?:\d+\.\d+|\.\d+)(?![\w.])   # signed decimal
+    | (?<![\w.])[-+]?\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\w.])  # grouped number
     | \bv?\d+(?:[.,]\d+)+\b                          # decimal/version/grouped number
-    | \b(?:[a-z]{1,3}\.){2,}                          # dotted abbreviation
+    | \b(?=(?:[a-z]{1,3}\.)*[a-z]\.)(?:[a-z]{1,3}\.){2,}  # abbreviation
     | \b(?:dr|mr|mrs|ms|prof|sr|jr|st)\.               # title
     """,
     re.IGNORECASE | re.VERBOSE,
@@ -54,8 +57,10 @@ def _split_url_suffix(token: str, expected_closer: str | None = None) -> tuple[s
         elif index == closing_quote_index:
             return token[:index], token[index:]
         elif not preserve_unmatched_quote_context and char in "'\"":
-            suffix = token[index + 1 :]
-            if straight_quote_counts[char] % 2 and (not suffix or suffix[0] in ",.;:!?)]}>"):
+            next_char = token[index + 1] if index + 1 < len(token) else None
+            if straight_quote_counts[char] % 2 and (
+                next_char is None or next_char in ",.;:!?)]}>"
+            ):
                 return token[:index], token[index:]
     return token, ""
 
@@ -76,16 +81,13 @@ def _protected_spans(text: str):
 
 
 def _placeholder_namespace(content: str) -> str:
-    used = set(content)
-    for codepoint in range(0xE000, 0xF900):
-        candidate = chr(codepoint)
-        if candidate not in used:
-            return candidate
-
-    namespace = "\uE000"
-    while namespace in content:
-        namespace += "\uE000"
-    return namespace
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+    counter = 0
+    while True:
+        namespace = f"\uE000{digest}{counter:x}\uE001"
+        if namespace not in content:
+            return namespace
+        counter += 1
 
 
 def _apply_dictionary(text: str, dictionary: dict[str, str] | None) -> str:

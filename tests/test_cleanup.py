@@ -294,3 +294,42 @@ def test_many_structured_tokens_scale_near_linearly():
     started = perf_counter()
     assert clean(raw) == raw
     assert perf_counter() - started < 2
+
+
+def test_near_miss_email_scales_linearly():
+    raw = "a" * 8_000 + "@" + "b" * 8_000
+    started = perf_counter()
+    assert clean(raw) == "A" + raw[1:]
+    assert perf_counter() - started < 0.5
+
+
+def test_quote_dense_url_scales_linearly():
+    url = "https://example.com/" + "'a" * 400_000
+    started = perf_counter()
+    assert clean(f"open {url}") == f"Open {url}"
+    assert perf_counter() - started < 0.75
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "".join(chr(codepoint) for codepoint in range(0xE000, 0xF900)),
+        "\uE000" * 300_000,
+    ],
+)
+def test_placeholder_namespace_handles_adversarial_private_use_content(prefix):
+    raw = f"{prefix} https://example.com"
+    started = perf_counter()
+    assert clean(raw) == raw
+    assert perf_counter() - started < 0.75
+
+
+def test_dotted_prose_is_not_protected_as_an_abbreviation():
+    raw = "yes.No. go.Now. hot.It.Is"
+    dictionary = {"No": "NO", "Now": "NOW", "It": "IT", "Is": "IS"}
+    assert clean(raw, dictionary) == "Yes. NO. go. NOW. hot. IT. IS"
+
+
+def test_signed_grouped_numbers_protect_their_signs_from_dictionary_rewrites():
+    raw = "values -1,000.50 +1,000.50"
+    assert clean(raw, {"-": "minus", "+": "plus"}) == "Values -1,000.50 +1,000.50"
