@@ -3,6 +3,9 @@ import json
 import multiprocessing
 import threading
 
+import pytest
+
+import voisr.history as history_module
 from voisr.history import HistoryStore
 
 
@@ -11,6 +14,17 @@ def _add_many(path, prefix, count, start_event):
     store = HistoryStore(path)
     for index in range(count):
         store.add(f"{prefix}-{index}", 1.0)
+
+
+def _add_from_store(store, text):
+    store.add(text, 1.0)
+
+
+def _enter_nested_mutation_lock(path):
+    store = HistoryStore(path)
+    with store._mutation_lock():
+        with store._mutation_lock():
+            pass
 
 
 def test_add_and_list(tmp_path):
@@ -215,3 +229,158 @@ def test_reader_sees_complete_snapshot_while_atomic_write_is_paused(tmp_path,
     after_replace = [item["text"] for item in store.list()]
     assert before_replace == ["old"]
     assert after_replace == ["new", "old"]
+
+
+def test_writing_through_file_symlink_updates_target_without_replacing_link(tmp_path):
+    target = tmp_path / "target.jsonl"
+    alias = tmp_path / "alias.jsonl"
+    HistoryStore(target).add("target", 1.0)
+    alias.symlink_to(target)
+
+    HistoryStore(alias).add("alias", 1.0)
+
+    assert alias.is_symlink()
+    assert {item["text"] for item in HistoryStore(target).list()} == {
+        "target", "alias"
+    }
+
+
+def test_broken_file_symlink_writes_to_its_target_without_replacing_link(tmp_path):
+    target = tmp_path / "future.jsonl"
+    alias = tmp_path / "alias.jsonl"
+    alias.symlink_to(target)
+
+    HistoryStore(alias).add("first", 1.0)
+
+    assert alias.is_symlink()
+    assert [item["text"] for item in HistoryStore(target).list()] == ["first"]
+
+
+def test_real_and_symlink_paths_share_concurrent_mutation_path(tmp_path):
+    target = tmp_path / "target.jsonl"
+    alias = tmp_path / "alias.jsonl"
+    alias.symlink_to(target)
+    start = threading.Event()
+    errors = []
+
+    def add(path, text):
+        try:
+            start.wait()
+            HistoryStore(path).add(text, 1.0)
+        except BaseException as error:
+            errors.append(error)
+
+    threads = [
+        threading.Thread(target=add, args=(path, text))
+        for path, text in ((target, "real"), (alias, "alias"))
+    ]
+    for thread in threads:
+        thread.start()
+    start.set()
+    for thread in threads:
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+    assert not errors
+    assert alias.is_symlink()
+    assert {item["text"] for item in HistoryStore(target).list()} == {
+        "real", "alias"
+    }
+
+
+@pytest.mark.filterwarnings(
+    "ignore:This process .* is multi-threaded.*:DeprecationWarning"
+)
+def test_fork_child_does_not_inherit_another_threads_path_lock(tmp_path):
+    path = tmp_path / "h.jsonl"
+    store = HistoryStore(path)
+    held = threading.Event()
+    release = threading.Event()
+
+    def hold_path_lock():
+        with history_module._thread_lock_for(store.path):
+            held.set()
+            assert release.wait(timeout=2)
+
+    holder = threading.Thread(target=hold_path_lock)
+    holder.start()
+    assert held.wait(timeout=2)
+    context = multiprocessing.get_context("fork")
+    process = context.Process(target=_add_from_store, args=(store, "child"))
+    try:
+        process.start()
+        release.set()
+        process.join(timeout=2)
+        assert not process.is_alive()
+        assert process.exitcode == 0
+    finally:
+        release.set()
+        holder.join(timeout=2)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=2)
+        assert not holder.is_alive()
+        assert not process.is_alive()
+
+    assert [item["text"] for item in store.list()] == ["child"]
+
+
+def test_nested_mutation_lock_completes_within_timeout(tmp_path):
+    context = multiprocessing.get_context("fork")
+    process = context.Process(target=_enter_nested_mutation_lock,
+                              args=(tmp_path / "h.jsonl",))
+    try:
+        process.start()
+        process.join(timeout=2)
+        assert not process.is_alive()
+        assert process.exitcode == 0
+    finally:
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=2)
+        assert not process.is_alive()
+
+
+def test_nested_mutation_lock_reuses_one_sidecar_fd(tmp_path, monkeypatch):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    opened = []
+    original_open = history_module.os.open
+
+    def count_open(*args, **kwargs):
+        fd = original_open(*args, **kwargs)
+        opened.append(fd)
+        return fd
+
+    monkeypatch.setattr(history_module.os, "open", count_open)
+    monkeypatch.setattr(history_module.fcntl, "flock", lambda *args: None)
+
+    with store._mutation_lock():
+        with store._mutation_lock():
+            pass
+
+    assert len(opened) == 1
+
+
+def test_mutation_lock_closes_fd_when_unlock_fails(tmp_path, monkeypatch):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    closed = []
+    original_close = history_module.os.close
+    original_flock = history_module.fcntl.flock
+
+    def track_close(fd):
+        closed.append(fd)
+        original_close(fd)
+
+    def fail_unlock(fd, operation):
+        if operation == history_module.fcntl.LOCK_UN:
+            raise OSError("unlock failed")
+        return original_flock(fd, operation)
+
+    monkeypatch.setattr(history_module.os, "close", track_close)
+    monkeypatch.setattr(history_module.fcntl, "flock", fail_unlock)
+
+    with pytest.raises(OSError, match="unlock failed"):
+        with store._mutation_lock():
+            pass
+
+    assert len(closed) == 1

@@ -12,37 +12,96 @@ from pathlib import Path
 
 _PATH_LOCKS_GUARD = threading.Lock()
 _PATH_LOCKS: dict[str, threading.RLock] = {}
+_OPEN_LOCK_FDS_GUARD = threading.Lock()
+_OPEN_LOCK_FDS: set[int] = set()
+_MUTATION_STATES = threading.local()
 
 
 def _thread_lock_for(path: Path) -> threading.RLock:
-    key = str(path.resolve())
+    key = str(path.expanduser().resolve(strict=False))
     with _PATH_LOCKS_GUARD:
         return _PATH_LOCKS.setdefault(key, threading.RLock())
+
+
+def _mutation_states() -> dict[str, tuple[int, int]]:
+    states = getattr(_MUTATION_STATES, "locks", None)
+    if states is None:
+        states = {}
+        _MUTATION_STATES.locks = states
+    return states
+
+
+def _track_lock_fd(fd: int) -> None:
+    with _OPEN_LOCK_FDS_GUARD:
+        _OPEN_LOCK_FDS.add(fd)
+
+
+def _untrack_lock_fd(fd: int) -> None:
+    with _OPEN_LOCK_FDS_GUARD:
+        _OPEN_LOCK_FDS.discard(fd)
+
+
+def _reset_locks_after_fork() -> None:
+    global _PATH_LOCKS_GUARD, _PATH_LOCKS
+    global _OPEN_LOCK_FDS_GUARD, _OPEN_LOCK_FDS, _MUTATION_STATES
+
+    for fd in _OPEN_LOCK_FDS:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    _PATH_LOCKS_GUARD = threading.Lock()
+    _PATH_LOCKS = {}
+    _OPEN_LOCK_FDS_GUARD = threading.Lock()
+    _OPEN_LOCK_FDS = set()
+    _MUTATION_STATES = threading.local()
+
+
+os.register_at_fork(after_in_child=_reset_locks_after_fork)
 
 
 class HistoryStore:
     """Append-only JSONL store of dictations with derived usage stats."""
 
     def __init__(self, path):
-        self.path = Path(path)
+        self.path = Path(path).expanduser().resolve(strict=False)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.lock_path = self.path.with_name(self.path.name + ".lock")
-        self._thread_lock = _thread_lock_for(self.path)
 
     @contextlib.contextmanager
     def _mutation_lock(self):
-        with self._thread_lock:
+        path_key = str(self.path)
+        with _thread_lock_for(self.path):
+            states = _mutation_states()
+            state = states.get(path_key)
+            if state is not None:
+                fd, depth = state
+                states[path_key] = (fd, depth + 1)
+                try:
+                    yield
+                finally:
+                    states[path_key] = (fd, depth)
+                return
+
             fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            _track_lock_fd(fd)
             locked = False
             try:
                 os.fchmod(fd, 0o600)
                 fcntl.flock(fd, fcntl.LOCK_EX)
                 locked = True
+                states[path_key] = (fd, 1)
                 yield
             finally:
-                if locked:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-                os.close(fd)
+                states.pop(path_key, None)
+                try:
+                    if locked:
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+                finally:
+                    try:
+                        os.close(fd)
+                    finally:
+                        _untrack_lock_fd(fd)
 
     def _read(self) -> list[dict]:
         try:
