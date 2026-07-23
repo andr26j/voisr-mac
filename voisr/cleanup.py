@@ -7,21 +7,37 @@ FILLER_RE = re.compile(
 
 PROTECTED_TOKEN_RE = re.compile(
     r"""
-    (?<![a-z0-9._%+-])                                 # URL start boundary
-    (?:https?://|www\.)
-    (?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}
-    (?::\d{1,5})?
-    (?:/[a-z0-9._~/%@+$&'()*=-]*)?
-    (?:\?[a-z0-9._~/%@+$&'()*=-]*)?
-    (?:\#[a-z0-9._~/%@+$&'()*=-]*)?
+    (?P<url>(?<![\w._%+-])(?:https?://|www\.)[^\s]+)  # URL
     | [a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}          # email
     | \b(?:\d{1,3}\.){3}\d{1,3}\b                   # IPv4-shaped token
-    | \b\d{1,2}:\d{2}(?::\d{2})?(?:\s?[ap]\.?m\.?)?(?=\s|$|[,.;:!?])  # time
+    | \b\d{1,2}:\d{2}(?::\d{2})?(?:\s?[ap]\.?m\.?)?(?=\s|$|[,.;:!?\)\]\}'"])  # time
     | \bv?\d+(?:[.,]\d+)+\b                          # decimal/version/grouped number
     | \b(?:[a-z]\.){2,}                               # dotted abbreviation
     """,
     re.IGNORECASE | re.VERBOSE,
 )
+
+
+def _split_url_suffix(token: str) -> tuple[str, str]:
+    opening = {")": "(", "]": "[", "}": "{"}
+    end = len(token)
+    while end:
+        char = token[end - 1]
+        if char in opening and token[:end].count(char) > token[:end].count(opening[char]):
+            end -= 1
+        elif char in "'\"" and token[:end].count(char) % 2:
+            end -= 1
+        else:
+            break
+    return token[:end], token[end:]
+
+
+def _protected_spans(text: str):
+    for match in PROTECTED_TOKEN_RE.finditer(text):
+        token = match.group(0)
+        if match.lastgroup == "url":
+            token, _ = _split_url_suffix(token)
+        yield match.start(), match.start() + len(token), token
 
 
 def _placeholder(text: str, protected: dict[str, str]) -> str:
@@ -35,13 +51,41 @@ def _placeholder(text: str, protected: dict[str, str]) -> str:
 
 def _protect_tokens(text: str) -> tuple[str, dict[str, str]]:
     protected: dict[str, str] = {}
-
-    def replace(match: re.Match[str]) -> str:
+    parts: list[str] = []
+    last = 0
+    for start, end, token in _protected_spans(text):
+        parts.append(text[last:start])
         placeholder = _placeholder(text, protected)
-        protected[placeholder] = match.group(0)
-        return placeholder
+        protected[placeholder] = token
+        parts.append(placeholder)
+        last = end
+    parts.append(text[last:])
+    return "".join(parts), protected
 
-    return PROTECTED_TOKEN_RE.sub(replace, text), protected
+
+def _apply_dictionary(text: str, dictionary: dict[str, str] | None) -> str:
+    out = text
+    for spoken, written in (dictionary or {}).items():
+        # whole-word match (don't rewrite inside longer words); replacement is
+        # a callable so backslashes in `written` stay literal
+        pattern = re.escape(spoken)
+        if spoken[:1].isalnum():
+            pattern = r"\b" + pattern
+        if spoken[-1:].isalnum():
+            pattern = pattern + r"\b"
+        out = re.sub(pattern, lambda m: written, out, flags=re.IGNORECASE)
+    return out
+
+
+def _transform_unprotected_segments(text: str, dictionary: dict[str, str] | None) -> str:
+    parts: list[str] = []
+    last = 0
+    for start, end, token in _protected_spans(text):
+        parts.append(_apply_dictionary(FILLER_RE.sub("", text[last:start]), dictionary))
+        parts.append(token)
+        last = end
+    parts.append(_apply_dictionary(FILLER_RE.sub("", text[last:]), dictionary))
+    return "".join(parts)
 
 
 def _restore_tokens(text: str, protected: dict[str, str]) -> str:
@@ -55,17 +99,8 @@ def clean(text: str, dictionary: dict[str, str] | None = None) -> str:
     apply the user's spoken->written dictionary, capitalize the first letter."""
     if not text.strip():
         return ""
-    out, protected = _protect_tokens(text)
-    out = FILLER_RE.sub("", out)
-    for spoken, written in (dictionary or {}).items():
-        # whole-word match (don't rewrite inside longer words); replacement is
-        # a callable so backslashes in `written` stay literal
-        pattern = re.escape(spoken)
-        if spoken[:1].isalnum():
-            pattern = r"\b" + pattern
-        if spoken[-1:].isalnum():
-            pattern = pattern + r"\b"
-        out = re.sub(pattern, lambda m: written, out, flags=re.IGNORECASE)
+    out = _transform_unprotected_segments(text, dictionary)
+    out, protected = _protect_tokens(out)
     out = re.sub(r"\s+", " ", out).strip()
     out = re.sub(r"\s+([,.;:!?])", r"\1", out)
     out = re.sub(r"^[,.;:\s]+", "", out)

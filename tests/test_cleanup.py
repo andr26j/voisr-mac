@@ -84,12 +84,12 @@ def test_spaces_punctuation_adjacent_to_structured_tokens():
     assert clean("contact a@b.com,now") == "Contact a@b.com, now"
 
 
-def test_url_does_not_swallow_adjacent_comma_and_prose():
-    assert clean("visit https://example.com,now") == "Visit https://example.com, now"
+def test_url_preserves_adjacent_comma_and_prose_as_uri_text():
+    assert clean("visit https://example.com,now") == "Visit https://example.com,now"
 
 
-def test_url_does_not_swallow_terminal_exclamation_and_prose():
-    assert clean("visit https://example.com!now") == "Visit https://example.com! now"
+def test_url_preserves_adjacent_exclamation_and_prose_as_uri_text():
+    assert clean("visit https://example.com!now") == "Visit https://example.com!now"
 
 
 def test_non_url_www_substring_is_not_protected():
@@ -102,3 +102,55 @@ def test_time_preserves_final_period_in_meridiem():
 
 def test_literal_private_use_character_does_not_collide_with_placeholder():
     assert clean("\uE000 https://example.com") == "\uE000 https://example.com"
+
+
+def test_preserves_nested_redirect_query_and_fragment():
+    raw = "open https://example.com/redirect?next=https://target.test/a:b,c;d?x=1#inner#outer"
+    assert clean(raw) == "Open https://example.com/redirect?next=https://target.test/a:b,c;d?x=1#inner#outer"
+
+
+def test_preserves_ipv4_url_with_port_path_query_and_fragment():
+    raw = "open http://127.0.0.1:8000/v1.2?x=3.14#now"
+    assert clean(raw) == "Open http://127.0.0.1:8000/v1.2?x=3.14#now"
+
+
+def test_preserves_localhost_url_with_port():
+    assert clean("open http://localhost:3000/a:b") == "Open http://localhost:3000/a:b"
+
+
+def test_preserves_uri_commas_colons_and_semicolons():
+    raw = "open https://example.com/a:b,c;d?x=one,two;three#now"
+    assert clean(raw) == "Open https://example.com/a:b,c;d?x=one,two;three#now"
+
+
+def test_unicode_embedded_www_substring_is_not_protected():
+    assert clean("say éwww.example.com now") == "Say éwww. example. com now"
+
+
+def test_preserves_urls_wrapped_in_parentheses_and_quotes():
+    raw = 'open (https://example.com/a:b) and "https://example.com/q"'
+    assert clean(raw) == 'Open (https://example.com/a:b) and "https://example.com/q"'
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("wait 10:30 a.m.)", "Wait 10:30 a.m.)"),
+        ('wait 10:30 p.m."', 'Wait 10:30 p.m."'),
+    ],
+)
+def test_time_preserves_meridiem_period_before_closing_delimiter(raw, expected):
+    assert clean(raw) == expected
+
+
+def test_dictionary_cannot_rewrite_inserted_placeholder_marker():
+    marker = "\uE000\uE001\uE002"
+    raw = "\uE000 see https://example.com"
+    assert clean(raw, {marker: "changed"}) == raw
+
+
+def test_dictionary_phrases_apply_around_multiple_protected_spans():
+    raw = "ask trade mate at a@trade.com then visit https://trade.com trade mate"
+    assert clean(raw, {"trade mate": "TradeMate"}) == (
+        "Ask TradeMate at a@trade.com then visit https://trade.com TradeMate"
+    )
