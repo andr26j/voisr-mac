@@ -25,9 +25,26 @@ def _thread_lock_for(path: Path) -> threading.RLock:
 
 
 def _finite_number(value) -> bool:
-    return (isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and math.isfinite(value))
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _ensure_private_parent(path: Path) -> None:
+    missing = []
+    parent = path.parent
+    while not parent.exists():
+        missing.append(parent)
+        parent = parent.parent
+    for directory in reversed(missing):
+        try:
+            directory.mkdir(mode=0o700)
+        except FileExistsError:
+            continue
+        os.chmod(directory, 0o700)
 
 
 def _valid_record(item) -> bool:
@@ -98,10 +115,7 @@ class HistoryStore:
     def __init__(self, path):
         self.path = Path(path)
         self._path = self.path.expanduser().resolve(strict=False)
-        parent_existed = self._path.parent.exists()
-        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if not parent_existed:
-            os.chmod(self._path.parent, 0o700)
+        _ensure_private_parent(self._path)
         self.lock_path = self._path.with_name(self._path.name + ".lock")
         if self._path.exists():
             os.chmod(self._path, 0o600)
@@ -228,7 +242,12 @@ class HistoryStore:
             return {"total_words": 0, "dictations": 0, "avg_wpm": 0, "streak_days": 0}
         total_words = sum(i["words"] for i in items)
         total_time = sum(i["duration_s"] for i in items) or 1e-9
-        days = {date.fromtimestamp(i["ts"]) for i in items}
+        days = set()
+        for item in items:
+            try:
+                days.add(date.fromtimestamp(item["ts"]))
+            except (OverflowError, OSError, ValueError):
+                continue
         streak, d = 0, date.today()
         while d in days:
             streak += 1

@@ -234,6 +234,89 @@ def test_store_keeps_existing_parent_mode_while_tightening_private_files(tmp_pat
     assert stat.S_IMODE(lock_path.stat().st_mode) == 0o600
 
 
+def test_store_creates_each_missing_parent_with_private_mode(tmp_path):
+    path = tmp_path / "missing" / "nested" / "parent" / "h.jsonl"
+    old_umask = os.umask(0o022)
+    try:
+        HistoryStore(path)
+    finally:
+        os.umask(old_umask)
+
+    for directory in (tmp_path / "missing", tmp_path / "missing" / "nested",
+                      path.parent):
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+
+
+def test_store_does_not_change_existing_symlink_parent_target_mode(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    target.chmod(0o755)
+    alias = tmp_path / "alias"
+    alias.symlink_to(target, target_is_directory=True)
+
+    HistoryStore(alias / "new-parent" / "h.jsonl")
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o755
+    assert stat.S_IMODE((target / "new-parent").stat().st_mode) == 0o700
+
+
+def test_huge_integer_timestamp_is_ignored_without_bricking_history_operations(
+        tmp_path):
+    path = tmp_path / "h.jsonl"
+    valid = {
+        "id": "valid-id",
+        "ts": 1_700_000_000.0,
+        "text": "valid record",
+        "words": 2,
+        "duration_s": 1.0,
+    }
+    huge_timestamp = {**valid, "id": "huge-id", "ts": 10 ** 1000}
+    path.write_text(
+        "".join(json.dumps(item) + "\n" for item in (valid, huge_timestamp)),
+        encoding="utf-8",
+    )
+    store = HistoryStore(path)
+
+    assert [item["id"] for item in store.list()] == ["valid-id"]
+    assert store.stats()["dictations"] == 1
+    store.delete("valid-id")
+    added = store.add("after huge timestamp", 1.0)
+    store.delete(added["id"])
+
+    assert store.list() == []
+
+
+def test_unrepresentable_timestamp_stays_in_history_but_not_streak_days(tmp_path):
+    path = tmp_path / "h.jsonl"
+    valid = {
+        "id": "valid-id",
+        "ts": 1_700_000_000.0,
+        "text": "valid record",
+        "words": 2,
+        "duration_s": 1.0,
+    }
+    distant = {**valid, "id": "distant-id", "ts": 1e308,
+               "text": "distant record", "words": 3}
+    path.write_text(
+        "".join(json.dumps(item) + "\n" for item in (valid, distant)),
+        encoding="utf-8",
+    )
+    store = HistoryStore(path)
+
+    assert [item["id"] for item in store.list()] == ["distant-id", "valid-id"]
+    assert store.stats() == {
+        "total_words": 5,
+        "dictations": 2,
+        "avg_wpm": 150,
+        "streak_days": 0,
+    }
+    store.delete("valid-id")
+    added = store.add("after distant timestamp", 1.0)
+    store.delete(added["id"])
+
+    assert [item["id"] for item in store.list()] == ["distant-id"]
+
+
 def test_stats_empty(tmp_path):
     s = HistoryStore(tmp_path / "h.jsonl").stats()
     assert s == {"total_words": 0, "dictations": 0, "avg_wpm": 0, "streak_days": 0}
