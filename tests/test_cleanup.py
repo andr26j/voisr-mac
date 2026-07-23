@@ -205,3 +205,18 @@ def test_url_with_internal_apostrophe_without_opening_wrapper_stays_exact():
 
 def test_url_at_start_has_no_opening_wrapper_context():
     assert clean("https://example.com") == "https://example.com"
+
+
+def test_single_quote_wrapper_closes_after_internal_apostrophe():
+    raw = "'https://example.com/can't'now"
+    assert clean(raw, {"t": "T", "now": "later"}) == "'https://example.com/can't'later"
+
+
+def test_double_quote_wrapper_closes_after_internal_quote_data():
+    raw = '"https://example.com/a"b"now'
+    assert clean(raw, {"b": "B", "now": "later"}) == '"https://example.com/a"b"later'
+
+
+def test_unmatched_opening_quote_keeps_the_maximal_url_candidate():
+    raw = '"https://example.com/pathnow'
+    assert clean(raw, {"now": "later"}) == raw

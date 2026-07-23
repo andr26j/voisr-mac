@@ -21,6 +21,7 @@ PROTECTED_TOKEN_RE = re.compile(
 def _split_url_suffix(token: str, opening_quote: str | None = None) -> tuple[str, str]:
     opening = {"(": ")", "[": "]", "{": "}"}
     closing = {value: key for key, value in opening.items()}
+    closing_quote_index = token.rfind(opening_quote) if opening_quote else -1
     stack: list[str] = []
     for index, char in enumerate(token):
         if char in opening:
@@ -30,7 +31,7 @@ def _split_url_suffix(token: str, opening_quote: str | None = None) -> tuple[str
                 stack.pop()
             else:
                 return token[:index], token[index:]
-        elif char == opening_quote:
+        elif index == closing_quote_index:
             return token[:index], token[index:]
         elif char in "'\"":
             suffix = token[index + 1 :]
