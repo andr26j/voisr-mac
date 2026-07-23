@@ -1,6 +1,7 @@
 import contextlib
 import fcntl
 import json
+import math
 import os
 import tempfile
 import threading
@@ -21,6 +22,27 @@ def _thread_lock_for(path: Path) -> threading.RLock:
     key = str(path.expanduser().resolve(strict=False))
     with _PATH_LOCKS_GUARD:
         return _PATH_LOCKS.setdefault(key, threading.RLock())
+
+
+def _finite_number(value) -> bool:
+    return (isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value))
+
+
+def _valid_record(item) -> bool:
+    return (
+        isinstance(item, dict)
+        and isinstance(item.get("id"), str)
+        and bool(item["id"])
+        and _finite_number(item.get("ts"))
+        and isinstance(item.get("text"), str)
+        and isinstance(item.get("words"), int)
+        and not isinstance(item["words"], bool)
+        and item["words"] >= 0
+        and _finite_number(item.get("duration_s"))
+        and item["duration_s"] >= 0
+    )
 
 
 def _mutation_states() -> dict[str, tuple[int, int]]:
@@ -76,8 +98,18 @@ class HistoryStore:
     def __init__(self, path):
         self.path = Path(path)
         self._path = self.path.expanduser().resolve(strict=False)
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        parent_existed = self._path.parent.exists()
+        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not parent_existed:
+            os.chmod(self._path.parent, 0o700)
         self.lock_path = self._path.with_name(self._path.name + ".lock")
+        if self._path.exists():
+            os.chmod(self._path, 0o600)
+        fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
 
     @contextlib.contextmanager
     def _mutation_lock(self):
@@ -126,9 +158,11 @@ class HistoryStore:
             if not line.strip():
                 continue
             try:
-                items.append(json.loads(line))
+                item = json.loads(line)
             except json.JSONDecodeError:
                 continue  # a torn line (crash mid-write) must not brick the store
+            if _valid_record(item):
+                items.append(item)
         return items
 
     def _write_atomic(self, items: list[dict]) -> None:

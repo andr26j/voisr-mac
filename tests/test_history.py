@@ -2,6 +2,7 @@ import contextlib
 import json
 import multiprocessing
 import os
+import stat
 import threading
 from pathlib import Path
 
@@ -91,6 +92,146 @@ def test_corrupt_line_is_skipped(tmp_path):
         f.write('{"torn line\n')  # crash mid-write
     h.add("after", 1.0)
     assert [i["text"] for i in h.list()] == ["after", "good"]
+
+
+def test_wrong_shape_legacy_values_are_ignored_and_valid_records_round_trip(tmp_path):
+    path = tmp_path / "h.jsonl"
+    oldest = {
+        "id": "oldest-id",
+        "ts": 1_700_000_000.0,
+        "text": "oldest dictation",
+        "words": 2,
+        "duration_s": 1.5,
+    }
+    legacy = {
+        "id": "legacy-id",
+        "ts": 1_700_000_001.0,
+        "text": "legacy dictation",
+        "words": 2,
+        "duration_s": 1.5,
+    }
+    invalid_values = [
+        [],
+        None,
+        "not a record",
+        {"id": "missing-fields"},
+        {"id": "bad-ts", "ts": "now", "text": "text", "words": 1,
+         "duration_s": 1.0},
+        {"id": "bad-words", "ts": 1.0, "text": "text", "words": True,
+         "duration_s": 1.0},
+        {"id": "bad-duration", "ts": 1.0, "text": "text", "words": 1,
+         "duration_s": -1.0},
+    ]
+    path.write_text(
+        "".join(json.dumps(value) + "\n" for value in [oldest, *invalid_values, legacy]),
+        encoding="utf-8",
+    )
+    store = HistoryStore(path)
+
+    assert [item["id"] for item in store.list()] == ["legacy-id", "oldest-id"]
+    assert store.stats()["total_words"] == 4
+    store.delete("not-present")
+    added = store.add("new dictation", 1.0)
+    store.delete(added["id"])
+
+    assert path.read_text(encoding="utf-8") == (
+        json.dumps(oldest) + "\n" + json.dumps(legacy) + "\n"
+    )
+
+
+def test_replace_failure_preserves_history_bytes_and_removes_temp_file(tmp_path,
+                                                                         monkeypatch):
+    path = tmp_path / "h.jsonl"
+    store = HistoryStore(path)
+    store.add("committed", 1.0)
+    before = path.read_bytes()
+
+    def fail_replace(*args):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(history_module.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        store.add("not committed", 1.0)
+
+    assert path.read_bytes() == before
+    assert list(tmp_path.glob(".h.jsonl.*.tmp")) == []
+
+
+def test_pre_replace_fsync_failure_preserves_history_bytes_and_removes_temp_file(
+        tmp_path, monkeypatch):
+    path = tmp_path / "h.jsonl"
+    store = HistoryStore(path)
+    store.add("committed", 1.0)
+    before = path.read_bytes()
+    original_fsync = history_module.os.fsync
+    calls = 0
+
+    def fail_first_fsync(fd):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("temp sync failed")
+        original_fsync(fd)
+
+    monkeypatch.setattr(history_module.os, "fsync", fail_first_fsync)
+
+    with pytest.raises(OSError, match="temp sync failed"):
+        store.add("not committed", 1.0)
+
+    assert path.read_bytes() == before
+    assert list(tmp_path.glob(".h.jsonl.*.tmp")) == []
+
+
+def test_post_replace_directory_fsync_error_is_visible_to_caller(tmp_path,
+                                                                   monkeypatch):
+    path = tmp_path / "h.jsonl"
+    store = HistoryStore(path)
+    original_fsync = history_module.os.fsync
+    calls = 0
+
+    def fail_directory_fsync(fd):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("directory sync failed")
+        original_fsync(fd)
+
+    monkeypatch.setattr(history_module.os, "fsync", fail_directory_fsync)
+
+    with pytest.raises(OSError, match="directory sync failed"):
+        store.add("replaced but not durable", 1.0)
+
+    assert [item["text"] for item in store.list()] == ["replaced but not durable"]
+
+
+def test_store_creates_private_parent_lock_and_history_files(tmp_path):
+    path = tmp_path / "owned" / "h.jsonl"
+
+    store = HistoryStore(path)
+
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(store.lock_path.stat().st_mode) == 0o600
+    store.add("private", 1.0)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_store_keeps_existing_parent_mode_while_tightening_private_files(tmp_path):
+    parent = tmp_path / "existing"
+    parent.mkdir()
+    parent.chmod(0o755)
+    path = parent / "h.jsonl"
+    path.write_text("", encoding="utf-8")
+    path.chmod(0o644)
+    lock_path = parent / "h.jsonl.lock"
+    lock_path.write_text("", encoding="utf-8")
+    lock_path.chmod(0o644)
+
+    HistoryStore(path)
+
+    assert stat.S_IMODE(parent.stat().st_mode) == 0o755
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(lock_path.stat().st_mode) == 0o600
 
 
 def test_stats_empty(tmp_path):
