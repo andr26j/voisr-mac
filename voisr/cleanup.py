@@ -18,7 +18,7 @@ PROTECTED_TOKEN_RE = re.compile(
 )
 
 
-def _split_url_suffix(token: str) -> tuple[str, str]:
+def _split_url_suffix(token: str, opening_quote: str | None = None) -> tuple[str, str]:
     opening = {"(": ")", "[": "]", "{": "}"}
     closing = {value: key for key, value in opening.items()}
     stack: list[str] = []
@@ -30,6 +30,8 @@ def _split_url_suffix(token: str) -> tuple[str, str]:
                 stack.pop()
             else:
                 return token[:index], token[index:]
+        elif char == opening_quote:
+            return token[:index], token[index:]
         elif char in "'\"":
             suffix = token[index + 1 :]
             if token.count(char) % 2 and (not suffix or suffix[0] in ",.;:!?)]}"):
@@ -41,7 +43,10 @@ def _protected_spans(text: str):
     for match in PROTECTED_TOKEN_RE.finditer(text):
         token = match.group(0)
         if match.lastgroup == "url":
-            token, _ = _split_url_suffix(token)
+            opening_quote = text[match.start() - 1] if match.start() else None
+            token, _ = _split_url_suffix(
+                token, opening_quote if opening_quote and opening_quote in "'\"" else None
+            )
         yield match.start(), match.start() + len(token), token
 
 

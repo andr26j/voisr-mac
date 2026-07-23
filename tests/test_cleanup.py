@@ -188,3 +188,20 @@ def test_closing_quote_and_following_text_are_unprotected(raw, expected):
 
 def test_url_keeps_balanced_parentheses_and_maximal_uri_punctuation():
     assert clean("open https://example.com/a(b),now") == "Open https://example.com/a(b),now"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ['"https://example.com"now', "'https://example.com'now"],
+)
+def test_matching_original_quote_leaves_following_prose_unprotected(raw):
+    expected = raw.replace("now", "later")
+    assert clean(raw, {"now": "later"}) == expected
+
+
+def test_url_with_internal_apostrophe_without_opening_wrapper_stays_exact():
+    assert clean("open https://example.com/can't") == "Open https://example.com/can't"
+
+
+def test_url_at_start_has_no_opening_wrapper_context():
+    assert clean("https://example.com") == "https://example.com"
