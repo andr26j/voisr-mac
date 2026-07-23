@@ -87,10 +87,44 @@ def _restore_after_failure(adapter, snapshot, owner_count, error, *,
     raise error
 
 
+def _restore_after_ownership_check_failure(adapter, snapshot, owner_count,
+                                           error):
+    try:
+        adapter.restore_if_unchanged(snapshot, owner_count)
+    except BaseException as restore_error:
+        if not isinstance(error, Exception):
+            raise error from restore_error
+        if not isinstance(restore_error, Exception):
+            raise restore_error from error
+        raise ClipboardPreservationError(
+            "clipboard ownership check and restore failed") from error
+    if isinstance(error, ClipboardPreservationError):
+        raise error
+    if isinstance(error, Exception):
+        raise ClipboardPreservationError(
+            "clipboard ownership check failed") from error
+    raise error
+
+
 def _paste_with_adapter(text, *, adapter, post_cmd_v,
                         applescript_cmd_v, sleeper) -> bool:
     snapshot = adapter.snapshot()
     owner_count = adapter.write_text_if_unchanged(text, snapshot)
+    try:
+        owned = adapter.is_owned(owner_count)
+    except BaseException as error:
+        _restore_after_ownership_check_failure(
+            adapter, snapshot, owner_count, error)
+    if not owned:
+        try:
+            adapter.restore_if_unchanged(snapshot, owner_count)
+        except Exception as error:
+            raise PasteDeliveryError(
+                f"clipboard ownership lost and restore failed: {error}",
+                pasted=False,
+            ) from error
+        raise PasteDeliveryError(
+            "clipboard ownership lost before paste", pasted=False)
     try:
         pasted = post_cmd_v() or applescript_cmd_v()
     except BaseException as error:
@@ -133,7 +167,10 @@ def paste_at_cursor(text: str, restore_clipboard: bool = True) -> bool:
     """
     if not restore_clipboard:
         set_clipboard(text)
-        return _post_cmd_v() or _applescript_cmd_v()
+        try:
+            return _post_cmd_v() or _applescript_cmd_v()
+        except Exception:
+            return False
     return _paste_with_adapter(
         text,
         adapter=AppKitPasteboard(),

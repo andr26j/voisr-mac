@@ -67,6 +67,8 @@ class FakeAdapter:
         self.calls = []
         self.snapshot_error = None
         self.restore_error = None
+        self.owned = True
+        self.owned_error = None
 
     def snapshot(self):
         self.calls.append("snapshot")
@@ -84,6 +86,12 @@ class FakeAdapter:
             raise self.restore_error
         return self.restore_result
 
+    def is_owned(self, owner_count):
+        self.calls.append(("is_owned", owner_count))
+        if self.owned_error:
+            raise self.owned_error
+        return self.owned
+
 
 def test_successful_paste_restores_after_grace():
     adapter = FakeAdapter()
@@ -100,6 +108,56 @@ def test_successful_paste_restores_after_grace():
     assert slept == [inject.PASTE_GRACE_S]
     assert adapter.calls[-1] == (
         "restore", adapter.snapshot_value, adapter.owner_count)
+
+
+def test_lost_ownership_before_cmd_v_never_posts_or_restores_external_clipboard():
+    adapter = FakeAdapter()
+    adapter.owned = False
+    posted = []
+
+    with pytest.raises(PasteDeliveryError) as caught:
+        inject._paste_with_adapter(
+            "hello", adapter=adapter, post_cmd_v=lambda: posted.append(True),
+            applescript_cmd_v=lambda: False, sleeper=lambda delay: None,
+        )
+
+    assert caught.value.pasted is False
+    assert caught.value.fallback_safe is False
+    assert posted == []
+    assert adapter.calls[-1][0] == "restore"
+
+
+def test_ownership_check_failure_repairs_without_posting():
+    adapter = FakeAdapter()
+    adapter.owned_error = ClipboardPreservationError("generation unavailable")
+    posted = []
+
+    with pytest.raises(ClipboardPreservationError):
+        inject._paste_with_adapter(
+            "hello", adapter=adapter, post_cmd_v=lambda: posted.append(True),
+            applescript_cmd_v=lambda: False, sleeper=lambda delay: None,
+        )
+
+    assert posted == []
+    assert adapter.calls[-1][0] == "restore"
+
+
+@pytest.mark.parametrize("repair_error", [KeyboardInterrupt(), SystemExit()])
+def test_ownership_cleanup_process_control_outranks_original_error(
+        repair_error):
+    adapter = FakeAdapter()
+    original = OSError("generation unavailable")
+    adapter.owned_error = original
+    adapter.restore_error = repair_error
+
+    with pytest.raises(type(repair_error)) as caught:
+        inject._paste_with_adapter(
+            "hello", adapter=adapter, post_cmd_v=lambda: True,
+            applescript_cmd_v=lambda: False, sleeper=lambda delay: None,
+        )
+
+    assert caught.value is repair_error
+    assert caught.value.__cause__ is original
 
 
 def test_external_change_skips_restore_without_failing_paste():
@@ -162,6 +220,18 @@ def test_restore_disabled_leaves_text_for_manual_paste(monkeypatch):
     monkeypatch.setattr(inject, "set_clipboard", copied.append)
     monkeypatch.setattr(inject, "_post_cmd_v", lambda: False)
     monkeypatch.setattr(inject, "_applescript_cmd_v", lambda: False)
+
+    assert inject.paste_at_cursor("manual", restore_clipboard=False) is False
+    assert copied == ["manual"]
+
+
+def test_restore_disabled_command_error_leaves_text_for_manual_paste(monkeypatch):
+    copied = []
+    monkeypatch.setattr(inject, "set_clipboard", copied.append)
+    monkeypatch.setattr(
+        inject, "_post_cmd_v",
+        lambda: (_ for _ in ()).throw(OSError("accessibility unavailable")),
+    )
 
     assert inject.paste_at_cursor("manual", restore_clipboard=False) is False
     assert copied == ["manual"]

@@ -80,9 +80,17 @@ class FakePasteboard:
         self.clear_calls = 0
         self.write_calls = 0
         self.write_outcomes = []
+        self.write_error = None
         self.after_clear = None
+        self.after_write = None
+        self.after_failed_write = None
+        self.change_count_errors = []
 
     def changeCount(self):
+        if self.change_count_errors:
+            error = self.change_count_errors.pop(0)
+            if error is not None:
+                raise error
         return self.count
 
     def pasteboardItems(self):
@@ -99,10 +107,16 @@ class FakePasteboard:
 
     def writeObjects_(self, items):
         self.write_calls += 1
+        if self.write_error is not None:
+            raise self.write_error
         if self.write_outcomes and not self.write_outcomes.pop(0):
+            if self.after_failed_write is not None:
+                self.after_failed_write()
             return False
         self.items = list(items)
         self.count += 1
+        if self.after_write is not None:
+            self.after_write()
         return True
 
 
@@ -212,6 +226,37 @@ def test_constructor_rejects_unavailable_general_pasteboard(monkeypatch):
         AppKitPasteboard()
 
 
+def test_constructor_translates_general_pasteboard_failure(monkeypatch):
+    class FakeNSPasteboard:
+        @classmethod
+        def generalPasteboard(cls):
+            raise OSError("service unavailable")
+
+    monkeypatch.setitem(sys.modules, "AppKit", SimpleNamespace(
+        NSPasteboard=FakeNSPasteboard,
+        NSPasteboardItem=FakeItemClass,
+        NSPasteboardTypeString="public.utf8-plain-text",
+    ))
+    monkeypatch.setitem(sys.modules, "Foundation", SimpleNamespace(
+        NSData=FakeNSData,
+    ))
+
+    with pytest.raises(ClipboardPreservationError) as caught:
+        AppKitPasteboard()
+
+    assert isinstance(caught.value.__cause__, OSError)
+
+
+def test_snapshot_translates_native_selector_failure():
+    board = FakePasteboard()
+    board.pasteboardItems = lambda: (_ for _ in ()).throw(OSError("unavailable"))
+
+    with pytest.raises(ClipboardPreservationError) as caught:
+        make_adapter(board).snapshot()
+
+    assert isinstance(caught.value.__cause__, OSError)
+
+
 def rich_snapshot():
     return PasteboardSnapshot(10, (
         PasteboardItemSnapshot((
@@ -314,6 +359,50 @@ def test_owned_write_and_restore_round_trip_all_raw_items():
     )
 
 
+def test_write_rejects_external_generation_after_successful_write():
+    board = FakePasteboard()
+    snapshot = rich_snapshot()
+
+    def external_write():
+        board.items = [FakeItem([("public.utf8-plain-text", b"external")])]
+        board.count += 1
+
+    board.after_write = external_write
+
+    with pytest.raises(ClipboardPreservationError, match="ownership"):
+        make_adapter(board).write_text_if_unchanged("dictation", snapshot)
+
+    assert board.items[0].payloads["public.utf8-plain-text"] == b"external"
+
+
+def test_final_generation_read_failure_repairs_with_expected_owner_token():
+    board = FakePasteboard()
+    snapshot = rich_snapshot()
+    board.after_write = lambda: board.change_count_errors.append(
+        OSError("generation unavailable"))
+
+    with pytest.raises(ClipboardPreservationError) as caught:
+        make_adapter(board).write_text_if_unchanged("dictation", snapshot)
+
+    assert isinstance(caught.value.__cause__, OSError)
+    assert snapshot_items(board) == tuple(
+        tuple(item.payloads) for item in snapshot.items
+    )
+
+
+@pytest.mark.parametrize("process_error", [KeyboardInterrupt(), SystemExit()])
+def test_process_control_during_write_repairs_then_reraises(process_error):
+    board = FakePasteboard()
+    snapshot = rich_snapshot()
+    board.write_error = process_error
+
+    with pytest.raises(type(process_error)) as caught:
+        make_adapter(board).write_text_if_unchanged("dictation", snapshot)
+
+    assert caught.value is process_error
+    assert board.write_calls >= 2
+
+
 def test_restore_skips_newer_external_clipboard():
     board = FakePasteboard()
     adapter = make_adapter(board)
@@ -324,6 +413,49 @@ def test_restore_skips_newer_external_clipboard():
 
     assert adapter.restore_if_unchanged(snapshot, owner_count) is False
     assert board.items[0].payloads["public.utf8-plain-text"] == b"newer"
+
+
+def test_failed_restoration_write_attempts_conditional_repair():
+    board = FakePasteboard()
+    board.write_outcomes = [False, True]
+    snapshot = rich_snapshot()
+
+    with pytest.raises(ClipboardPreservationError, match="restoration"):
+        make_adapter(board).restore_if_unchanged(snapshot, 10)
+
+    assert board.write_calls == 2
+    assert snapshot_items(board) == tuple(
+        tuple(item.payloads) for item in snapshot.items
+    )
+
+
+@pytest.mark.parametrize("repair_error", [KeyboardInterrupt(), SystemExit()])
+def test_restoration_repair_process_control_outranks_original_error(repair_error):
+    board = FakePasteboard()
+    board.write_outcomes = [False]
+    board.after_failed_write = lambda: setattr(board, "write_error", repair_error)
+
+    with pytest.raises(type(repair_error)) as caught:
+        make_adapter(board).restore_if_unchanged(rich_snapshot(), 10)
+
+    assert caught.value is repair_error
+    assert isinstance(caught.value.__cause__, ClipboardPreservationError)
+
+
+@pytest.mark.parametrize("repair_error", [KeyboardInterrupt(), SystemExit()])
+def test_temporary_write_repair_process_control_outranks_original_error(
+        repair_error):
+    board = FakePasteboard()
+    adapter = make_adapter(board)
+    original = OSError("temporary write unavailable")
+    adapter._restore_owned = lambda snapshot, count: (_ for _ in ()).throw(
+        repair_error)
+
+    with pytest.raises(type(repair_error)) as caught:
+        adapter._repair_after_clear(rich_snapshot(), 11, original)
+
+    assert caught.value is repair_error
+    assert caught.value.__cause__ is original
 
 
 def test_failed_temporary_write_repairs_only_while_still_owned():
