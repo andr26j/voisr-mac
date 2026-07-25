@@ -172,50 +172,6 @@ window.Voisr = window.Voisr || {};
     renderColorWheel();
   }
 
-  /* ---------- bind, once (elements exist as soon as this script parses,
-     since it loads after index.html's body) ---------- */
-
-  document.getElementById("appearance-select").addEventListener("change", async (e) => {
-    const prev = appliedAppearance;
-    const next = e.target.value;
-    const res = await V.api().set_appearance(next);
-    if (res.error) { e.target.value = prev; return V.ui.toast(res.error); }
-    appliedAppearance = next;
-    V.applyAppearance(next);
-    V.ui.toast(`Theme: ${next}`);
-  });
-
-  document.getElementById("model-select").addEventListener("change", async (e) => {
-    await V.api().set_config({ model: e.target.value });
-    V.ui.toast(`Model: ${e.target.value} — applies from your next dictation`);
-  });
-
-  document.getElementById("launch-toggle").addEventListener("change", async (e) => {
-    const res = await V.api().set_launch_at_login(e.target.checked);
-    if (res.error) { e.target.checked = !e.target.checked; return V.ui.toast(res.error); }
-    V.ui.toast(e.target.checked ? "Voisr will start at login" : "Launch at login off");
-  });
-
-  document.getElementById("color-open").addEventListener("click", openColorPopover);
-
-  /* click-outside / Escape dismissal for the colour popover -- registered
-     once here (module load), not inside openColorPopover, so repeated opens
-     never stack extra listeners. The click listener bails out early on any
-     click still inside the popover or on the swatch button that opened it,
-     so the very click that opens the popover (which bubbles to document
-     right after) can never immediately close it again. Mirrors the
-     scrim/Escape pattern in palette.js. */
-  document.addEventListener("click", (e) => {
-    const pop = document.getElementById("color-popover");
-    if (pop.hidden) return;
-    if (pop.contains(e.target) || e.target.closest("#color-open")) return;
-    closeColorPopover();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape") return;
-    if (!document.getElementById("color-popover").hidden) closeColorPopover();
-  });
-
   /* destructive and irreversible, so it keeps a confirmation -- an in-app
      arm/disarm one, never the browser's native dialog. The disarm timer id
      is tracked (like ui.js's toastTimer) so it can always be cleared --
@@ -232,29 +188,82 @@ window.Voisr = window.Voisr || {};
     btn.textContent = "Clear…";
   }
 
-  document.getElementById("clear-history").addEventListener("click", async () => {
-    const btn = document.getElementById("clear-history");
-    if (btn.dataset.armed !== "1") {
-      clearTimeout(clearHistoryDisarmTimer);
-      btn.dataset.armed = "1";
-      btn.classList.add("armed");
-      btn.textContent = "Click again to erase everything";
-      clearHistoryArmedAt = Date.now();
-      clearHistoryDisarmTimer = setTimeout(() => disarmClearHistory(btn), 4000);
-      return;
-    }
-    // two click events landing in quick succession -- an accidental
-    // double-click, or a stuck key/trackpad -- both arrive before any async
-    // gap, so without a minimum dwell the second one reads as deliberate
-    // confirmation. This is the app's only irreversible action; require the
-    // confirm click to land at least ~600ms after arming.
-    if (Date.now() - clearHistoryArmedAt < 600) return;
-    disarmClearHistory(btn);
-    const res = await V.api().clear_history();
-    if (res.error) return V.ui.toast(res.error);
-    V.ui.toast(`History cleared — ${res.removed} removed`);
-  });
+  /* ---------- bind, once ----------
+
+     Called by main.js's init(), exactly like home/history/dictionary's
+     init helpers and palette.init(). Everything below used to run at
+     module-parse time; that worked (the script loads after index.html's
+     body, so the elements exist) but made this the one view a reader had
+     to learn a second convention for -- and made the module impossible to
+     load outside a browser. Nothing here may be called twice: the
+     document-level listeners in particular would stack. */
+
+  function init() {
+    document.getElementById("appearance-select").addEventListener("change", async (e) => {
+      const prev = appliedAppearance;
+      const next = e.target.value;
+      const res = await V.api().set_appearance(next);
+      if (res.error) { e.target.value = prev; return V.ui.toast(res.error); }
+      appliedAppearance = next;
+      V.applyAppearance(next);
+      V.ui.toast(`Theme: ${next}`);
+    });
+
+    document.getElementById("model-select").addEventListener("change", async (e) => {
+      await V.api().set_config({ model: e.target.value });
+      V.ui.toast(`Model: ${e.target.value} — applies from your next dictation`);
+    });
+
+    document.getElementById("launch-toggle").addEventListener("change", async (e) => {
+      const res = await V.api().set_launch_at_login(e.target.checked);
+      if (res.error) { e.target.checked = !e.target.checked; return V.ui.toast(res.error); }
+      V.ui.toast(e.target.checked ? "Voisr will start at login" : "Launch at login off");
+    });
+
+    document.getElementById("color-open").addEventListener("click", openColorPopover);
+
+    /* click-outside / Escape dismissal for the colour popover -- registered
+       once here (init, called once), not inside openColorPopover, so repeated
+       opens never stack extra listeners. The click listener bails out early
+       on any click still inside the popover or on the swatch button that
+       opened it, so the very click that opens the popover (which bubbles to
+       document right after) can never immediately close it again. Mirrors the
+       scrim/Escape pattern in palette.js. */
+    document.addEventListener("click", (e) => {
+      const pop = document.getElementById("color-popover");
+      if (pop.hidden) return;
+      if (pop.contains(e.target) || e.target.closest("#color-open")) return;
+      closeColorPopover();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      if (!document.getElementById("color-popover").hidden) closeColorPopover();
+    });
+
+    document.getElementById("clear-history").addEventListener("click", async () => {
+      const btn = document.getElementById("clear-history");
+      if (btn.dataset.armed !== "1") {
+        clearTimeout(clearHistoryDisarmTimer);
+        btn.dataset.armed = "1";
+        btn.classList.add("armed");
+        btn.textContent = "Click again to erase everything";
+        clearHistoryArmedAt = Date.now();
+        clearHistoryDisarmTimer = setTimeout(() => disarmClearHistory(btn), 4000);
+        return;
+      }
+      // two click events landing in quick succession -- an accidental
+      // double-click, or a stuck key/trackpad -- both arrive before any async
+      // gap, so without a minimum dwell the second one reads as deliberate
+      // confirmation. This is the app's only irreversible action; require the
+      // confirm click to land at least ~600ms after arming.
+      if (Date.now() - clearHistoryArmedAt < 600) return;
+      disarmClearHistory(btn);
+      const res = await V.api().clear_history();
+      if (res.error) return V.ui.toast(res.error);
+      V.ui.toast(`History cleared — ${res.removed} removed`);
+    });
+  }
 
   V.views = V.views || {};
-  V.views.settings = { render, renderThemes, renderColorWheel, initColorWheel, openColorPopover };
+  V.views.settings = { init, render, renderThemes, renderColorWheel, initColorWheel, openColorPopover };
 })(window.Voisr);

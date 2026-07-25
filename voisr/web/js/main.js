@@ -120,6 +120,7 @@ window.Voisr = window.Voisr || {};
     });
     V.views.history.initKeys();
     V.views.dictionary.initSearch();
+    V.views.settings.init();
     V.palette.init();
 
     const cfg = await V.api().get_config();
