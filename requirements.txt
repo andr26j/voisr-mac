@@ -2,3 +2,4 @@ pytest
 pynput
 pywebview
 sounddevice
+pyobjc-framework-AVFoundation
