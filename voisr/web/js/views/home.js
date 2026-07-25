@@ -64,10 +64,17 @@ window.Voisr = window.Voisr || {};
     return "Good evening";
   }
 
+  async function renderHero() {
+    const cfg = await V.api().get_config();
+    V.ui.$("#hero-keycap").textContent =
+      cfg.hotkey_label || cfg.hotkey || "unset";
+  }
+
   async function render() {
     const $ = V.ui.$;
     $("#greeting").textContent = greeting();
     renderPermissions();
+    renderHero();
     const [stats, history] = await Promise.all([V.api().get_stats(), V.api().get_history()]);
     $("#stat-words").textContent = stats.total_words.toLocaleString();
     $("#stat-wpm").textContent = stats.avg_wpm.toLocaleString();
@@ -87,6 +94,7 @@ window.Voisr = window.Voisr || {};
     const btn = $("#record-btn");
     const status = $("#record-status");
     const errEl = $("#record-error");
+    const wave = $("#hero-wave");
 
     if (recState === "processing") return;
 
@@ -96,7 +104,7 @@ window.Voisr = window.Voisr || {};
       const res = await V.api().start_recording();
       if (res.error) { errEl.textContent = res.error; return; }
       recState = "recording";
-      btn.classList.add("recording");
+      wave.dataset.state = "recording";
       btn.setAttribute("aria-label", "Stop recording");
       status.textContent = "Listening… click again to finish";
       return;
@@ -104,11 +112,10 @@ window.Voisr = window.Voisr || {};
 
     // recording -> stop
     recState = "processing";
-    btn.classList.remove("recording");
-    btn.classList.add("processing");
+    wave.dataset.state = "processing";
     status.textContent = "Transcribing on this Mac…";
     const res = await V.api().stop_recording();
-    btn.classList.remove("processing");
+    delete wave.dataset.state;
     btn.setAttribute("aria-label", "Start recording");
     recState = "idle";
 
@@ -124,5 +131,5 @@ window.Voisr = window.Voisr || {};
   }
 
   V.views = V.views || {};
-  V.views.home = { render, toggleRecord, renderPermissions };
+  V.views.home = { render, toggleRecord, renderPermissions, renderHero };
 })(window.Voisr);

@@ -194,3 +194,20 @@ def test_api_mock_provides_permissions():
 def test_permission_strip_refreshes_on_window_focus():
     src = (WEB / "js" / "views" / "home.js").read_text()
     assert '"focus"' in src or "'focus'" in src
+
+
+def test_home_hero_is_keycap_led():
+    html = INDEX.read_text()
+    assert 'id="hero-keycap"' in html
+    assert 'id="hero-wave"' in html
+
+
+def test_record_button_is_demoted_to_secondary():
+    html = INDEX.read_text()
+    assert 'class="btn-secondary"' in html
+    assert "or click to record" in html
+
+
+def test_hero_renders_the_configured_hotkey_label():
+    src = (WEB / "js" / "views" / "home.js").read_text()
+    assert "hotkey_label" in src

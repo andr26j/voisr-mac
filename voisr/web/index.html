@@ -71,10 +71,20 @@
       <div class="home-grid">
         <div class="home-main">
           <div class="record-card card">
-            <button id="record-btn" class="record-btn" aria-label="Start recording">
-              <svg id="record-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+            <p class="hero-line">
+              Hold <kbd id="hero-keycap" class="keycap">…</kbd> to dictate
+            </p>
+            <div id="hero-wave" class="hero-wave" aria-hidden="true">
+              <span class="hb"></span><span class="hb"></span><span class="hb"></span>
+              <span class="hb"></span><span class="hb"></span><span class="hb"></span>
+              <span class="hb"></span>
+            </div>
+            <p class="hero-sub">Anywhere on your Mac. Release and the text lands where you were typing.</p>
+
+            <button id="record-btn" class="btn-secondary" aria-label="Start recording">
+              or click to record
             </button>
-            <p id="record-status" class="record-status">Click to start dictating</p>
+            <p id="record-status" class="record-status">Ready</p>
             <p id="record-error" class="record-error" role="alert"></p>
             <div id="record-result" class="record-result" hidden>
               <p id="result-text"></p>
