@@ -279,3 +279,18 @@ def test_palette_registers_the_specified_commands():
     for cmd in ["Start dictation", "Search history", "Settings",
                 "push-to-talk", "appearance", "Copy last dictation"]:
         assert cmd.lower() in src.lower(), cmd
+
+
+def test_history_has_search_and_export_controls():
+    html = INDEX.read_text()
+    assert 'id="history-search"' in html
+    assert 'id="history-export"' in html
+    assert 'id="history-more"' in html
+
+
+def test_history_binds_keyboard_navigation():
+    src = (WEB / "js" / "views" / "history.js").read_text()
+    for key in ["ArrowDown", "ArrowUp", "Backspace", "Enter"]:
+        assert key in src, key
+    assert "setQuery" in src
+    assert "PAGE" in src

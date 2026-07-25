@@ -131,6 +131,23 @@
 
 .day-group .card { padding: 6px 18px; }
 
+.page-head-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.head-actions { display: flex; align-items: center; gap: 10px; }
+
+.search {
+  font: inherit; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  height: 36px; width: 260px; padding: 0 12px;
+}
+.search:focus-visible { outline: 2px solid var(--ring); outline-offset: -1px; }
+
+.item-row.selected { background: var(--accent-soft); border-radius: var(--radius-sm); }
+.item-row.expanded .txt { -webkit-line-clamp: unset; }
+
+mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
+
+.history-more { display: block; margin: 4px auto 20px; }
+
 /* ---------- Dictionary ---------- */
 
 .dict-form {

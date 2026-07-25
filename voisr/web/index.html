@@ -129,10 +129,18 @@
     <!-- HISTORY -->
     <section class="view" id="view-history" hidden>
       <header class="page-head">
-        <h1>History</h1>
-        <p class="sub">Every dictation, stored locally in <code>data/history.jsonl</code>.</p>
+        <div class="page-head-row">
+          <h1>History</h1>
+          <div class="head-actions">
+            <input id="history-search" class="search" type="search"
+                   placeholder="Search dictations…  ⌘F" autocomplete="off">
+            <button id="history-export" class="btn-secondary" type="button">Export…</button>
+          </div>
+        </div>
+        <p class="sub">Every dictation, stored locally on this Mac.</p>
       </header>
       <div id="history-groups"></div>
+      <button id="history-more" class="btn-secondary history-more" type="button" hidden>Load more</button>
       <p id="history-empty" class="empty" hidden>Nothing here yet. Record your first dictation from Home.</p>
     </section>
 
