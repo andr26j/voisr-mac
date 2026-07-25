@@ -15,6 +15,15 @@ window.Voisr = window.Voisr || {};
     ];
     let mockCfg = { hotkey: "alt_r", paste: true, show_widget: true, device: ":0", pill_theme: "classic", pill_color: null, dictionary: { trademake: "TradeMate", "trade mate": "TradeMate" } };
     let recording = false;
+    // mirrors voisr/ui.py's HOTKEY_OPTIONS, used both for the dropdown mock
+    // and to resolve a human label for hotkey_display() below.
+    const HOTKEY_OPTIONS = [
+      { value: "alt_r", label: "Right Option (⌥)" }, { value: "alt_l", label: "Left Option (⌥)" },
+      { value: "cmd_r", label: "Right Command (⌘)" }, { value: "ctrl_r", label: "Right Control (⌃)" },
+      { value: "shift_r", label: "Right Shift (⇧)" }, { value: "f13", label: "F13" }, { value: "f14", label: "F14" },
+      { value: "f15", label: "F15" }, { value: "f16", label: "F16" }, { value: "f17", label: "F17" },
+      { value: "f18", label: "F18" }, { value: "f19", label: "F19" },
+    ];
     window.pywebview = { api: {
       get_permissions: async () => ({ panes: [
         { key: "microphone", label: "Microphone", granted: true,
@@ -36,11 +45,15 @@ window.Voisr = window.Voisr || {};
         mockCfg.hotkey_vk = 63; mockCfg.hotkey_label = "Fn / Globe";
         return { vk: 63, label: "Fn / Globe" };
       },
-      get_hotkey_options: async () => [
-        { value: "alt_r", label: "Right Option (⌥)" }, { value: "alt_l", label: "Left Option (⌥)" },
-        { value: "cmd_r", label: "Right Command (⌘)" }, { value: "ctrl_r", label: "Right Control (⌃)" },
-        { value: "shift_r", label: "Right Shift (⇧)" }, { value: "f13", label: "F13" }, { value: "f14", label: "F14" },
-      ],
+      get_hotkey_options: async () => HOTKEY_OPTIONS,
+      // mirrors Api.hotkey_display() in voisr/ui.py: captured label, else
+      // the matching HOTKEY_OPTIONS label, else the raw value, else "unset".
+      hotkey_display: async () => {
+        if (mockCfg.hotkey_label) return { display: mockCfg.hotkey_label };
+        const opt = HOTKEY_OPTIONS.find((o) => o.value === mockCfg.hotkey);
+        if (opt) return { display: opt.label };
+        return { display: mockCfg.hotkey || "unset" };
+      },
       get_hotkey_status: async () => ({ status: `active on ${mockCfg.hotkey}` }),
       get_pill_themes: async () => [
         { value: "classic", label: "Classic" }, { value: "ember", label: "Ember" },

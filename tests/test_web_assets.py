@@ -209,5 +209,9 @@ def test_record_button_is_demoted_to_secondary():
 
 
 def test_hero_renders_the_configured_hotkey_label():
+    # the raw config value (e.g. "alt_r") must never reach the hero — it
+    # resolves through Api.hotkey_display() so a fresh install with no
+    # captured hotkey_label still shows a human-readable key name.
     src = (WEB / "js" / "views" / "home.js").read_text()
-    assert "hotkey_label" in src
+    assert "hotkey_display" in src
+    assert "cfg.hotkey" not in src

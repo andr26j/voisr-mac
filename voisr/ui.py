@@ -905,6 +905,30 @@ class Api:
     def get_hotkey_options(self):
         return HOTKEY_OPTIONS
 
+    def hotkey_display(self):
+        """Human-readable label for the configured hotkey, resolved in
+        priority order so a raw config identifier (e.g. "alt_r") never
+        reaches the UI:
+          1. config["hotkey_label"] — set once the user completes a
+             "press any key" capture.
+          2. the HOTKEY_OPTIONS label matching config["hotkey"] — covers
+             a fresh install, which ships a known value with no label.
+          3. the raw config["hotkey"] value, if it's something unrecognized.
+          4. "unset".
+        The hero, Settings, and the menu-bar tooltip all resolve through
+        this single source so they never disagree."""
+        cfg = self.get_config()
+        label = cfg.get("hotkey_label")
+        if label:
+            return {"display": label}
+        hotkey = cfg.get("hotkey")
+        if hotkey:
+            for opt in HOTKEY_OPTIONS:
+                if opt["value"] == hotkey:
+                    return {"display": opt["label"]}
+            return {"display": hotkey}
+        return {"display": "unset"}
+
     def get_pill_themes(self):
         return PILL_THEMES
 
@@ -1050,8 +1074,7 @@ def main():
             on_dictate=menu_dictate,
             on_open=menu_open,
             on_quit=menu_quit,
-            hotkey_label_fn=lambda: api.get_config().get("hotkey_label")
-                                    or api.get_config().get("hotkey", "unset"))
+            hotkey_label_fn=lambda: api.hotkey_display()["display"])
         api.attach_status_item(status)
 
         def on_started():

@@ -65,9 +65,8 @@ window.Voisr = window.Voisr || {};
   }
 
   async function renderHero() {
-    const cfg = await V.api().get_config();
-    V.ui.$("#hero-keycap").textContent =
-      cfg.hotkey_label || cfg.hotkey || "unset";
+    const { display } = await V.api().hotkey_display();
+    V.ui.$("#hero-keycap").textContent = display || "unset";
   }
 
   async function render() {
