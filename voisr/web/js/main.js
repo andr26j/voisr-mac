@@ -12,9 +12,34 @@ window.Voisr = window.Voisr || {};
     if (view === "settings") V.views.settings.render();
   }
 
+  /* ---------- appearance ---------- */
+
+  const DARK_QUERY = window.matchMedia("(prefers-color-scheme: dark)");
+  let appearancePref = "system";
+
+  function resolveAppearance() {
+    const mode = appearancePref === "system"
+      ? (DARK_QUERY.matches ? "dark" : "light")
+      : appearancePref;
+    document.documentElement.dataset.appearance = mode;
+    return mode;
+  }
+
+  /* pref is "system" | "light" | "dark"; the attribute is always concrete, so
+     tokens.css needs one block per theme instead of restating both. */
+  V.applyAppearance = function (pref) {
+    appearancePref = pref || "system";
+    return resolveAppearance();
+  };
+
+  // keep following macOS when the user has not pinned a theme
+  DARK_QUERY.addEventListener("change", () => {
+    if (appearancePref === "system") resolveAppearance();
+  });
+
   /* ---------- init ---------- */
 
-  function init() {
+  async function init() {
     const $ = V.ui.el;
     document.querySelectorAll("[data-view]").forEach((b) =>
       b.addEventListener("click", () => show(b.dataset.view)));
@@ -62,6 +87,10 @@ window.Voisr = window.Voisr || {};
       }
     });
     V.views.settings.initColorWheel();
+
+    const cfg = await V.api().get_config();
+    V.applyAppearance(cfg.appearance || "system");
+
     show("home");
   }
 

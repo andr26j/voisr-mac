@@ -8,6 +8,12 @@
 <link rel="stylesheet" href="css/base.css">
 <link rel="stylesheet" href="css/components.css">
 <link rel="stylesheet" href="css/views.css">
+<script>
+  /* Resolve the stored preference before paint. main.js re-applies this once
+     the config has loaded; until then, follow the system. */
+  document.documentElement.dataset.appearance =
+    window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+</script>
 </head>
 <body>
 <div class="shell">

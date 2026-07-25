@@ -46,3 +46,56 @@ def test_every_js_file_attaches_to_the_voisr_namespace():
         if rel.endswith("main.js"):
             continue
         assert "window.Voisr" in (WEB / rel).read_text(), rel
+
+
+TOKENS = WEB / "css" / "tokens.css"
+
+COLOR_TOKENS = ["--bg", "--surface", "--ink", "--muted", "--border",
+                "--accent", "--accent-hover", "--accent-soft", "--on-accent",
+                "--success", "--success-soft", "--destructive", "--ring"]
+
+
+def test_every_colour_token_is_defined_in_both_themes():
+    css = TOKENS.read_text()
+    parts = css.split(':root[data-appearance="dark"]', 1)
+    assert len(parts) == 2, "no dark block in tokens.css"
+    light, dark = parts
+    for token in COLOR_TOKENS:
+        assert f"{token}:" in light, f"{token} missing from light"
+        assert f"{token}:" in dark, f"{token} missing from dark"
+
+
+def test_each_token_is_declared_exactly_once_per_theme():
+    """'system' is resolved to a concrete mode in JS, so the palette needs
+    exactly two blocks and no value is written twice."""
+    css = TOKENS.read_text()
+    for token in COLOR_TOKENS:
+        assert css.count(f"{token}:") == 2, \
+            f"{token} declared {css.count(f'{token}:')} times, expected 2"
+
+
+def test_tokens_do_not_use_a_colour_scheme_media_query():
+    # the media query lives in main.js via matchMedia, not in CSS
+    assert "prefers-color-scheme" not in TOKENS.read_text()
+
+
+def test_boot_script_sets_the_theme_before_stylesheets_paint():
+    """Without this, the window flashes light before main.js runs."""
+    html = INDEX.read_text()
+    head = html.split("</head>", 1)[0]
+    assert "matchMedia" in head
+    assert "data-appearance" in head or "dataset.appearance" in head
+
+
+def test_no_hardcoded_hex_outside_tokens():
+    # brand SVG markup in index.html is exempt; stylesheets are not
+    for rel in ["css/base.css", "css/components.css", "css/views.css"]:
+        css = (WEB / rel).read_text()
+        stripped = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+        hexes = re.findall(r"#[0-9A-Fa-f]{3,8}\b", stripped)
+        assert hexes == [], f"{rel} has hardcoded colours: {hexes}"
+
+
+def test_titlebar_inset_is_reserved():
+    assert "--titlebar-h" in TOKENS.read_text()
+    assert "var(--titlebar-h)" in (WEB / "css" / "base.css").read_text()
