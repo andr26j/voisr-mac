@@ -5,7 +5,9 @@ import multiprocessing
 import os
 import stat
 import threading
+import time
 import weakref
+from datetime import date, timedelta
 from fractions import Fraction
 from pathlib import Path
 
@@ -358,12 +360,14 @@ def test_unrepresentable_timestamp_stays_in_history_but_not_streak_days(tmp_path
     store = HistoryStore(path)
 
     assert [item["id"] for item in store.list()] == ["distant-id", "valid-id"]
-    assert store.stats() == {
-        "total_words": 5,
-        "dictations": 2,
-        "avg_wpm": 150,
-        "streak_days": 0,
-    }
+    stats = store.stats()
+    assert stats["total_words"] == 5
+    assert stats["dictations"] == 2
+    assert stats["avg_wpm"] == 150
+    assert stats["streak_days"] == 0
+    assert "total_seconds" in stats
+    assert "time_saved_seconds" in stats
+    assert "daily" in stats
     store.delete("valid-id")
     added = store.add("after distant timestamp", 1.0)
     store.delete(added["id"])
@@ -373,7 +377,13 @@ def test_unrepresentable_timestamp_stays_in_history_but_not_streak_days(tmp_path
 
 def test_stats_empty(tmp_path):
     s = HistoryStore(tmp_path / "h.jsonl").stats()
-    assert s == {"total_words": 0, "dictations": 0, "avg_wpm": 0, "streak_days": 0}
+    assert s["total_words"] == 0
+    assert s["dictations"] == 0
+    assert s["avg_wpm"] == 0
+    assert s["streak_days"] == 0
+    assert s["total_seconds"] == 0
+    assert s["time_saved_seconds"] == 0
+    assert len(s["daily"]) == 14
 
 
 def test_two_instances_in_threads_do_not_lose_additions(tmp_path):
@@ -1164,3 +1174,156 @@ def test_literal_tilde_path_is_not_expanded(tmp_path, monkeypatch):
 
     assert store.path == supplied_path
     assert (tmp_path / "~" / "h.jsonl").exists()
+
+
+def test_stats_reports_time_saved_against_forty_wpm(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    # 80 words spoken in 30s. Typing 80 words at 40wpm would take 120s.
+    store.add("word " * 80, duration_s=30.0)
+    stats = store.stats()
+    assert stats["total_seconds"] == 30
+    assert stats["time_saved_seconds"] == 90
+
+
+def test_stats_clamps_time_saved_at_zero(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    # 4 words in 60s is far slower than typing: must report 0, never negative.
+    store.add("one two three four", duration_s=60.0)
+    assert store.stats()["time_saved_seconds"] == 0
+
+
+def test_stats_empty_history_has_all_keys(tmp_path):
+    stats = HistoryStore(tmp_path / "h.jsonl").stats()
+    assert stats["total_seconds"] == 0
+    assert stats["time_saved_seconds"] == 0
+    assert len(stats["daily"]) == 14
+    assert all(d["words"] == 0 for d in stats["daily"])
+
+
+def test_stats_daily_is_fourteen_days_zero_filled_ending_today(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    store.add("alpha beta", duration_s=1.0)
+    daily = store.stats()["daily"]
+    assert len(daily) == 14
+    assert daily[-1]["date"] == date.today().isoformat()
+    assert daily[-1]["words"] == 2
+    assert daily[0]["date"] == (date.today() - timedelta(days=13)).isoformat()
+    assert daily[0]["words"] == 0
+
+
+def test_stats_daily_ignores_entries_older_than_the_window(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    item = store.add("old words here", duration_s=1.0)
+
+    def age(items):
+        items[0]["ts"] = time.time() - 40 * 86400
+
+    store._mutate(age)
+    stats = store.stats()
+    assert sum(d["words"] for d in stats["daily"]) == 0
+    assert stats["total_words"] == 3  # totals still count it
+
+
+from voisr.app import DEFAULT_CONFIG
+
+
+def test_default_config_has_the_new_keys():
+    assert DEFAULT_CONFIG["appearance"] == "system"
+    assert DEFAULT_CONFIG["launch_at_login"] is False
+    assert DEFAULT_CONFIG["model"] is None
+
+
+def test_restore_puts_a_deleted_item_back_with_its_identity(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    item = store.add("bring me back", duration_s=2.0)
+    store.delete(item["id"])
+    assert store.list() == []
+    store.restore(item)
+    back = store.list()
+    assert len(back) == 1
+    assert back[0]["id"] == item["id"]
+    assert back[0]["ts"] == item["ts"]
+    assert back[0]["text"] == "bring me back"
+
+
+def test_restore_returns_the_record_to_its_original_position(tmp_path):
+    """Verify that restore() returns a deleted record to its original position,
+    not to the top of the list. With three records, the restored middle record
+    must land in the middle again, not at either end."""
+    store = HistoryStore(tmp_path / "h.jsonl")
+
+    # Add three records with distinct, increasing timestamps
+    oldest_ts = 1_000_000.0
+    middle_ts = 1_000_001.0
+    newest_ts = 1_000_002.0
+
+    # Add oldest
+    oldest_id = store.add("oldest text", duration_s=1.0)["id"]
+    def set_oldest_ts(items):
+        for item in items:
+            if item["id"] == oldest_id:
+                item["ts"] = oldest_ts
+    store._mutate(set_oldest_ts)
+
+    # Add middle
+    middle_id = store.add("middle text", duration_s=1.0)["id"]
+    def set_middle_ts(items):
+        for item in items:
+            if item["id"] == middle_id:
+                item["ts"] = middle_ts
+    store._mutate(set_middle_ts)
+
+    # Add newest
+    newest_id = store.add("newest text", duration_s=1.0)["id"]
+    def set_newest_ts(items):
+        for item in items:
+            if item["id"] == newest_id:
+                item["ts"] = newest_ts
+    store._mutate(set_newest_ts)
+
+    # Verify all three are present, sorted by ts descending (newest first)
+    before_delete = store.list()
+    assert len(before_delete) == 3
+    assert [item["id"] for item in before_delete] == [newest_id, middle_id, oldest_id]
+    assert [item["ts"] for item in before_delete] == [newest_ts, middle_ts, oldest_ts]
+
+    # Capture the middle item before deletion
+    middle_to_restore = next(item for item in before_delete if item["id"] == middle_id)
+
+    # Delete the middle record
+    store.delete(middle_id)
+    assert len(store.list()) == 2
+    assert [item["id"] for item in store.list()] == [newest_id, oldest_id]
+
+    # Restore it
+    store.restore(middle_to_restore)
+
+    # Verify it's back in the middle position with original timestamp
+    after_restore = store.list()
+    assert len(after_restore) == 3
+    assert [item["id"] for item in after_restore] == [newest_id, middle_id, oldest_id]
+    assert [item["ts"] for item in after_restore] == [newest_ts, middle_ts, oldest_ts]
+
+    # Verify the restored record has the original timestamp, not a fresh one
+    restored_middle = next(item for item in after_restore if item["id"] == middle_id)
+    assert restored_middle["ts"] == middle_ts
+
+
+def test_restore_is_a_no_op_when_the_id_is_already_present(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    item = store.add("only once", duration_s=1.0)
+    store.restore(item)
+    assert len(store.list()) == 1
+
+
+def test_clear_removes_everything_in_one_write_and_reports_the_count(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    for n in range(3):
+        store.add(f"entry {n}", duration_s=1.0)
+    assert store.clear() == 3
+    assert store.list() == []
+    assert store.stats()["total_words"] == 0
+
+
+def test_clear_on_empty_history_returns_zero(tmp_path):
+    assert HistoryStore(tmp_path / "h.jsonl").clear() == 0

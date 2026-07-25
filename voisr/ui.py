@@ -4,6 +4,7 @@ import threading
 import time
 from pathlib import Path
 
+from voisr import launch_agent, permissions
 from voisr.app import load_config
 from voisr.cleanup import clean
 from voisr.history import HistoryStore
@@ -16,6 +17,38 @@ from voisr.recording_queue import (
     RecordingSession,
     SessionResult,
 )
+from voisr.status_item import StatusItem
+from voisr.window_chrome import apply_chrome
+
+
+def _find_webview(native_window):
+    """The WKWebView pywebview put in the window, or None.
+
+    pywebview's Cocoa backend makes its WKWebView subclass
+    (BrowserView.WebKitHost) the window's contentView directly --
+    window.setContentView_(webview), fired from
+    webView_didFinishNavigation_ once the initial page load completes --
+    so the webview normally *is* native_window.contentView(), not a
+    subview inside it (confirmed on the running app: contentView().
+    subviews() holds only the webview's own internal WKFlippedView).
+    Subviews are still checked as a fallback for a differently-shaped
+    window. Either way, matching goes by class inheritance (isinstance
+    against the real WebKit.WKWebView), not by name: at runtime the class
+    is further KVO-swizzled to "NSKVONotifying_WebKitHost", so even a
+    corrected name check would be fragile. Wrapped so a missing/failed
+    WebKit import still returns None instead of raising -- chrome is
+    cosmetic and must never stop the app."""
+    try:
+        import WebKit
+        content = native_window.contentView()
+        if isinstance(content, WebKit.WKWebView):
+            return content
+        for view in content.subviews():
+            if isinstance(view, WebKit.WKWebView):
+                return view
+    except Exception:
+        pass
+    return None
 
 
 def default_recorder():
@@ -46,6 +79,59 @@ def request_permissions() -> None:
         AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
     except Exception:
         pass
+
+
+def apply_app_appearance(mode: str) -> None:
+    """Point NSApp at a fixed appearance so the titlebar and vibrancy follow
+    the user's choice. 'system' clears the override. Never raises.
+
+    set_appearance() is a js_api method, and pywebview dispatches every
+    js_api call on a fresh worker thread -- so without this, setAppearance_
+    would hit AppKit off the main thread. Route it through AppHelper.callAfter
+    like every other AppKit entry point on this branch (_run_save_panel,
+    native_setup). Safe to call from the main thread too (e.g. native_setup's
+    startup call): callAfter just schedules onto the run loop."""
+    try:
+        from PyObjCTools import AppHelper
+        import AppKit
+
+        def go():
+            try:
+                names = {"light": AppKit.NSAppearanceNameAqua,
+                         "dark": AppKit.NSAppearanceNameDarkAqua}
+                name = names.get(mode)
+                appearance = (AppKit.NSAppearance.appearanceNamed_(name)
+                              if name else None)
+                AppKit.NSApp.setAppearance_(appearance)
+            except Exception:
+                pass
+
+        AppHelper.callAfter(go)
+    except Exception:
+        pass
+
+
+def _run_save_panel(suggested_name: str):
+    """Show a save panel on the main thread and return the chosen path."""
+    from PyObjCTools import AppHelper
+    import AppKit
+    result = {}
+    done = threading.Event()
+
+    def go():
+        try:
+            panel = AppKit.NSSavePanel.savePanel()
+            panel.setNameFieldStringValue_(suggested_name)
+            if panel.runModal() == AppKit.NSModalResponseOK:
+                result["path"] = panel.URL().path()
+        except Exception:
+            pass
+        finally:
+            done.set()
+
+    AppHelper.callAfter(go)
+    done.wait(120)
+    return result.get("path")
 
 
 def paste_ready() -> bool:
@@ -648,6 +734,9 @@ class Api:
         self._last_paste_typing_generation = 0
         self._paste_state_lock = threading.Lock()
         self._window = None
+        self._status_item = None
+        self._is_recording = False
+        self._save_panel_fn = None
         self._recordings = RecordingQueue(
             recorder_factory=recorder_factory,
             fallback_recorder_factory=fallback_recorder_factory,
@@ -679,6 +768,24 @@ class Api:
     def attach_window(self, window):
         """Dashboard window handle, used to push live-refresh events to JS."""
         self._window = window
+
+    def attach_status_item(self, status):
+        self._status_item = status
+
+    def is_recording(self) -> bool:
+        return self._is_recording
+
+    def _set_recording(self, value: bool) -> None:
+        """Single source of truth for 'a dictation is in flight', mirrored to
+        the menu-bar glyph. Never lets a status-item failure break recording."""
+        self._is_recording = bool(value)
+        status = self._status_item
+        if status is None:
+            return
+        try:
+            status.set_recording(self._is_recording)
+        except Exception:
+            pass
 
     def _notify_dictation(self):
         """Tell the dashboard a dictation landed (hotkey dictations must show
@@ -812,9 +919,11 @@ class Api:
             session = self._recordings.start()
         except RecordingQueueError as error:
             return {"error": str(error)}
+        self._set_recording(True)
         return {"recording": True, "session_id": session.sequence}
 
     def _release_recording(self, paste=False):
+        self._set_recording(False)
         return self._recordings.release(
             paste_requested=paste,
             context=self.get_config(),
@@ -825,6 +934,8 @@ class Api:
 
     def close(self):
         self._recordings.close()
+        if getattr(self, "_status_item", None) is not None:
+            self._status_item.release()
 
     def get_history(self):
         return self._history.list()
@@ -852,6 +963,30 @@ class Api:
     def get_hotkey_options(self):
         return HOTKEY_OPTIONS
 
+    def hotkey_display(self):
+        """Human-readable label for the configured hotkey, resolved in
+        priority order so a raw config identifier (e.g. "alt_r") never
+        reaches the UI:
+          1. config["hotkey_label"] — set once the user completes a
+             "press any key" capture.
+          2. the HOTKEY_OPTIONS label matching config["hotkey"] — covers
+             a fresh install, which ships a known value with no label.
+          3. the raw config["hotkey"] value, if it's something unrecognized.
+          4. "unset".
+        The hero, Settings, and the menu-bar tooltip all resolve through
+        this single source so they never disagree."""
+        cfg = self.get_config()
+        label = cfg.get("hotkey_label")
+        if label:
+            return {"display": label}
+        hotkey = cfg.get("hotkey")
+        if hotkey:
+            for opt in HOTKEY_OPTIONS:
+                if opt["value"] == hotkey:
+                    return {"display": opt["label"]}
+            return {"display": hotkey}
+        return {"display": "unset"}
+
     def get_pill_themes(self):
         return PILL_THEMES
 
@@ -863,6 +998,91 @@ class Api:
             status += " · paste ready" if paste_ready() \
                 else " · grant Accessibility to auto-paste"
         return {"status": status}
+
+    def get_permissions(self):
+        return {"panes": permissions.states()}
+
+    def open_settings_pane(self, key):
+        return {"ok": permissions.open_pane(key)}
+
+    def restore_history_item(self, item):
+        try:
+            self._history.restore(item)
+        except Exception as e:
+            return {"error": str(e)}
+        return {"ok": True}
+
+    def clear_history(self):
+        try:
+            removed = self._history.clear()
+        except Exception as e:
+            return {"error": str(e)}
+        return {"ok": True, "removed": removed}
+
+    def get_models(self):
+        from voisr.transcriber import MODELS_DIR, PREFERRED_MODELS
+        labels = {"small.en": "Small — best accuracy",
+                  "base.en": "Base — fastest"}
+        models = []
+        for name in PREFERRED_MODELS:
+            path = MODELS_DIR / f"ggml-{name}.bin"
+            installed = path.exists()
+            models.append({"value": name, "label": labels.get(name, name),
+                           "installed": installed,
+                           "bytes": path.stat().st_size if installed else 0})
+        return {"models": models, "active": self.get_config().get("model")}
+
+    def set_launch_at_login(self, enabled):
+        try:
+            if enabled:
+                launch_agent.enable(path=launch_agent.PLIST_PATH)
+            else:
+                launch_agent.disable(path=launch_agent.PLIST_PATH)
+        except Exception as e:
+            return {"error": str(e)}
+        self.set_config({"launch_at_login": bool(enabled)})
+        return {"ok": True, "enabled": bool(enabled)}
+
+    APPEARANCES = ("system", "light", "dark")
+
+    def set_appearance(self, mode):
+        if mode not in self.APPEARANCES:
+            return {"error": f"unknown appearance: {mode}"}
+        self.set_config({"appearance": mode})
+        apply_app_appearance(mode)
+        return {"ok": True, "appearance": mode}
+
+    def export_history(self, fmt):
+        import datetime
+        items = self._history.list()
+        stamp = datetime.date.today().isoformat()
+        if fmt == "json":
+            text = json.dumps(items, indent=2)
+        elif fmt == "md":
+            text = "\n".join(
+                f"- **{datetime.datetime.fromtimestamp(i['ts']):%Y-%m-%d %H:%M}** "
+                f"— {i['text']}" for i in items)
+        elif fmt == "txt":
+            text = "\n".join(i["text"] for i in items)
+        else:
+            return {"error": f"unsupported format: {fmt}"}
+        return {"text": text, "suggested_name": f"voisr-history-{stamp}.{fmt}"}
+
+    def save_text_file(self, text, suggested_name):
+        """Write text to a user-chosen path via NSSavePanel. Returns
+        ok=False with path=None when the user cancels."""
+        chooser = self._save_panel_fn or _run_save_panel
+        try:
+            path = chooser(suggested_name)
+        except Exception as e:
+            return {"error": str(e)}
+        if not path:
+            return {"ok": False, "path": None}
+        try:
+            Path(path).write_text(text)
+        except OSError as e:
+            return {"error": str(e)}
+        return {"ok": True, "path": str(path)}
 
     def prime_microphone(self):
         """Retained for interface parity — intentionally does NOT open the
@@ -899,9 +1119,45 @@ def main():
         service = HotkeyService(api, widget=widget)
         api.attach_hotkey_service(service)
         window = webview.create_window("Voisr", str(WEB_DIR / "index.html"),
-                                       js_api=api, width=1060, height=700, min_size=(860, 560))
+                                       js_api=api, width=1060, height=700,
+                                       min_size=(900, 620))
         api.attach_window(window)
         widget.create()
+
+        def menu_dictate():
+            # Routed through HotkeyService (not Api directly): an NSMenuItem
+            # action runs on the AppKit main thread, and api.stop_recording()
+            # blocks on the worker future for the whole transcription --
+            # that would freeze the window, the menu bar, and every queued
+            # AppHelper.callAfter (including the pill's own state updates)
+            # for the duration. HotkeyService.release() hands the blocking
+            # wait off to its own worker thread instead. It's also the only
+            # path that drives the widget, so a menu-started dictation shows
+            # the pill instead of leaving just the menu-bar glyph -- the
+            # spec requires the two to never disagree. service._toggle() is
+            # the same press()/release() pair used for the Fn/Globe-style
+            # toggle keys, which is exactly this click-to-start,
+            # click-to-stop shape.
+            service._toggle()
+
+        def menu_open():
+            try:
+                window.show()
+            except Exception:
+                pass
+
+        def menu_quit():
+            try:
+                window.destroy()
+            except Exception:
+                pass
+
+        status = StatusItem(
+            on_dictate=menu_dictate,
+            on_open=menu_open,
+            on_quit=menu_quit,
+            hotkey_label_fn=lambda: api.hotkey_display()["display"])
+        api.attach_status_item(status)
 
         def on_started():
             # Runs on a worker thread AFTER the GUI run loop is up, so the
@@ -910,6 +1166,61 @@ def main():
             # only during an actual dictation, so the "mic in use" indicator is
             # off while idle.
             service.start()  # config-driven: prefers captured hotkey_vk
+
+            from PyObjCTools import AppHelper
+
+            def apply_native_chrome(native):
+                # Chrome is AppKit and must be on the main thread. Cosmetic:
+                # failures are logged, not fatal.
+                chrome = apply_chrome(native, webview=_find_webview(native))
+                if not chrome["titlebar"]:
+                    print("Voisr chrome: titlebar setup failed", flush=True)
+                if not chrome["vibrancy"]:
+                    print("Voisr chrome: vibrancy unavailable, using flat "
+                          "fallback", flush=True)
+                    # No native vibrancy effect view -- tell base.css's
+                    # :root[data-vibrancy="off"] fallback to paint a
+                    # solid tint instead of leaving the sidebar assuming
+                    # a translucency that was never applied. Fire-and-
+                    # forget off-thread, same pattern as
+                    # Api._notify_dictation: a slow or dead webview must
+                    # never block startup.
+                    def set_vibrancy_off():
+                        try:
+                            window.evaluate_js(
+                                'document.documentElement.setAttribute('
+                                '"data-vibrancy", "off")')
+                        except Exception:
+                            pass
+                    threading.Thread(target=set_vibrancy_off,
+                                     daemon=True).start()
+
+            def native_setup():
+                apply_app_appearance(api.get_config().get("appearance", "system"))
+                native = getattr(window, "native", None)
+                if native is not None:
+                    # pywebview's Cocoa backend only makes the WKWebView the
+                    # window's contentView once the initial page finishes
+                    # loading (webView_didFinishNavigation_ calls
+                    # window.setContentView_(webview)) -- calling
+                    # apply_chrome() any earlier finds a bare placeholder
+                    # NSView with no subviews, so _find_webview() always
+                    # returns None and vibrancy silently never engages, even
+                    # with a correct webview lookup. Defer to window.events
+                    # .loaded, falling back to an immediate call if the page
+                    # has (rarely) already finished by the time we get here.
+                    try:
+                        loaded = window.events.loaded
+                        if loaded.is_set():
+                            apply_native_chrome(native)
+                        else:
+                            loaded += lambda *a: AppHelper.callAfter(
+                                apply_native_chrome, native)
+                    except Exception:
+                        apply_native_chrome(native)
+                status.create()
+
+            AppHelper.callAfter(native_setup)
 
         webview.start(on_started)
     finally:

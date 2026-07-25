@@ -5,6 +5,7 @@ import pytest
 
 from voisr.history import HistoryStore
 from voisr.pasteboard import PasteDeliveryError
+from voisr.recording_queue import RecordingQueueError
 from voisr.ui import Api
 
 
@@ -86,7 +87,7 @@ def test_corrupt_config_falls_back_to_defaults(tmp_path):
 def test_stats_shape(tmp_path):
     api = make_api(tmp_path)
     s = api.get_stats()
-    assert set(s) == {"total_words", "dictations", "avg_wpm", "streak_days"}
+    assert set(s) == {"total_words", "dictations", "avg_wpm", "streak_days", "total_seconds", "time_saved_seconds", "daily"}
 
 
 def test_delete_history_item(tmp_path):
@@ -537,3 +538,158 @@ def test_paste_landed_error_keeps_smart_spacing_for_next_dictation(tmp_path):
         assert copied == []
     finally:
         api.close()
+
+
+import json as _json
+
+from voisr import launch_agent
+
+
+def test_get_permissions_returns_three_panes(tmp_path):
+    api = make_api(tmp_path)
+    panes = api.get_permissions()["panes"]
+    assert [p["key"] for p in panes] == [
+        "microphone", "input_monitoring", "accessibility"]
+    assert all("settings_url" in p for p in panes)
+
+
+def test_open_settings_pane_rejects_unknown_key(tmp_path):
+    api = make_api(tmp_path)
+    assert api.open_settings_pane("bogus") == {"ok": False}
+
+
+def test_restore_history_item_puts_it_back(tmp_path):
+    api = make_api(tmp_path)
+    api.start_recording()
+    api.stop_recording()
+    item = api.get_history()[0]
+    api.delete_history_item(item["id"])
+    assert api.get_history() == []
+    assert api.restore_history_item(item) == {"ok": True}
+    assert api.get_history()[0]["id"] == item["id"]
+
+
+def test_get_models_lists_known_models_with_installed_flags(tmp_path):
+    api = make_api(tmp_path)
+    out = api.get_models()
+    values = [m["value"] for m in out["models"]]
+    assert values == ["small.en", "base.en"]
+    assert all(isinstance(m["installed"], bool) for m in out["models"])
+
+
+def test_set_launch_at_login_round_trips(tmp_path, monkeypatch):
+    plist = tmp_path / "agent.plist"
+    monkeypatch.setattr(launch_agent, "PLIST_PATH", plist)
+    api = make_api(tmp_path)
+    assert api.set_launch_at_login(True)["enabled"] is True
+    assert plist.exists() is True
+    assert api.set_launch_at_login(False)["enabled"] is False
+    assert plist.exists() is False
+    assert api.get_config()["launch_at_login"] is False
+
+
+def test_clear_history_wipes_everything(tmp_path):
+    api = make_api(tmp_path)
+    api.start_recording()
+    api.stop_recording()
+    assert api.clear_history() == {"ok": True, "removed": 1}
+    assert api.get_history() == []
+
+
+def test_export_history_txt_and_json(tmp_path):
+    api = make_api(tmp_path)
+    api.start_recording()
+    api.stop_recording()
+    txt = api.export_history("txt")
+    assert "Hello world" in txt["text"]
+    assert txt["suggested_name"].endswith(".txt")
+    parsed = _json.loads(api.export_history("json")["text"])
+    assert parsed[0]["text"] == "Hello world"
+    assert api.export_history("exe").get("error")
+
+
+def test_set_appearance_accepts_only_known_modes(tmp_path):
+    api = make_api(tmp_path)
+    assert api.set_appearance("dark")["appearance"] == "dark"
+    assert api.get_config()["appearance"] == "dark"
+    assert api.set_appearance("light")["appearance"] == "light"
+    assert api.set_appearance("system")["appearance"] == "system"
+    assert api.set_appearance("hot-pink").get("error")
+    assert api.get_config()["appearance"] == "system"  # unchanged by the bad value
+
+
+def test_is_recording_tracks_the_record_cycle(tmp_path):
+    api = make_api(tmp_path)
+    assert api.is_recording() is False
+    api.start_recording()
+    assert api.is_recording() is True
+    api.stop_recording()
+    assert api.is_recording() is False
+
+
+def test_status_item_follows_the_record_cycle(tmp_path):
+    class FakeStatus:
+        def __init__(self):
+            self.states = []
+
+        def set_recording(self, value):
+            self.states.append(bool(value))
+
+        def release(self):
+            pass
+
+    api = make_api(tmp_path)
+    status = FakeStatus()
+    api.attach_status_item(status)
+    api.start_recording()
+    api.stop_recording()
+    assert status.states == [True, False]
+
+
+def test_a_failed_start_does_not_mark_recording(tmp_path):
+    api = make_api(tmp_path)
+
+    def raise_rejected():
+        raise RecordingQueueError("start", "already recording")
+
+    api._recordings.start = raise_rejected
+
+    result = api.start_recording()
+
+    assert result.get("error")
+    assert api.is_recording() is False
+
+
+def test_close_releases_the_status_item(tmp_path):
+    class FakeStatus:
+        def __init__(self):
+            self.release_calls = 0
+
+        def set_recording(self, value):
+            pass
+
+        def release(self):
+            self.release_calls += 1
+
+    api = make_api(tmp_path)
+    status = FakeStatus()
+    api.attach_status_item(status)
+
+    api.close()
+
+    assert status.release_calls == 1
+
+
+def test_save_text_file_writes_through_the_injected_panel(tmp_path):
+    api = make_api(tmp_path)
+    target = tmp_path / "out.txt"
+    api._save_panel_fn = lambda name: str(target)
+    out = api.save_text_file("hello there", "out.txt")
+    assert out["ok"] is True
+    assert target.read_text() == "hello there"
+
+
+def test_save_text_file_reports_cancellation(tmp_path):
+    api = make_api(tmp_path)
+    api._save_panel_fn = lambda name: None
+    assert api.save_text_file("x", "a.txt") == {"ok": False, "path": None}

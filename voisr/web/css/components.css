@@ -1,0 +1,309 @@
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 22px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.card h2 { font-size: 15px; font-weight: 600; }
+
+.link-btn {
+  color: var(--accent);
+  font-weight: 500;
+  min-height: 44px;
+  padding: 0 8px;
+  border-radius: 8px;
+  transition: background .15s ease-out;
+}
+
+.link-btn:hover { background: var(--accent-soft); }
+
+/* ---------- Lists (recent, history, dictionary) ---------- */
+
+.item-list { list-style: none; }
+
+.item-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 4px;
+  border-top: 1px solid var(--border);
+}
+
+.item-list .item-row:first-child { border-top: none; }
+
+.item-text { flex: 1; min-width: 0; user-select: text; }
+
+.item-text .txt { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+
+.item-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+.icon-btn {
+  width: 44px; height: 44px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  transition: background .15s ease-out, color .15s ease-out;
+}
+
+.icon-btn svg { width: 16px; height: 16px; }
+
+.icon-btn:hover { background: var(--surface-2); color: var(--ink); }
+
+.icon-btn.danger:hover { background: var(--destructive-soft); color: var(--destructive); }
+
+.empty { color: var(--muted); padding: 18px 4px; }
+
+/* ---------- Form field + primary button (dictionary form) ---------- */
+
+.field { display: flex; flex-direction: column; gap: 5px; flex: 1; }
+
+.field label { font-size: 12px; font-weight: 600; color: var(--muted); }
+
+.field input {
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 12px;
+  height: 44px;
+}
+
+.field input:focus { outline: 2px solid var(--ring); outline-offset: -1px; }
+
+.btn-primary {
+  height: 44px;
+  padding: 0 22px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+  transition: background .15s ease-out;
+}
+
+.btn-primary:hover { background: var(--accent-hover); }
+
+/* ---------- Pill + switch (settings) ---------- */
+
+.pill {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 5px 12px;
+}
+
+.pill-good { color: var(--success); background: var(--success-soft); border-color: transparent; }
+
+.switch { position: relative; display: inline-block; width: 46px; height: 28px; flex-shrink: 0; cursor: pointer; }
+
+.switch input { opacity: 0; width: 46px; height: 28px; margin: 0; cursor: pointer; }
+
+.slider {
+  position: absolute;
+  inset: 0;
+  background: var(--border);
+  border-radius: 99px;
+  transition: background .2s ease-out;
+  pointer-events: none;
+}
+
+.slider::before {
+  content: "";
+  position: absolute;
+  width: 22px; height: 22px;
+  left: 3px; top: 3px;
+  background: var(--surface);
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(31, 29, 26, .25);
+  transition: transform .2s ease-out;
+}
+
+.switch input:checked + .slider { background: var(--accent); }
+
+.switch input:checked + .slider::before { transform: translateX(18px); }
+
+.switch input:focus-visible + .slider { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+/* ---------- Toast ---------- */
+
+.toast {
+  position: fixed; bottom: 26px; left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  display: flex; align-items: center; gap: 14px;
+  background: var(--ink); color: var(--bg);
+  border-radius: 99px; padding: 10px 12px 10px 20px;
+  font-size: 13px; font-weight: 500;
+  box-shadow: var(--shadow-pop); z-index: 300;
+  opacity: 0; transition: opacity var(--base) var(--ease),
+                          transform var(--base) var(--ease);
+}
+.toast.in { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* Author `display: flex` above beats the UA stylesheet's `[hidden] { display:
+   none }` at equal specificity (author wins ties), so the toast would stay
+   visible (and its fixed, z-index: 300 box would keep intercepting clicks
+   over whatever sits beneath it) even while `hidden` is true without this
+   override -- same fix as .palette-scrim[hidden] and .popover[hidden]. */
+.toast[hidden] { display: none; }
+
+.toast-action {
+  color: var(--accent); font-weight: 700;
+  padding: 4px 12px; border-radius: 99px;
+  background: rgba(255, 255, 255, .08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast { transition: none; }
+}
+
+/* ---------- Select ---------- */
+
+.select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 12px;
+  height: 44px;
+  min-width: 190px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.select:focus-visible { outline: 2px solid var(--ring); outline-offset: -1px; }
+
+/* ---------- Secondary button (hotkey capture) ---------- */
+
+.btn-secondary {
+  height: 44px;
+  padding: 0 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-weight: 600;
+  color: var(--ink);
+  transition: background .15s ease-out, border-color .15s ease-out;
+}
+
+.btn-secondary:hover { background: var(--bg); border-color: var(--muted); }
+
+.btn-secondary:disabled { opacity: .6; cursor: default; border-color: var(--accent); color: var(--accent); }
+
+/* mini pill: scaled-down replica of the widget's recording state */
+.mini-pill {
+  width: 88px; height: 24px;
+  border-radius: 12px;
+  background: rgba(28, 26, 23, .96);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+.mini-pill .mb {
+  width: 2.5px; height: 5px;
+  border-radius: 1.5px;
+  /* fixed pill-theme brand colour (default/white waveform bars) -- does not
+     vary by light/dark appearance; the pill has its own dark chrome */
+  background: var(--mb-color, rgb(255, 255, 255)); opacity: .9;
+  animation: mwave 1s ease-in-out infinite;
+}
+
+.mini-pill .mb:nth-child(1) { animation-delay: 0s; }
+.mini-pill .mb:nth-child(2) { animation-delay: .15s; }
+.mini-pill .mb:nth-child(3) { animation-delay: .3s; }
+.mini-pill .mb:nth-child(4) { animation-delay: .45s; }
+.mini-pill .mb:nth-child(5) { animation-delay: .6s; }
+.mini-pill .mb:nth-child(6) { animation-delay: .75s; }
+.mini-pill .mb:nth-child(7) { animation-delay: .9s; }
+
+/* the following per-theme colours are fixed pill-theme brand colours.
+   They intentionally do NOT follow light/dark appearance -- the recording
+   pill renders on its own dark chrome in every theme. */
+.mini-pill[data-theme="ember"] .mb { background: var(--mb-color, rgb(232, 100, 60)); box-shadow: 0 0 4px var(--mb-glow, rgba(232, 100, 60, .8)); animation-name: mflick; animation-duration: .9s; }
+.mini-pill[data-theme="aurora"] .mb { background: var(--mb-color, linear-gradient(180deg, rgb(74, 222, 222), rgb(155, 93, 229))); animation-name: mwave, hue; animation-duration: 1.1s, 3s; animation-timing-function: ease-in-out, linear; }
+.mini-pill[data-custom-color][data-theme="aurora"] .mb { animation-name: mwave; animation-duration: 1.1s; animation-timing-function: ease-in-out; }
+.mini-pill[data-theme="ocean"] .mb { background: var(--mb-color, rgb(90, 169, 230)); animation-name: mswell; animation-duration: 1.8s; }
+.mini-pill[data-theme="neon"] .mb { background: var(--mb-color, rgb(57, 255, 136)); box-shadow: 0 0 4px var(--mb-glow, rgba(57, 255, 136, .75)); animation-name: meq; animation-duration: .7s; animation-timing-function: steps(3, end); }
+.mini-pill[data-theme="breathe"] .mb { background: var(--mb-color, rgb(168, 230, 207)); animation-name: mbreathe; animation-duration: 1.6s; animation-delay: 0s !important; }
+.mini-pill[data-theme="scanner"] .mb { background: var(--mb-color, rgb(237, 237, 237)); width: 4px; height: 4px; border-radius: 2px; opacity: .18; animation-name: mscan; animation-duration: 1.2s; animation-timing-function: linear; }
+
+@keyframes mwave   { 0%, 100% { height: 5px; } 50% { height: 14px; } }
+@keyframes mflick  { 0%, 100% { height: 5px; } 35% { height: 13px; } 60% { height: 8px; } 80% { height: 12px; } }
+@keyframes hue     { from { filter: hue-rotate(0deg); } to { filter: hue-rotate(360deg); } }
+@keyframes mswell  { 0%, 100% { height: 4px; opacity: .65; } 50% { height: 12px; opacity: 1; } }
+@keyframes meq     { 0% { height: 4px; } 25% { height: 13px; } 50% { height: 6px; } 75% { height: 11px; } 100% { height: 4px; } }
+@keyframes mbreathe { 0%, 100% { transform: scaleY(.5); opacity: .45; } 50% { transform: scaleY(1.4); opacity: 1; } }
+@keyframes mscan   { 0%, 20% { opacity: 1; } 40%, 100% { opacity: .18; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .mini-pill .mb { animation: none !important; height: 8px !important; }
+  /* scanner's resting opacity is animation-driven; restore visibility + dot shape */
+  .mini-pill[data-theme="scanner"] .mb { opacity: .9 !important; height: 4px !important; }
+}
+
+/* ---------- command palette ---------- */
+
+.palette-scrim {
+  position: fixed; inset: 0; z-index: 200;
+  background: var(--scrim);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding-top: 14vh;
+  animation: fade-in var(--fast) var(--ease);
+}
+/* Author `display: flex` above beats the UA stylesheet's `[hidden] { display:
+   none }` at equal specificity (author wins ties), so the scrim would stay
+   visible even while `hidden` is true without this override. */
+.palette-scrim[hidden] { display: none; }
+
+.palette {
+  width: min(560px, 90vw);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  animation: rise var(--base) var(--ease);
+}
+
+.palette-input {
+  width: 100%; height: 52px; padding: 0 18px;
+  font: inherit; font-size: 15px;
+  color: var(--ink); background: transparent;
+  border: none; border-bottom: 1px solid var(--border);
+}
+.palette-input:focus { outline: none; }
+
+.palette-list { list-style: none; max-height: 320px; overflow-y: auto; padding: 6px; }
+
+.palette-item {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; min-height: 40px; padding: 0 12px;
+  border-radius: var(--radius-sm); cursor: pointer;
+}
+.palette-item.active { background: var(--accent-soft); }
+.palette-hint { font-size: 12px; color: var(--muted); }
+
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .palette-scrim, .palette { animation: none; }
+}

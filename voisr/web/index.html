@@ -4,7 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Voisr</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/components.css">
+<link rel="stylesheet" href="css/views.css">
+<script>
+  /* Resolve the stored preference before paint. main.js re-applies this once
+     the config has loaded; until then, follow the system. */
+  document.documentElement.dataset.appearance =
+    window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+</script>
 </head>
 <body>
 <div class="shell">
@@ -53,51 +62,66 @@
 
     <!-- HOME -->
     <section class="view" id="view-home">
+      <div id="perm-strip" class="perm-strip" aria-live="polite"></div>
       <header class="page-head">
         <h1 id="greeting">Welcome back</h1>
-        <p class="sub">Press record, speak naturally, and your words are transcribed on this Mac and copied to your clipboard.</p>
+        <p class="sub">Hold a key to dictate, transcribed entirely on this Mac and never sent to the cloud.</p>
       </header>
 
-      <div class="home-grid">
-        <div class="home-main">
-          <div class="record-card card">
-            <button id="record-btn" class="record-btn" aria-label="Start recording">
-              <svg id="record-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
-            </button>
-            <p id="record-status" class="record-status">Click to start dictating</p>
-            <p id="record-error" class="record-error" role="alert"></p>
-            <div id="record-result" class="record-result" hidden>
-              <p id="result-text"></p>
-              <span class="result-badge">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
-                Copied to clipboard
-              </span>
-            </div>
+      <div class="home-main">
+        <div class="record-card card">
+          <p class="hero-line">
+            Hold <kbd id="hero-keycap" class="keycap">…</kbd> to dictate
+          </p>
+          <div id="hero-wave" class="hero-wave" aria-hidden="true">
+            <span class="hb"></span><span class="hb"></span><span class="hb"></span>
+            <span class="hb"></span><span class="hb"></span><span class="hb"></span>
+            <span class="hb"></span>
           </div>
+          <p class="hero-sub">Anywhere on your Mac. Release and the text lands where you were typing.</p>
 
-          <div class="card">
-            <div class="card-head">
-              <h2>Recent activity</h2>
-              <button class="link-btn" data-view="history">View all</button>
-            </div>
-            <ul id="recent-list" class="item-list"></ul>
-            <p id="recent-empty" class="empty" hidden>No dictations yet — your recent transcripts will appear here.</p>
+          <button id="record-btn" class="btn-secondary" aria-label="Start recording">
+            or click to record
+          </button>
+          <p id="record-status" class="record-status">Ready</p>
+          <p id="record-error" class="record-error" role="alert"></p>
+          <div id="record-result" class="record-result" hidden>
+            <p id="result-text"></p>
+            <span class="result-badge">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+              Copied to clipboard
+            </span>
           </div>
         </div>
 
-        <div class="home-side">
-          <div class="stat-card card">
+        <div class="stats-strip">
+          <div class="stat stat-lead">
+            <span class="stat-label">Time saved</span>
+            <span class="stat-num" id="stat-saved">—</span>
+            <span class="stat-note">vs typing at 40 words per minute</span>
+          </div>
+          <div class="spark-wrap">
+            <svg class="spark" id="spark" viewBox="0 0 240 40" preserveAspectRatio="none" aria-hidden="true">
+              <path id="spark-path" d="" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div class="stat">
             <span class="stat-label">Words dictated</span>
-            <span class="stat-num" id="stat-words">0</span>
+            <span class="stat-num stat-sm" id="stat-words">0</span>
           </div>
-          <div class="stat-card card">
-            <span class="stat-label">Average words / min</span>
-            <span class="stat-num" id="stat-wpm">0</span>
-          </div>
-          <div class="stat-card card">
+          <div class="stat">
             <span class="stat-label">Day streak</span>
-            <span class="stat-num" id="stat-streak">0</span>
+            <span class="stat-num stat-sm" id="stat-streak">0</span>
           </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Recent activity</h2>
+            <button class="link-btn" data-view="history">View all</button>
+          </div>
+          <ul id="recent-list" class="item-list"></ul>
+          <p id="recent-empty" class="empty" hidden>No dictations yet — your recent transcripts will appear here.</p>
         </div>
       </div>
     </section>
@@ -105,17 +129,29 @@
     <!-- HISTORY -->
     <section class="view" id="view-history" hidden>
       <header class="page-head">
-        <h1>History</h1>
-        <p class="sub">Every dictation, stored locally in <code>data/history.jsonl</code>.</p>
+        <div class="page-head-row">
+          <h1>History</h1>
+          <div class="head-actions">
+            <input id="history-search" class="search" type="search"
+                   placeholder="Search dictations…  ⌘F" autocomplete="off">
+            <button id="history-export" class="btn-secondary" type="button">Export…</button>
+          </div>
+        </div>
+        <p class="sub">Every dictation, stored locally on this Mac.</p>
       </header>
       <div id="history-groups"></div>
+      <button id="history-more" class="btn-secondary history-more" type="button" hidden>Load more</button>
       <p id="history-empty" class="empty" hidden>Nothing here yet. Record your first dictation from Home.</p>
     </section>
 
     <!-- DICTIONARY -->
     <section class="view" id="view-dictionary" hidden>
       <header class="page-head">
-        <h1>Dictionary</h1>
+        <div class="page-head-row">
+          <h1>Dictionary</h1>
+          <input id="dict-search" class="search" type="search"
+                 placeholder="Filter entries…" autocomplete="off" hidden>
+        </div>
         <p class="sub">When the transcriber mishears a name or term, map what it heard to what you meant. Every variant counts.</p>
       </header>
       <div class="card">
@@ -141,17 +177,19 @@
         <h1>Settings</h1>
         <p class="sub">Stored in <code>config.json</code>, shared with the command-line modes.</p>
       </header>
-      <div class="card settings-card">
+
+      <div class="settings-section card">
+        <h2 class="section-title">Dictation</h2>
         <div class="setting-row">
           <div>
-            <h2>Copy to clipboard after dictation</h2>
+            <h3>Copy to clipboard after dictation</h3>
             <p class="setting-desc">Each finished dictation is placed on your clipboard, ready to paste anywhere.</p>
           </div>
           <span class="pill">Always on</span>
         </div>
         <div class="setting-row">
           <div>
-            <h2>Auto-paste in hotkey mode</h2>
+            <h3>Auto-paste in hotkey mode</h3>
             <p class="setting-desc">After a push-to-talk dictation, paste the text straight into the app you're in (Cmd-V). Needs Accessibility permission.</p>
           </div>
           <label class="switch">
@@ -161,7 +199,18 @@
         </div>
         <div class="setting-row">
           <div>
-            <h2>Push-to-talk key</h2>
+            <h3>Transcription model</h3>
+            <p class="setting-desc">Small is more accurate; Base is faster. Both run on this Mac.</p>
+          </div>
+          <select id="model-select" class="select"></select>
+        </div>
+      </div>
+
+      <div class="settings-section card">
+        <h2 class="section-title">Push-to-talk</h2>
+        <div class="setting-row">
+          <div>
+            <h3>Push-to-talk key</h3>
             <p class="setting-desc">Hold this key in any app to dictate; release to transcribe and paste. Needs Input Monitoring permission (System Settings &rarr; Privacy &amp; Security).</p>
             <p class="setting-status" id="hotkey-status"></p>
           </div>
@@ -172,7 +221,7 @@
         </div>
         <div class="setting-row">
           <div>
-            <h2>Recording widget</h2>
+            <h3>Recording widget</h3>
             <p class="setting-desc">Show the floating pill at the bottom of your screen while you hold the push-to-talk key — waveform while listening, then a tick when your text is ready.</p>
           </div>
           <label class="switch">
@@ -180,36 +229,77 @@
             <span class="slider" aria-hidden="true"></span>
           </label>
         </div>
-        <div class="setting-row setting-row--stack">
+        <div class="setting-row">
           <div>
-            <h2>Pill theme</h2>
-            <p class="setting-desc">Color and animation of the recording pill while you dictate. Applies from your next dictation.</p>
+            <h3>Launch at login</h3>
+            <p class="setting-desc">Start Voisr automatically so the push-to-talk key always works.</p>
           </div>
-          <div id="theme-grid" class="theme-grid" role="group" aria-label="Pill theme"></div>
-          <div class="color-block">
-            <div class="wheel-wrap">
-              <canvas id="color-wheel" width="200" height="200" aria-label="Custom bar color"></canvas>
-              <div id="wheel-thumb" hidden></div>
-            </div>
-            <div class="color-side">
-              <p class="setting-desc">Optional: recolor the bars of any theme. The animation stays; only the color changes.</p>
-              <div class="mini-pill" id="color-preview">
-                <span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span>
-              </div>
-              <div class="color-meta">
-                <span class="swatch" id="color-swatch"></span>
-                <code id="color-hex">theme default</code>
-                <button type="button" class="btn-secondary" id="color-reset">Theme default</button>
-              </div>
-            </div>
+          <label class="switch">
+            <input type="checkbox" id="launch-toggle">
+            <span class="slider" aria-hidden="true"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="settings-section card">
+        <h2 class="section-title">Appearance</h2>
+        <div class="setting-row">
+          <div>
+            <h3>Theme</h3>
+            <p class="setting-desc">Follow macOS, or pin Voisr to light or dark.</p>
           </div>
+          <select id="appearance-select" class="select">
+            <option value="system">Match system</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
         </div>
         <div class="setting-row">
           <div>
-            <h2>Privacy</h2>
+            <h3>Pill theme</h3>
+            <p class="setting-desc">Color and animation of the recording pill while you dictate. Applies from your next dictation.</p>
+          </div>
+        </div>
+        <div id="theme-grid" class="theme-grid" role="group" aria-label="Pill theme"></div>
+        <div class="setting-row">
+          <div>
+            <h3>Pill colour</h3>
+            <p class="setting-desc">Recolour the bars of any theme. The animation stays.</p>
+          </div>
+          <div class="color-control">
+            <button type="button" id="color-open" class="swatch-btn">
+              <span class="swatch" id="color-swatch"></span>
+              <code id="color-hex">theme default</code>
+            </button>
+            <div id="color-popover" class="popover" hidden>
+              <div class="wheel-wrap">
+                <canvas id="color-wheel" width="200" height="200" aria-label="Custom bar colour"></canvas>
+                <div id="wheel-thumb" hidden></div>
+              </div>
+              <div class="mini-pill" id="color-preview">
+                <span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span>
+              </div>
+              <button type="button" class="btn-secondary" id="color-reset">Theme default</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section card">
+        <h2 class="section-title">Privacy & data</h2>
+        <div class="setting-row">
+          <div>
+            <h3>Privacy</h3>
             <p class="setting-desc">Audio is recorded to a temp file, transcribed by whisper.cpp on this Mac, then deleted. No network calls, no accounts, no telemetry.</p>
           </div>
           <span class="pill pill-good">Local only</span>
+        </div>
+        <div class="setting-row">
+          <div>
+            <h3>Clear all history</h3>
+            <p class="setting-desc">Permanently delete every stored dictation. This cannot be undone.</p>
+          </div>
+          <button type="button" id="clear-history" class="btn-danger">Clear…</button>
         </div>
       </div>
     </section>
@@ -217,7 +307,21 @@
   </main>
 </div>
 
+<div id="palette" class="palette-scrim" hidden>
+  <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+    <input id="palette-input" class="palette-input" type="text"
+           placeholder="Type a command…" autocomplete="off" spellcheck="false">
+    <ul id="palette-list" class="palette-list" role="listbox"></ul>
+  </div>
+</div>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-<script src="app.js"></script>
+<script src="js/api.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/palette.js"></script>
+<script src="js/views/home.js"></script>
+<script src="js/views/history.js"></script>
+<script src="js/views/dictionary.js"></script>
+<script src="js/views/settings.js"></script>
+<script src="js/main.js"></script>
 </body>
 </html>

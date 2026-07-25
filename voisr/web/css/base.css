@@ -1,0 +1,129 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 6px; }
+
+.shell { display: flex; height: 100vh; }
+
+/* ---------- Sidebar ---------- */
+
+.sidebar {
+  width: 216px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--titlebar-h) 14px 18px;
+  border-right: 1px solid var(--border);
+  background: var(--sidebar-bg);
+}
+
+/* vibrancy fallback: when the native effect view is unavailable the shell
+   sets data-vibrancy="off" and the sidebar paints a solid tint instead */
+:root[data-vibrancy="off"] .sidebar { background: var(--surface-2); }
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 10px 22px;
+}
+
+.brand-mark {
+  width: 24px; height: 24px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.brand-name { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+
+.nav { display: flex; flex-direction: column; gap: 2px; }
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+  color: var(--muted);
+  transition: background .15s ease-out, color .15s ease-out;
+}
+
+.nav-item svg { width: 17px; height: 17px; }
+
+.nav-item:hover { background: var(--accent-soft); color: var(--ink); }
+
+.nav-item.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+
+.sidebar-foot {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sidebar-foot svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+/* ---------- Main ---------- */
+
+.main { flex: 1; overflow-y: auto; padding: var(--titlebar-h) 44px 60px; background: var(--bg); }
+
+.page-head { margin-bottom: 26px; }
+
+.page-head h1 { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; }
+
+.sub { color: var(--muted); margin-top: 6px; max-width: 58ch; }
+
+/* ---------- Transitions ---------- */
+
+.view.entering { animation: view-in var(--slow) var(--ease); }
+
+@keyframes view-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.item-list .item-row { animation: row-in var(--base) var(--ease) both; }
+/* stagger only the first ten rows — a long list must never crawl */
+.item-list .item-row:nth-child(1) { animation-delay: 0ms; }
+.item-list .item-row:nth-child(2) { animation-delay: 20ms; }
+.item-list .item-row:nth-child(3) { animation-delay: 40ms; }
+.item-list .item-row:nth-child(4) { animation-delay: 60ms; }
+.item-list .item-row:nth-child(5) { animation-delay: 80ms; }
+.item-list .item-row:nth-child(6) { animation-delay: 100ms; }
+.item-list .item-row:nth-child(7) { animation-delay: 120ms; }
+.item-list .item-row:nth-child(8) { animation-delay: 140ms; }
+.item-list .item-row:nth-child(9) { animation-delay: 160ms; }
+.item-list .item-row:nth-child(n+10) { animation-delay: 180ms; }
+
+@keyframes row-in { from { opacity: 0; } to { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .view.entering, .item-list .item-row { animation: none; }
+}

@@ -17,7 +17,7 @@ bash setup.sh   # installs whisper-cpp (brew), downloads the model (~141 MB), cr
 
 ## Desktop app (dashboard)
 
-A Wispr Flow–style dashboard: record dictations, browse history, track stats (words, WPM, streak), edit your dictionary, and change settings — including 7 animation themes for the recording pill plus a color wheel to recolor any of them.
+A macOS dashboard: record dictations, browse history, track stats, edit your dictionary, and change settings.
 
 ```bash
 bash scripts/install_app.sh   # installs to ~/Applications/Voisr.app
@@ -33,6 +33,24 @@ For development, run the same dashboard straight from the repo:
 ```
 
 On first recording, macOS will ask for Microphone access — allow it once.
+
+### Dashboard
+
+The dashboard follows your macOS appearance setting automatically, with an option to pin to Light or Dark mode in Settings.
+
+**Home** leads with your push-to-talk key rendered as a keycap (`Hold <key> to dictate`) and a headline stat showing **Time saved** (measured against typing at 40 wpm) with a 14-day sparkline.
+
+A **permission health strip** shows three chips for Microphone, Input Monitoring, and Accessibility. Any missing grant turns amber; clicking it opens the exact System Settings pane. When all three are granted, it collapses to a single quiet line.
+
+**⌘K command palette** lets you start dictation, jump between views, change the push-to-talk key, toggle appearance, and copy the last dictation.
+
+**History** supports ⌘F search with match highlighting, arrow-key navigation, ⌘C to copy, and Backspace to delete the selected row. It pages past 200 entries and can export to `.txt`. Deleting a row shows an Undo toast instead of a confirmation dialog.
+
+**Dictionary** entries can be edited in place instead of deleted and retyped.
+
+A **menu-bar item** keeps Voisr reachable without opening its window and shows when a dictation is in flight.
+
+**Settings** are grouped into Dictation, Push-to-talk, Appearance, and Privacy & Data sections. You can set launch-at-login and choose a transcription model (`small.en` for accuracy, `base.en` for speed).
 
 ## CLI usage
 

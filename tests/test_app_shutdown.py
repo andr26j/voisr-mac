@@ -73,6 +73,9 @@ def test_hotkey_ctrl_c_stops_listener_then_closes_api(monkeypatch):
         def __init__(self, **kwargs):
             events.append("api-created")
 
+        def attach_status_item(self, status):
+            pass
+
         def close(self):
             events.append("api-closed")
 
@@ -103,6 +106,9 @@ def test_hotkey_stop_failure_still_closes_api(monkeypatch):
 
     class FakeApi:
         def __init__(self, **kwargs):
+            pass
+
+        def attach_status_item(self, status):
             pass
 
         def close(self):
@@ -139,6 +145,9 @@ def test_hotkey_service_constructor_failure_closes_api(monkeypatch):
         def __init__(self, **kwargs):
             events.append("api-created")
 
+        def attach_status_item(self, status):
+            pass
+
         def close(self):
             events.append("api-closed")
 
@@ -166,6 +175,9 @@ def test_gui_shutdown_stops_listener_then_closes_api(monkeypatch):
             pass
 
         def attach_window(self, window):
+            pass
+
+        def attach_status_item(self, status):
             pass
 
         def close(self):
@@ -215,6 +227,9 @@ def test_gui_stop_failure_still_closes_api(monkeypatch):
         def attach_window(self, window):
             pass
 
+        def attach_status_item(self, status):
+            pass
+
         def close(self):
             events.append("api-closed")
 
@@ -257,6 +272,9 @@ def test_gui_service_constructor_failure_closes_api(monkeypatch):
     events = []
 
     class FakeApi:
+        def attach_status_item(self, status):
+            pass
+
         def close(self):
             events.append("api-closed")
 
@@ -283,6 +301,9 @@ def test_gui_window_constructor_failure_stops_listener_and_closes_api(monkeypatc
 
     class FakeApi:
         def attach_hotkey_service(self, service):
+            pass
+
+        def attach_status_item(self, status):
             pass
 
         def close(self):

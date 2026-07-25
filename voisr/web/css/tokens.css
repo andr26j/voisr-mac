@@ -1,0 +1,73 @@
+/* Voisr design tokens.
+   The dark base is the pill's own colour (rgba(28,26,23,.94)) so the floating
+   pill and the dashboard read as one application, not two.
+
+   There is no colour-scheme media query here on purpose. main.js resolves
+   the "system" preference to a concrete light/dark via matchMedia and always
+   writes data-appearance, so each palette is declared exactly once and a
+   manual override wins without restating the other theme. A boot script in
+   index.html's <head> sets the attribute before first paint. */
+
+:root,
+:root[data-appearance="light"] {
+  --bg: #F6F3EE;
+  --surface: #FFFFFF;
+  --surface-2: #FBF9F6;
+  --ink: #1F1D1A;
+  --muted: #6E6A63;
+  --border: #E8E3DA;
+  --accent: #E8643C;
+  --accent-hover: #D6572F;
+  --accent-soft: #FBEAE3;
+  --on-accent: #FFFFFF;
+  --success: #3E7C4F;
+  --success-soft: #E9F2EC;
+  --warning: #A96B12;
+  --warning-soft: #FBF0DE;
+  --destructive: #C93A2E;
+  --destructive-soft: #FBEBE9;
+  --ring: #E8643C;
+  --scrim: rgba(31, 29, 26, .28);
+  --sidebar-bg: rgba(246, 243, 238, .55);
+  --shadow: 0 1px 3px rgba(31, 29, 26, .06), 0 8px 24px rgba(31, 29, 26, .05);
+  --shadow-pop: 0 8px 40px rgba(31, 29, 26, .18);
+
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --titlebar-h: 52px;
+
+  --fast: 120ms;
+  --base: 180ms;
+  --slow: 240ms;
+  --ease: cubic-bezier(.2, .8, .2, 1);
+
+  color-scheme: light;
+}
+
+:root[data-appearance="dark"] {
+  --bg: #1A1815;
+  --surface: #232019;
+  --surface-2: #2A261E;
+  --ink: #F2EFE9;
+  --muted: #9A948A;
+  --border: #332F27;
+  --accent: #F2794F;
+  --accent-hover: #FF8C63;
+  --accent-soft: #3A241B;
+  --on-accent: #1A1815;
+  --success: #6FBF85;
+  --success-soft: #1F3325;
+  --warning: #E0A85A;
+  --warning-soft: #372A16;
+  --destructive: #EE7C6E;
+  --destructive-soft: #3A211D;
+  --ring: #F2794F;
+  --scrim: rgba(0, 0, 0, .5);
+  --sidebar-bg: rgba(26, 24, 21, .45);
+  /* shadows do not read on a dark base — elevation comes from the border */
+  --shadow: 0 0 0 1px rgba(255, 255, 255, .04);
+  --shadow-pop: 0 12px 48px rgba(0, 0, 0, .55);
+
+  color-scheme: dark;
+}

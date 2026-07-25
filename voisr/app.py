@@ -12,7 +12,8 @@ from voisr.recorder import Recorder
 from voisr.transcriber import transcribe
 
 DEFAULT_CONFIG = {"hotkey": "alt_r", "paste": True, "device": ":0", "dictionary": {},
-                  "show_widget": True, "pill_theme": "classic", "pill_color": None}
+                  "show_widget": True, "pill_theme": "classic", "pill_color": None,
+                  "appearance": "system", "launch_at_login": False, "model": None}
 
 
 def load_config(path) -> dict:

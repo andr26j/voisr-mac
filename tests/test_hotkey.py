@@ -72,3 +72,35 @@ def test_get_hotkey_status(tmp_path):
     assert ("paste ready" in status) or ("Accessibility" in status)
     api_no_svc = make_api(tmp_path)
     assert "hotkey" in api_no_svc.get_hotkey_status()["status"].lower() or api_no_svc.get_hotkey_status()["status"]
+
+
+def test_hotkey_display_prefers_captured_label(tmp_path):
+    """Priority 1: a captured key's stored hotkey_label always wins, even
+    when hotkey also happens to match a known HOTKEY_OPTIONS value."""
+    api = make_api(tmp_path)
+    api.set_config({"hotkey": "alt_r", "hotkey_label": "Fn / Globe"})
+    assert api.hotkey_display() == {"display": "Fn / Globe"}
+
+
+def test_hotkey_display_falls_back_to_hotkey_options_label(tmp_path):
+    """Priority 2: a fresh install ships hotkey="alt_r" with no
+    hotkey_label — the raw config identifier must never reach the UI."""
+    api = make_api(tmp_path)
+    assert api.get_config().get("hotkey_label") is None
+    assert api.get_config()["hotkey"] == "alt_r"
+    assert api.hotkey_display() == {"display": "Right Option (⌥)"}
+
+
+def test_hotkey_display_falls_back_to_raw_value_when_unrecognized(tmp_path):
+    """Priority 3: an unrecognized hotkey value (not in HOTKEY_OPTIONS, no
+    label) is shown as-is rather than crashing or going blank."""
+    api = make_api(tmp_path)
+    api.set_config({"hotkey": "some_future_key"})
+    assert api.hotkey_display() == {"display": "some_future_key"}
+
+
+def test_hotkey_display_unset_when_no_hotkey_configured(tmp_path):
+    """Priority 4: nothing configured at all resolves to "unset"."""
+    api = make_api(tmp_path)
+    api.set_config({"hotkey": ""})
+    assert api.hotkey_display() == {"display": "unset"}
