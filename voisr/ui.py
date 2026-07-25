@@ -64,15 +64,30 @@ def request_permissions() -> None:
 
 def apply_app_appearance(mode: str) -> None:
     """Point NSApp at a fixed appearance so the titlebar and vibrancy follow
-    the user's choice. 'system' clears the override. Never raises."""
+    the user's choice. 'system' clears the override. Never raises.
+
+    set_appearance() is a js_api method, and pywebview dispatches every
+    js_api call on a fresh worker thread -- so without this, setAppearance_
+    would hit AppKit off the main thread. Route it through AppHelper.callAfter
+    like every other AppKit entry point on this branch (_run_save_panel,
+    native_setup). Safe to call from the main thread too (e.g. native_setup's
+    startup call): callAfter just schedules onto the run loop."""
     try:
+        from PyObjCTools import AppHelper
         import AppKit
-        names = {"light": AppKit.NSAppearanceNameAqua,
-                 "dark": AppKit.NSAppearanceNameDarkAqua}
-        name = names.get(mode)
-        appearance = (AppKit.NSAppearance.appearanceNamed_(name)
-                      if name else None)
-        AppKit.NSApp.setAppearance_(appearance)
+
+        def go():
+            try:
+                names = {"light": AppKit.NSAppearanceNameAqua,
+                         "dark": AppKit.NSAppearanceNameDarkAqua}
+                name = names.get(mode)
+                appearance = (AppKit.NSAppearance.appearanceNamed_(name)
+                              if name else None)
+                AppKit.NSApp.setAppearance_(appearance)
+            except Exception:
+                pass
+
+        AppHelper.callAfter(go)
     except Exception:
         pass
 

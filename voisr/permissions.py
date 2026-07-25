@@ -69,9 +69,22 @@ def open_pane(key: str, opener=None) -> bool:
         return False
     if opener is None:
         def opener(u):
+            # open_pane is a js_api method reached from a pywebview worker
+            # thread, so NSWorkspace.openURL_ must not run inline here --
+            # dispatch it to the main thread like every other AppKit entry
+            # point on this branch (ui.py's apply_app_appearance,
+            # _run_save_panel, native_setup).
+            from PyObjCTools import AppHelper
             import AppKit
-            AppKit.NSWorkspace.sharedWorkspace().openURL_(
-                AppKit.NSURL.URLWithString_(u))
+
+            def go():
+                try:
+                    AppKit.NSWorkspace.sharedWorkspace().openURL_(
+                        AppKit.NSURL.URLWithString_(u))
+                except Exception:
+                    pass
+
+            AppHelper.callAfter(go)
     try:
         opener(url)
     except Exception:
