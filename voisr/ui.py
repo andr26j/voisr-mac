@@ -1106,12 +1106,20 @@ def main():
         widget.create()
 
         def menu_dictate():
-            # same entry point the dashboard button uses, so the two can never
-            # disagree about recording state
-            if api.is_recording():
-                api.stop_recording(paste=True)
-            else:
-                api.start_recording()
+            # Routed through HotkeyService (not Api directly): an NSMenuItem
+            # action runs on the AppKit main thread, and api.stop_recording()
+            # blocks on the worker future for the whole transcription --
+            # that would freeze the window, the menu bar, and every queued
+            # AppHelper.callAfter (including the pill's own state updates)
+            # for the duration. HotkeyService.release() hands the blocking
+            # wait off to its own worker thread instead. It's also the only
+            # path that drives the widget, so a menu-started dictation shows
+            # the pill instead of leaving just the menu-bar glyph -- the
+            # spec requires the two to never disagree. service._toggle() is
+            # the same press()/release() pair used for the Fn/Globe-style
+            # toggle keys, which is exactly this click-to-start,
+            # click-to-stop shape.
+            service._toggle()
 
         def menu_open():
             try:
@@ -1149,7 +1157,28 @@ def main():
                 apply_app_appearance(api.get_config().get("appearance", "system"))
                 native = getattr(window, "native", None)
                 if native is not None:
-                    apply_chrome(native, webview=_find_webview(native))
+                    chrome = apply_chrome(native, webview=_find_webview(native))
+                    if not chrome["titlebar"]:
+                        print("Voisr chrome: titlebar setup failed", flush=True)
+                    if not chrome["vibrancy"]:
+                        print("Voisr chrome: vibrancy unavailable, using flat "
+                              "fallback", flush=True)
+                        # No native vibrancy effect view -- tell base.css's
+                        # :root[data-vibrancy="off"] fallback to paint a
+                        # solid tint instead of leaving the sidebar assuming
+                        # a translucency that was never applied. Fire-and-
+                        # forget off-thread, same pattern as
+                        # Api._notify_dictation: a slow or dead webview must
+                        # never block startup.
+                        def set_vibrancy_off():
+                            try:
+                                window.evaluate_js(
+                                    'document.documentElement.setAttribute('
+                                    '"data-vibrancy", "off")')
+                            except Exception:
+                                pass
+                        threading.Thread(target=set_vibrancy_off,
+                                         daemon=True).start()
                 status.create()
 
             AppHelper.callAfter(native_setup)
