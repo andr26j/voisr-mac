@@ -2,7 +2,9 @@
 window.Voisr = window.Voisr || {};
 (function (V) {
   const PAGE = 200;
+  const SEARCH_DEBOUNCE_MS = 120;
   let query = "", shown = PAGE, items = [], flat = [], cursor = -1;
+  let searchDebounceTimer = null;
 
   async function onCopy(item) {
     await V.api().copy_text(item.text);
@@ -22,26 +24,53 @@ window.Voisr = window.Voisr || {};
     });
   }
 
-  function setQuery(q) {
-    query = (q || "").trim();
-    const input = document.getElementById("history-search");
-    if (input) input.value = query;
+  /* Internal query update shared by both entry points below. Trimming only
+     happens for matching (see matches()/highlighted()), never here -- a
+     mid-typing trim is what let a leading/trailing space vanish and mangle
+     multi-word queries like "site visit". Filters the already-loaded
+     `items` array -- no bridge round-trip, so this is safe to call on
+     every keystroke (see onSearchInput's debounce below). */
+  function applyQuery(q) {
+    query = q || "";
     shown = PAGE;
     cursor = -1;
-    render();
+    renderList();
+  }
+
+  /* User-typing path: the `input` event handler. Must NOT write back to
+     `input.value` -- doing so while the user is mid-keystroke is what
+     caused a trimmed value to clobber spaces as they were typed. Debounced
+     so a fast typist doesn't force a full re-render (rebuild + restagger
+     the DOM) on every single keystroke. */
+  function onSearchInput(q) {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => applyQuery(q), SEARCH_DEBOUNCE_MS);
+  }
+
+  /* Programmatic entry point (e.g. an external caller jumping to History
+     with a preset query). Unlike onSearchInput, this DOES drive the input
+     field's value (no keystroke is in flight to fight with) and applies
+     immediately rather than waiting out the debounce. */
+  function setQuery(q) {
+    clearTimeout(searchDebounceTimer);
+    const input = document.getElementById("history-search");
+    if (input) input.value = q || "";
+    applyQuery(q);
   }
 
   function matches(item) {
-    return !query || item.text.toLowerCase().includes(query.toLowerCase());
+    const q = query.trim();
+    return !q || item.text.toLowerCase().includes(q.toLowerCase());
   }
 
   /* Highlight without markup injection: split on the match and build nodes. */
   function highlighted(text) {
-    if (!query) return [text];
-    const lower = text.toLowerCase(), q = query.toLowerCase();
+    const q = query.trim();
+    if (!q) return [text];
+    const lower = text.toLowerCase(), qLower = q.toLowerCase();
     const out = [];
     let at = 0, i;
-    while ((i = lower.indexOf(q, at)) !== -1) {
+    while ((i = lower.indexOf(qLower, at)) !== -1) {
       if (i > at) out.push(text.slice(at, i));
       out.push(V.ui.el("mark", { text: text.slice(i, i + q.length) }));
       at = i + q.length;
@@ -70,8 +99,11 @@ window.Voisr = window.Voisr || {};
     return flat[cursor];
   }
 
-  async function render() {
-    items = await V.api().get_history();
+  /* Pure re-render from the already-loaded `items` array -- no bridge call.
+     This is what a search keystroke drives (via applyQuery); it must never
+     hit the API, or every keystroke would re-read and re-sort the entire
+     JSONL in Python for a filter that's cheap to do in JS. */
+  function renderList() {
     const visible = items.filter(matches);
     flat = visible.slice(0, shown);
     document.getElementById("history-empty").hidden = visible.length > 0;
@@ -110,9 +142,18 @@ window.Voisr = window.Voisr || {};
     cursor = -1;
   }
 
+  /* Genuine data-changing entry point: refetches from Python then rebuilds.
+     Used on view entry, delete/undo, "Load more" and the
+     voisr:new-dictation push event -- anywhere the underlying data (not
+     just the filter) may have changed. */
+  async function render() {
+    items = await V.api().get_history();
+    renderList();
+  }
+
   function initKeys() {
     document.getElementById("history-search")
-      .addEventListener("input", (e) => setQuery(e.target.value));
+      .addEventListener("input", (e) => onSearchInput(e.target.value));
 
     document.getElementById("history-more").addEventListener("click", () => {
       shown += PAGE;
