@@ -10,7 +10,7 @@ window.Voisr = window.Voisr || {};
   }
 
   async function render() {
-    const $ = V.ui.el;
+    const $ = V.ui.$;
     const cfg = await V.api().get_config();
     const entries = Object.entries(cfg.dictionary || {});
     $("#dict-empty").hidden = entries.length > 0;
@@ -19,7 +19,7 @@ window.Voisr = window.Voisr || {};
   }
 
   async function addEntry(e) {
-    const $ = V.ui.el;
+    const $ = V.ui.$;
     e.preventDefault();
     const spoken = $("#dict-spoken").value.trim().toLowerCase();
     const written = $("#dict-written").value.trim();

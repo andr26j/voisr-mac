@@ -6,7 +6,7 @@ window.Voisr = window.Voisr || {};
   }
 
   async function renderThemes() {
-    const $ = V.ui.el;
+    const $ = V.ui.$;
     const [cfg, themes] = await Promise.all([V.api().get_config(), V.api().get_pill_themes()]);
     const active = cfg.pill_theme || "classic";
     $("#theme-grid").innerHTML = themes.map((t) => `
@@ -41,7 +41,7 @@ window.Voisr = window.Voisr || {};
   }
 
   function drawColorWheel() {
-    const $ = V.ui.el;
+    const $ = V.ui.$;
     const cv = $("#color-wheel"), ctx = cv.getContext("2d");
     const img = ctx.createImageData(200, 200);
     for (let y = 0; y < 200; y++) for (let x = 0; x < 200; x++) {
@@ -57,7 +57,7 @@ window.Voisr = window.Voisr || {};
   }
 
   function setColorUi(hex) {
-    const $ = V.ui.el;
+    const $ = V.ui.$;
     const preview = $("#color-preview"), thumb = $("#wheel-thumb");
     if (hex) {
       preview.style.setProperty("--mb-color", hex);
@@ -83,14 +83,14 @@ window.Voisr = window.Voisr || {};
   }
 
   async function renderColorWheel() {
-    const $ = V.ui.el;
+    const $ = V.ui.$;
     const cfg = await V.api().get_config();
     $("#color-preview").dataset.theme = cfg.pill_theme || "classic";
     setColorUi(cfg.pill_color || null);
   }
 
   function initColorWheel() {
-    const $ = V.ui.el;
+    const $ = V.ui.$;
     drawColorWheel();
     const cv = $("#color-wheel");
     let dragging = false, lastHex = null;
@@ -123,7 +123,7 @@ window.Voisr = window.Voisr || {};
   }
 
   async function render() {
-    const $ = V.ui.el;
+    const $ = V.ui.$;
     const [cfg, status] = await Promise.all([
       V.api().get_config(), V.api().get_hotkey_status(),
     ]);

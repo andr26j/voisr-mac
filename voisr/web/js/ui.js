@@ -44,14 +44,11 @@ window.Voisr = window.Voisr || {};
      attributes through setAttribute, so nothing user-supplied is ever parsed
      as markup — which retires the escapeHtml-into-attribute pattern.
 
-     NOTE on naming: this is NOT exposed as `V.ui.el` — that property already
-     means "querySelector shorthand" (`const $ = V.ui.el`) across main.js,
-     dictionary.js and (untouchable, per this task's scope) settings.js.
-     Overwriting it would silently break every one of those call sites
-     (`el("#foo")` would try to createElement a tag named "#foo" instead of
-     finding the node). So this builder stays private to ui.js and is used
-     only to construct the row helpers below (`itemRow`, `dictRow`), which
-     *are* exported. `V.ui.el` keeps its original meaning unchanged. */
+     NOTE on naming: this is exposed as `V.ui.el`. The querySelector shorthand
+     (formerly also called `el`) has been renamed back to its original name,
+     `V.ui.$`, so the two no longer collide. See call sites across main.js,
+     views/home.js, views/history.js, views/dictionary.js and
+     views/settings.js, all of which now do `const $ = V.ui.$;`. */
   function el(tag, props, ...children) {
     const node = document.createElement(tag);
     for (const [k, v] of Object.entries(props || {})) {
@@ -104,5 +101,5 @@ window.Voisr = window.Voisr || {};
                      html: ICONS.trash, on: { click: () => onRemove(spoken) } }));
   }
 
-  V.ui = { el: $, toast, escapeHtml, timeOf, dayOf, ICONS, itemRow, dictRow };
+  V.ui = { el, $, toast, escapeHtml, timeOf, dayOf, ICONS, itemRow, dictRow };
 })(window.Voisr);

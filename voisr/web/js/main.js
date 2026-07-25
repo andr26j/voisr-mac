@@ -40,7 +40,7 @@ window.Voisr = window.Voisr || {};
   /* ---------- init ---------- */
 
   async function init() {
-    const $ = V.ui.el;
+    const $ = V.ui.$;
     document.querySelectorAll("[data-view]").forEach((b) =>
       b.addEventListener("click", () => show(b.dataset.view)));
     $("#record-btn").addEventListener("click", V.views.home.toggleRecord);

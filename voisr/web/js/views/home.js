@@ -21,7 +21,7 @@ window.Voisr = window.Voisr || {};
   }
 
   async function render() {
-    const $ = V.ui.el;
+    const $ = V.ui.$;
     $("#greeting").textContent = greeting();
     const [stats, history] = await Promise.all([V.api().get_stats(), V.api().get_history()]);
     $("#stat-words").textContent = stats.total_words.toLocaleString();
@@ -38,7 +38,7 @@ window.Voisr = window.Voisr || {};
   let recState = "idle"; // idle | recording | processing
 
   async function toggleRecord() {
-    const $ = V.ui.el;
+    const $ = V.ui.$;
     const btn = $("#record-btn");
     const status = $("#record-status");
     const errEl = $("#record-error");

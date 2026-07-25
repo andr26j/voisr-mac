@@ -152,6 +152,26 @@ def test_row_renderers_do_not_use_innerhtml():
         assert "innerHTML" not in src, f"{rel} still builds rows with innerHTML"
 
 
-def test_ui_exposes_the_el_helper():
-    assert "el:" in (WEB / "js" / "ui.js").read_text() or \
-           "el," in (WEB / "js" / "ui.js").read_text()
+def test_ui_exposes_the_el_builder_and_dollar_shorthand():
+    src = (WEB / "js" / "ui.js").read_text()
+
+    # el() must be the DOM-builder helper — (tag, props, ...children) —
+    # not the querySelector shorthand.
+    assert re.search(r"function el\(tag, props, \.\.\.children\)", src), \
+        "ui.js's el() is no longer the (tag, props, ...children) builder"
+
+    # $ must independently be the querySelector shorthand.
+    assert re.search(r"const \$ = \(sel\) => document\.querySelector\(sel\)", src), \
+        "ui.js no longer defines $ as the querySelector shorthand"
+
+    export_obj = re.search(r"V\.ui = \{(.*?)\};", src, re.S)
+    assert export_obj, "could not find the V.ui export object in ui.js"
+    exported = export_obj.group(1)
+
+    # Both must be exported under their own names, not aliased to each other.
+    assert re.search(r"(?<![.\w])el(?![.\w])(?!\s*:\s*\$)", exported), \
+        "V.ui.el is not exported"
+    assert "el: $" not in exported, \
+        "V.ui.el is still aliased to the querySelector shorthand, not the builder"
+    assert re.search(r"(?<![.\w])\$(?![.\w])(?!\s*:\s*el)", exported), \
+        "V.ui.$ (querySelector shorthand) is not exported"

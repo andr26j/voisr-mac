@@ -13,7 +13,7 @@ window.Voisr = window.Voisr || {};
   }
 
   async function render() {
-    const $ = V.ui.el;
+    const $ = V.ui.$;
     const items = await V.api().get_history();
     const container = $("#history-groups");
     $("#history-empty").hidden = items.length > 0;
