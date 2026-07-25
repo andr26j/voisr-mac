@@ -86,7 +86,7 @@ def test_corrupt_config_falls_back_to_defaults(tmp_path):
 def test_stats_shape(tmp_path):
     api = make_api(tmp_path)
     s = api.get_stats()
-    assert set(s) == {"total_words", "dictations", "avg_wpm", "streak_days"}
+    assert set(s) == {"total_words", "dictations", "avg_wpm", "streak_days", "total_seconds", "time_saved_seconds", "daily"}
 
 
 def test_delete_history_item(tmp_path):
