@@ -346,3 +346,15 @@ def test_colour_wheel_is_drawn_lazily():
     assert "drawColorWheel" in src
     # the wheel must not be drawn during initial render
     assert "wheelDrawn" in src
+
+
+def test_view_transition_class_exists_and_respects_reduced_motion():
+    css = (WEB / "css" / "base.css").read_text()
+    assert ".view.entering" in css
+    assert "prefers-reduced-motion" in css
+    block = css.split("prefers-reduced-motion", 1)[1]
+    assert "animation: none" in block
+
+
+def test_show_applies_the_entering_class():
+    assert "entering" in (WEB / "js" / "main.js").read_text()

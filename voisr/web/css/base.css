@@ -99,3 +99,31 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .page-head h1 { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; }
 
 .sub { color: var(--muted); margin-top: 6px; max-width: 58ch; }
+
+/* ---------- Transitions ---------- */
+
+.view.entering { animation: view-in var(--slow) var(--ease); }
+
+@keyframes view-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.item-list .item-row { animation: row-in var(--base) var(--ease) both; }
+/* stagger only the first ten rows — a long list must never crawl */
+.item-list .item-row:nth-child(1) { animation-delay: 0ms; }
+.item-list .item-row:nth-child(2) { animation-delay: 20ms; }
+.item-list .item-row:nth-child(3) { animation-delay: 40ms; }
+.item-list .item-row:nth-child(4) { animation-delay: 60ms; }
+.item-list .item-row:nth-child(5) { animation-delay: 80ms; }
+.item-list .item-row:nth-child(6) { animation-delay: 100ms; }
+.item-list .item-row:nth-child(7) { animation-delay: 120ms; }
+.item-list .item-row:nth-child(8) { animation-delay: 140ms; }
+.item-list .item-row:nth-child(9) { animation-delay: 160ms; }
+.item-list .item-row:nth-child(n+10) { animation-delay: 180ms; }
+
+@keyframes row-in { from { opacity: 0; } to { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .view.entering, .item-list .item-row { animation: none; }
+}

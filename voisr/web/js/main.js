@@ -6,6 +6,11 @@ window.Voisr = window.Voisr || {};
   function show(view) {
     document.querySelectorAll(".view").forEach((v) => { v.hidden = v.id !== `view-${view}`; });
     document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
+    const target = document.getElementById(`view-${view}`);
+    target.classList.add("entering");
+    // remove on the next frame pair so re-selecting the same view replays it
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => target.classList.remove("entering")));
     if (view === "home") V.views.home.render();
     if (view === "history") V.views.history.render();
     if (view === "dictionary") V.views.dictionary.render();
