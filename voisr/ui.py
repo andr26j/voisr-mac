@@ -4,6 +4,7 @@ import threading
 import time
 from pathlib import Path
 
+from voisr import launch_agent, permissions
 from voisr.app import load_config
 from voisr.cleanup import clean
 from voisr.history import HistoryStore
@@ -863,6 +864,66 @@ class Api:
             status += " · paste ready" if paste_ready() \
                 else " · grant Accessibility to auto-paste"
         return {"status": status}
+
+    def get_permissions(self):
+        return {"panes": permissions.states()}
+
+    def open_settings_pane(self, key):
+        return {"ok": permissions.open_pane(key)}
+
+    def restore_history_item(self, item):
+        try:
+            self._history.restore(item)
+        except Exception as e:
+            return {"error": str(e)}
+        return {"ok": True}
+
+    def clear_history(self):
+        try:
+            removed = self._history.clear()
+        except Exception as e:
+            return {"error": str(e)}
+        return {"ok": True, "removed": removed}
+
+    def get_models(self):
+        from voisr.transcriber import MODELS_DIR, PREFERRED_MODELS
+        labels = {"small.en": "Small — best accuracy",
+                  "base.en": "Base — fastest"}
+        models = []
+        for name in PREFERRED_MODELS:
+            path = MODELS_DIR / f"ggml-{name}.bin"
+            installed = path.exists()
+            models.append({"value": name, "label": labels.get(name, name),
+                           "installed": installed,
+                           "bytes": path.stat().st_size if installed else 0})
+        return {"models": models, "active": self.get_config().get("model")}
+
+    def set_launch_at_login(self, enabled):
+        try:
+            if enabled:
+                launch_agent.enable(path=launch_agent.PLIST_PATH)
+            else:
+                launch_agent.disable(path=launch_agent.PLIST_PATH)
+        except Exception as e:
+            return {"error": str(e)}
+        self.set_config({"launch_at_login": bool(enabled)})
+        return {"ok": True, "enabled": bool(enabled)}
+
+    def export_history(self, fmt):
+        import datetime
+        items = self._history.list()
+        stamp = datetime.date.today().isoformat()
+        if fmt == "json":
+            text = json.dumps(items, indent=2)
+        elif fmt == "md":
+            text = "\n".join(
+                f"- **{datetime.datetime.fromtimestamp(i['ts']):%Y-%m-%d %H:%M}** "
+                f"— {i['text']}" for i in items)
+        elif fmt == "txt":
+            text = "\n".join(i["text"] for i in items)
+        else:
+            return {"error": f"unsupported format: {fmt}"}
+        return {"text": text, "suggested_name": f"voisr-history-{stamp}.{fmt}"}
 
     def prime_microphone(self):
         """Retained for interface parity — intentionally does NOT open the

@@ -537,3 +537,71 @@ def test_paste_landed_error_keeps_smart_spacing_for_next_dictation(tmp_path):
         assert copied == []
     finally:
         api.close()
+
+
+import json as _json
+
+from voisr import launch_agent
+
+
+def test_get_permissions_returns_three_panes(tmp_path):
+    api = make_api(tmp_path)
+    panes = api.get_permissions()["panes"]
+    assert [p["key"] for p in panes] == [
+        "microphone", "input_monitoring", "accessibility"]
+    assert all("settings_url" in p for p in panes)
+
+
+def test_open_settings_pane_rejects_unknown_key(tmp_path):
+    api = make_api(tmp_path)
+    assert api.open_settings_pane("bogus") == {"ok": False}
+
+
+def test_restore_history_item_puts_it_back(tmp_path):
+    api = make_api(tmp_path)
+    api.start_recording()
+    api.stop_recording()
+    item = api.get_history()[0]
+    api.delete_history_item(item["id"])
+    assert api.get_history() == []
+    assert api.restore_history_item(item) == {"ok": True}
+    assert api.get_history()[0]["id"] == item["id"]
+
+
+def test_get_models_lists_known_models_with_installed_flags(tmp_path):
+    api = make_api(tmp_path)
+    out = api.get_models()
+    values = [m["value"] for m in out["models"]]
+    assert values == ["small.en", "base.en"]
+    assert all(isinstance(m["installed"], bool) for m in out["models"])
+
+
+def test_set_launch_at_login_round_trips(tmp_path, monkeypatch):
+    plist = tmp_path / "agent.plist"
+    monkeypatch.setattr(launch_agent, "PLIST_PATH", plist)
+    api = make_api(tmp_path)
+    assert api.set_launch_at_login(True)["enabled"] is True
+    assert plist.exists() is True
+    assert api.set_launch_at_login(False)["enabled"] is False
+    assert plist.exists() is False
+    assert api.get_config()["launch_at_login"] is False
+
+
+def test_clear_history_wipes_everything(tmp_path):
+    api = make_api(tmp_path)
+    api.start_recording()
+    api.stop_recording()
+    assert api.clear_history() == {"ok": True, "removed": 1}
+    assert api.get_history() == []
+
+
+def test_export_history_txt_and_json(tmp_path):
+    api = make_api(tmp_path)
+    api.start_recording()
+    api.stop_recording()
+    txt = api.export_history("txt")
+    assert "Hello world" in txt["text"]
+    assert txt["suggested_name"].endswith(".txt")
+    parsed = _json.loads(api.export_history("json")["text"])
+    assert parsed[0]["text"] == "Hello world"
+    assert api.export_history("exe").get("error")
