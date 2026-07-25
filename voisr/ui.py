@@ -17,6 +17,19 @@ from voisr.recording_queue import (
     RecordingSession,
     SessionResult,
 )
+from voisr.status_item import StatusItem
+from voisr.window_chrome import apply_chrome
+
+
+def _find_webview(native_window):
+    """The WKWebView pywebview put in the window, or None."""
+    try:
+        for view in native_window.contentView().subviews():
+            if view.__class__.__name__.startswith("WKWebView"):
+                return view
+    except Exception:
+        pass
+    return None
 
 
 def default_recorder():
@@ -45,6 +58,21 @@ def request_permissions() -> None:
         from ApplicationServices import (AXIsProcessTrustedWithOptions,
                                          kAXTrustedCheckOptionPrompt)
         AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
+    except Exception:
+        pass
+
+
+def apply_app_appearance(mode: str) -> None:
+    """Point NSApp at a fixed appearance so the titlebar and vibrancy follow
+    the user's choice. 'system' clears the override. Never raises."""
+    try:
+        import AppKit
+        names = {"light": AppKit.NSAppearanceNameAqua,
+                 "dark": AppKit.NSAppearanceNameDarkAqua}
+        name = names.get(mode)
+        appearance = (AppKit.NSAppearance.appearanceNamed_(name)
+                      if name else None)
+        AppKit.NSApp.setAppearance_(appearance)
     except Exception:
         pass
 
@@ -649,6 +677,8 @@ class Api:
         self._last_paste_typing_generation = 0
         self._paste_state_lock = threading.Lock()
         self._window = None
+        self._status_item = None
+        self._is_recording = False
         self._recordings = RecordingQueue(
             recorder_factory=recorder_factory,
             fallback_recorder_factory=fallback_recorder_factory,
@@ -680,6 +710,24 @@ class Api:
     def attach_window(self, window):
         """Dashboard window handle, used to push live-refresh events to JS."""
         self._window = window
+
+    def attach_status_item(self, status):
+        self._status_item = status
+
+    def is_recording(self) -> bool:
+        return self._is_recording
+
+    def _set_recording(self, value: bool) -> None:
+        """Single source of truth for 'a dictation is in flight', mirrored to
+        the menu-bar glyph. Never lets a status-item failure break recording."""
+        self._is_recording = bool(value)
+        status = self._status_item
+        if status is None:
+            return
+        try:
+            status.set_recording(self._is_recording)
+        except Exception:
+            pass
 
     def _notify_dictation(self):
         """Tell the dashboard a dictation landed (hotkey dictations must show
@@ -813,9 +861,11 @@ class Api:
             session = self._recordings.start()
         except RecordingQueueError as error:
             return {"error": str(error)}
+        self._set_recording(True)
         return {"recording": True, "session_id": session.sequence}
 
     def _release_recording(self, paste=False):
+        self._set_recording(False)
         return self._recordings.release(
             paste_requested=paste,
             context=self.get_config(),
@@ -826,6 +876,8 @@ class Api:
 
     def close(self):
         self._recordings.close()
+        if getattr(self, "_status_item", None) is not None:
+            self._status_item.release()
 
     def get_history(self):
         return self._history.list()
@@ -909,6 +961,15 @@ class Api:
         self.set_config({"launch_at_login": bool(enabled)})
         return {"ok": True, "enabled": bool(enabled)}
 
+    APPEARANCES = ("system", "light", "dark")
+
+    def set_appearance(self, mode):
+        if mode not in self.APPEARANCES:
+            return {"error": f"unknown appearance: {mode}"}
+        self.set_config({"appearance": mode})
+        apply_app_appearance(mode)
+        return {"ok": True, "appearance": mode}
+
     def export_history(self, fmt):
         import datetime
         items = self._history.list()
@@ -960,9 +1021,38 @@ def main():
         service = HotkeyService(api, widget=widget)
         api.attach_hotkey_service(service)
         window = webview.create_window("Voisr", str(WEB_DIR / "index.html"),
-                                       js_api=api, width=1060, height=700, min_size=(860, 560))
+                                       js_api=api, width=1060, height=700,
+                                       min_size=(900, 620))
         api.attach_window(window)
         widget.create()
+
+        def menu_dictate():
+            # same entry point the dashboard button uses, so the two can never
+            # disagree about recording state
+            if api.is_recording():
+                api.stop_recording(paste=True)
+            else:
+                api.start_recording()
+
+        def menu_open():
+            try:
+                window.show()
+            except Exception:
+                pass
+
+        def menu_quit():
+            try:
+                window.destroy()
+            except Exception:
+                pass
+
+        status = StatusItem(
+            on_dictate=menu_dictate,
+            on_open=menu_open,
+            on_quit=menu_quit,
+            hotkey_label_fn=lambda: api.get_config().get("hotkey_label")
+                                    or api.get_config().get("hotkey", "unset"))
+        api.attach_status_item(status)
 
         def on_started():
             # Runs on a worker thread AFTER the GUI run loop is up, so the
@@ -971,6 +1061,20 @@ def main():
             # only during an actual dictation, so the "mic in use" indicator is
             # off while idle.
             service.start()  # config-driven: prefers captured hotkey_vk
+
+            from PyObjCTools import AppHelper
+
+            def native_setup():
+                # Chrome and the status item are AppKit and must be on the
+                # main thread. Both are cosmetic: failures are logged, not
+                # fatal.
+                apply_app_appearance(api.get_config().get("appearance", "system"))
+                native = getattr(window, "native", None)
+                if native is not None:
+                    apply_chrome(native, webview=_find_webview(native))
+                status.create()
+
+            AppHelper.callAfter(native_setup)
 
         webview.start(on_started)
     finally:

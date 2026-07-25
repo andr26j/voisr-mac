@@ -168,6 +168,9 @@ def test_gui_shutdown_stops_listener_then_closes_api(monkeypatch):
         def attach_window(self, window):
             pass
 
+        def attach_status_item(self, status):
+            pass
+
         def close(self):
             events.append("api-closed")
 

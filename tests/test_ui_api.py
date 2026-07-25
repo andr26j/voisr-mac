@@ -605,3 +605,49 @@ def test_export_history_txt_and_json(tmp_path):
     parsed = _json.loads(api.export_history("json")["text"])
     assert parsed[0]["text"] == "Hello world"
     assert api.export_history("exe").get("error")
+
+
+def test_set_appearance_accepts_only_known_modes(tmp_path):
+    api = make_api(tmp_path)
+    assert api.set_appearance("dark")["appearance"] == "dark"
+    assert api.get_config()["appearance"] == "dark"
+    assert api.set_appearance("light")["appearance"] == "light"
+    assert api.set_appearance("system")["appearance"] == "system"
+    assert api.set_appearance("hot-pink").get("error")
+    assert api.get_config()["appearance"] == "system"  # unchanged by the bad value
+
+
+def test_is_recording_tracks_the_record_cycle(tmp_path):
+    api = make_api(tmp_path)
+    assert api.is_recording() is False
+    api.start_recording()
+    assert api.is_recording() is True
+    api.stop_recording()
+    assert api.is_recording() is False
+
+
+def test_status_item_follows_the_record_cycle(tmp_path):
+    class FakeStatus:
+        def __init__(self):
+            self.states = []
+
+        def set_recording(self, value):
+            self.states.append(bool(value))
+
+        def release(self):
+            pass
+
+    api = make_api(tmp_path)
+    status = FakeStatus()
+    api.attach_status_item(status)
+    api.start_recording()
+    api.stop_recording()
+    assert status.states == [True, False]
+
+
+def test_a_failed_start_does_not_mark_recording(tmp_path):
+    api = make_api(tmp_path)
+    api.start_recording()
+    api.start_recording()   # second start is rejected by the queue
+    api.stop_recording()
+    assert api.is_recording() is False
