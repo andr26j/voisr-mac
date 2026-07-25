@@ -1246,6 +1246,69 @@ def test_restore_puts_a_deleted_item_back_with_its_identity(tmp_path):
     assert back[0]["text"] == "bring me back"
 
 
+def test_restore_returns_the_record_to_its_original_position(tmp_path):
+    """Verify that restore() returns a deleted record to its original position,
+    not to the top of the list. With three records, the restored middle record
+    must land in the middle again, not at either end."""
+    store = HistoryStore(tmp_path / "h.jsonl")
+
+    # Add three records with distinct, increasing timestamps
+    oldest_ts = 1_000_000.0
+    middle_ts = 1_000_001.0
+    newest_ts = 1_000_002.0
+
+    # Add oldest
+    oldest_id = store.add("oldest text", duration_s=1.0)["id"]
+    def set_oldest_ts(items):
+        for item in items:
+            if item["id"] == oldest_id:
+                item["ts"] = oldest_ts
+    store._mutate(set_oldest_ts)
+
+    # Add middle
+    middle_id = store.add("middle text", duration_s=1.0)["id"]
+    def set_middle_ts(items):
+        for item in items:
+            if item["id"] == middle_id:
+                item["ts"] = middle_ts
+    store._mutate(set_middle_ts)
+
+    # Add newest
+    newest_id = store.add("newest text", duration_s=1.0)["id"]
+    def set_newest_ts(items):
+        for item in items:
+            if item["id"] == newest_id:
+                item["ts"] = newest_ts
+    store._mutate(set_newest_ts)
+
+    # Verify all three are present, sorted by ts descending (newest first)
+    before_delete = store.list()
+    assert len(before_delete) == 3
+    assert [item["id"] for item in before_delete] == [newest_id, middle_id, oldest_id]
+    assert [item["ts"] for item in before_delete] == [newest_ts, middle_ts, oldest_ts]
+
+    # Capture the middle item before deletion
+    middle_to_restore = next(item for item in before_delete if item["id"] == middle_id)
+
+    # Delete the middle record
+    store.delete(middle_id)
+    assert len(store.list()) == 2
+    assert [item["id"] for item in store.list()] == [newest_id, oldest_id]
+
+    # Restore it
+    store.restore(middle_to_restore)
+
+    # Verify it's back in the middle position with original timestamp
+    after_restore = store.list()
+    assert len(after_restore) == 3
+    assert [item["id"] for item in after_restore] == [newest_id, middle_id, oldest_id]
+    assert [item["ts"] for item in after_restore] == [newest_ts, middle_ts, oldest_ts]
+
+    # Verify the restored record has the original timestamp, not a fresh one
+    restored_middle = next(item for item in after_restore if item["id"] == middle_id)
+    assert restored_middle["ts"] == middle_ts
+
+
 def test_restore_is_a_no_op_when_the_id_is_already_present(tmp_path):
     store = HistoryStore(tmp_path / "h.jsonl")
     item = store.add("only once", duration_s=1.0)
