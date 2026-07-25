@@ -44,7 +44,7 @@ A **permission health strip** shows three chips for Microphone, Input Monitoring
 
 **⌘K command palette** lets you start dictation, jump between views, change the push-to-talk key, toggle appearance, and copy the last dictation.
 
-**History** supports ⌘F search with match highlighting, arrow-key navigation, ⌘C to copy, and Backspace to delete the selected row. It pages past 200 entries and can export to `.txt`, `.md`, or `.json`. Deleting a row shows an Undo toast instead of a confirmation dialog.
+**History** supports ⌘F search with match highlighting, arrow-key navigation, ⌘C to copy, and Backspace to delete the selected row. It pages past 200 entries and can export to `.txt`. Deleting a row shows an Undo toast instead of a confirmation dialog.
 
 **Dictionary** entries can be edited in place instead of deleted and retyped.
 

@@ -140,11 +140,11 @@ window.Voisr = window.Voisr || {};
     recState = "idle";
 
     if (res.error) {
-      status.textContent = "Click to start dictating";
+      status.textContent = "Ready";
       $("#record-error").textContent = res.error;
       return;
     }
-    status.textContent = "Click to start dictating";
+    status.textContent = "Ready";
     $("#result-text").textContent = res.text;
     $("#record-result").hidden = false;
     render();
