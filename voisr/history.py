@@ -432,12 +432,36 @@ class HistoryStore:
 
         self._mutate(remove)
 
+    def _daily_series(self, items, days: int = 14) -> list[dict]:
+        """Word counts per day for the last `days` days, oldest first,
+        zero-filled. Entries outside the window are ignored."""
+        today = date.today()
+        window = [today - timedelta(days=n) for n in range(days - 1, -1, -1)]
+        counts = {d: 0 for d in window}
+        for item in items:
+            try:
+                d = date.fromtimestamp(item["ts"])
+            except (OverflowError, OSError, ValueError):
+                continue
+            if d in counts:
+                counts[d] += item["words"]
+        return [{"date": d.isoformat(), "words": counts[d]} for d in window]
+
     def stats(self) -> dict:
         items = self._read()
         if not items:
-            return {"total_words": 0, "dictations": 0, "avg_wpm": 0, "streak_days": 0}
+            return {"total_words": 0, "dictations": 0, "avg_wpm": 0,
+                    "streak_days": 0, "total_seconds": 0,
+                    "time_saved_seconds": 0,
+                    "daily": self._daily_series([])}
         total_words = sum(i["words"] for i in items)
         total_time = sum((Fraction(i["duration_s"]) for i in items), Fraction())
+        # typing baseline: 40 words per minute
+        typed_time = Fraction(total_words * 60, 40)
+        saved = typed_time - total_time
+        if saved < 0:
+            saved = Fraction(0)
+        total_seconds = total_time
         if not total_time:
             total_time = Fraction(1, 1_000_000_000)
         days = set()
@@ -452,4 +476,7 @@ class HistoryStore:
             d -= timedelta(days=1)
         return {"total_words": total_words, "dictations": len(items),
                 "avg_wpm": round(Fraction(total_words * 60, 1) / total_time),
-                "streak_days": streak}
+                "streak_days": streak,
+                "total_seconds": round(total_seconds),
+                "time_saved_seconds": round(saved),
+                "daily": self._daily_series(items)}

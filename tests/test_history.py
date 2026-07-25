@@ -5,7 +5,9 @@ import multiprocessing
 import os
 import stat
 import threading
+import time
 import weakref
+from datetime import date, timedelta
 from fractions import Fraction
 from pathlib import Path
 
@@ -358,12 +360,14 @@ def test_unrepresentable_timestamp_stays_in_history_but_not_streak_days(tmp_path
     store = HistoryStore(path)
 
     assert [item["id"] for item in store.list()] == ["distant-id", "valid-id"]
-    assert store.stats() == {
-        "total_words": 5,
-        "dictations": 2,
-        "avg_wpm": 150,
-        "streak_days": 0,
-    }
+    stats = store.stats()
+    assert stats["total_words"] == 5
+    assert stats["dictations"] == 2
+    assert stats["avg_wpm"] == 150
+    assert stats["streak_days"] == 0
+    assert "total_seconds" in stats
+    assert "time_saved_seconds" in stats
+    assert "daily" in stats
     store.delete("valid-id")
     added = store.add("after distant timestamp", 1.0)
     store.delete(added["id"])
@@ -373,7 +377,13 @@ def test_unrepresentable_timestamp_stays_in_history_but_not_streak_days(tmp_path
 
 def test_stats_empty(tmp_path):
     s = HistoryStore(tmp_path / "h.jsonl").stats()
-    assert s == {"total_words": 0, "dictations": 0, "avg_wpm": 0, "streak_days": 0}
+    assert s["total_words"] == 0
+    assert s["dictations"] == 0
+    assert s["avg_wpm"] == 0
+    assert s["streak_days"] == 0
+    assert s["total_seconds"] == 0
+    assert s["time_saved_seconds"] == 0
+    assert len(s["daily"]) == 14
 
 
 def test_two_instances_in_threads_do_not_lose_additions(tmp_path):
@@ -1164,3 +1174,51 @@ def test_literal_tilde_path_is_not_expanded(tmp_path, monkeypatch):
 
     assert store.path == supplied_path
     assert (tmp_path / "~" / "h.jsonl").exists()
+
+
+def test_stats_reports_time_saved_against_forty_wpm(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    # 80 words spoken in 30s. Typing 80 words at 40wpm would take 120s.
+    store.add("word " * 80, duration_s=30.0)
+    stats = store.stats()
+    assert stats["total_seconds"] == 30
+    assert stats["time_saved_seconds"] == 90
+
+
+def test_stats_clamps_time_saved_at_zero(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    # 4 words in 60s is far slower than typing: must report 0, never negative.
+    store.add("one two three four", duration_s=60.0)
+    assert store.stats()["time_saved_seconds"] == 0
+
+
+def test_stats_empty_history_has_all_keys(tmp_path):
+    stats = HistoryStore(tmp_path / "h.jsonl").stats()
+    assert stats["total_seconds"] == 0
+    assert stats["time_saved_seconds"] == 0
+    assert len(stats["daily"]) == 14
+    assert all(d["words"] == 0 for d in stats["daily"])
+
+
+def test_stats_daily_is_fourteen_days_zero_filled_ending_today(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    store.add("alpha beta", duration_s=1.0)
+    daily = store.stats()["daily"]
+    assert len(daily) == 14
+    assert daily[-1]["date"] == date.today().isoformat()
+    assert daily[-1]["words"] == 2
+    assert daily[0]["date"] == (date.today() - timedelta(days=13)).isoformat()
+    assert daily[0]["words"] == 0
+
+
+def test_stats_daily_ignores_entries_older_than_the_window(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    item = store.add("old words here", duration_s=1.0)
+
+    def age(items):
+        items[0]["ts"] = time.time() - 40 * 86400
+
+    store._mutate(age)
+    stats = store.stats()
+    assert sum(d["words"] for d in stats["daily"]) == 0
+    assert stats["total_words"] == 3  # totals still count it
