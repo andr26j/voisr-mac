@@ -175,3 +175,22 @@ def test_ui_exposes_the_el_builder_and_dollar_shorthand():
         "V.ui.el is still aliased to the querySelector shorthand, not the builder"
     assert re.search(r"(?<![.\w])\$(?![.\w])(?!\s*:\s*el)", exported), \
         "V.ui.$ (querySelector shorthand) is not exported"
+
+
+def test_home_has_a_permission_strip_container():
+    assert 'id="perm-strip"' in INDEX.read_text()
+
+
+def test_home_view_calls_the_permission_api():
+    src = (WEB / "js" / "views" / "home.js").read_text()
+    assert "get_permissions" in src
+    assert "open_settings_pane" in src
+
+
+def test_api_mock_provides_permissions():
+    assert "get_permissions" in (WEB / "js" / "api.js").read_text()
+
+
+def test_permission_strip_refreshes_on_window_focus():
+    src = (WEB / "js" / "views" / "home.js").read_text()
+    assert '"focus"' in src or "'focus'" in src

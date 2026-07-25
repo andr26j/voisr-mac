@@ -1,5 +1,24 @@
 /* ---------- Home ---------- */
 
+.perm-strip { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+
+.perm-ok { color: var(--muted); font-size: 12px; }
+
+.perm-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  min-height: 32px; padding: 0 12px;
+  border: 1px solid var(--border); border-radius: 99px;
+  background: var(--surface); font-size: 12px; font-weight: 600;
+  transition: background var(--fast) var(--ease);
+}
+.perm-chip:not(:disabled):hover { background: var(--surface-2); }
+.perm-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.perm-ok .perm-dot,
+.perm-chip.perm-ok .perm-dot { background: var(--success); }
+.perm-chip.perm-denied { border-color: var(--warning); color: var(--warning); }
+.perm-chip.perm-denied .perm-dot { background: var(--warning); }
+.perm-chip.perm-unknown { color: var(--muted); }
+
 .home-grid { display: grid; grid-template-columns: 1fr 240px; gap: 18px; align-items: start; }
 
 .home-main { display: flex; flex-direction: column; gap: 18px; }

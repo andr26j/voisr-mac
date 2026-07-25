@@ -16,6 +16,15 @@ window.Voisr = window.Voisr || {};
     let mockCfg = { hotkey: "alt_r", paste: true, show_widget: true, device: ":0", pill_theme: "classic", pill_color: null, dictionary: { trademake: "TradeMate", "trade mate": "TradeMate" } };
     let recording = false;
     window.pywebview = { api: {
+      get_permissions: async () => ({ panes: [
+        { key: "microphone", label: "Microphone", granted: true,
+          settings_url: "x-apple.systempreferences:" },
+        { key: "input_monitoring", label: "Input Monitoring", granted: false,
+          settings_url: "x-apple.systempreferences:" },
+        { key: "accessibility", label: "Accessibility", granted: null,
+          settings_url: "x-apple.systempreferences:" },
+      ]}),
+      open_settings_pane: async () => ({ ok: true }),
       get_history: async () => [...mockHistory].sort((a, b) => b.ts - a.ts),
       get_stats: async () => ({ total_words: 12480, dictations: mockHistory.length, avg_wpm: 132, streak_days: 6 }),
       get_config: async () => JSON.parse(JSON.stringify(mockCfg)),

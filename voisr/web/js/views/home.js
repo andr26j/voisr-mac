@@ -1,6 +1,50 @@
 "use strict";
 window.Voisr = window.Voisr || {};
 (function (V) {
+  const PERM_HELP = {
+    microphone: "Voisr needs the microphone to hear you.",
+    input_monitoring: "Without this, the push-to-talk key does nothing.",
+    accessibility: "Without this, text is copied but not pasted for you.",
+  };
+
+  async function renderPermissions() {
+    const strip = V.ui.$("#perm-strip");
+    const { panes } = await V.api().get_permissions();
+    const bad = panes.filter((p) => p.granted !== true);
+
+    if (bad.length === 0) {
+      // a healthy app should not shout — one quiet line, not three badges
+      strip.replaceChildren(V.ui.el("p", {
+        class: "perm-ok",
+        text: "Microphone, Input Monitoring and Accessibility all granted.",
+      }));
+      strip.dataset.state = "ok";
+      return;
+    }
+
+    strip.dataset.state = "attention";
+    strip.replaceChildren(...panes.map((p) => {
+      const state = p.granted === true ? "ok"
+                  : p.granted === false ? "denied" : "unknown";
+      const chip = V.ui.el("button", {
+        class: `perm-chip perm-${state}`,
+        type: "button",
+        title: PERM_HELP[p.key] || "",
+        data: { key: p.key },
+        on: { click: () => V.api().open_settings_pane(p.key) },
+      }, V.ui.el("span", { class: "perm-dot", "aria-hidden": "true" }),
+         V.ui.el("span", { text: p.label }));
+      if (state === "ok") chip.disabled = true;
+      return chip;
+    }));
+  }
+
+  // granting a permission happens in System Settings, outside the app;
+  // refresh when the user comes back so the strip never shows a stale state
+  window.addEventListener("focus", () => {
+    if (!document.getElementById("view-home").hidden) renderPermissions();
+  });
+
   async function onCopy(item) {
     await V.api().copy_text(item.text);
     V.ui.toast("Copied to clipboard");
@@ -23,6 +67,7 @@ window.Voisr = window.Voisr || {};
   async function render() {
     const $ = V.ui.$;
     $("#greeting").textContent = greeting();
+    renderPermissions();
     const [stats, history] = await Promise.all([V.api().get_stats(), V.api().get_history()]);
     $("#stat-words").textContent = stats.total_words.toLocaleString();
     $("#stat-wpm").textContent = stats.avg_wpm.toLocaleString();
@@ -79,5 +124,5 @@ window.Voisr = window.Voisr || {};
   }
 
   V.views = V.views || {};
-  V.views.home = { render, toggleRecord };
+  V.views.home = { render, toggleRecord, renderPermissions };
 })(window.Voisr);
