@@ -53,6 +53,12 @@ window.Voisr = window.Voisr || {};
       actionLabel: "Undo",
       onAction: async () => {
         const c = await V.api().get_config();
+        const current = c.dictionary[spoken];
+        if (current !== undefined && current !== written) {
+          V.ui.toast(`Kept newer edit: ${spoken} → ${current}`);
+          return;
+        }
+        if (current === written) return; // already restored, nothing to do
         c.dictionary[spoken] = written;
         await V.api().set_config({ dictionary: c.dictionary });
         render();
