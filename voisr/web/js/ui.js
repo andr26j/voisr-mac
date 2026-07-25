@@ -32,22 +32,32 @@ window.Voisr = window.Voisr || {};
   }
 
   let toastTimer = null;
+  let toastFadeTimer = null;
   function toast(msg, opts) {
     const { actionLabel, onAction, ms } = opts || {};
     const host = document.getElementById("toast");
     clearTimeout(toastTimer);
+    clearTimeout(toastFadeTimer);
     host.replaceChildren(el("span", { text: msg }));
     if (onAction && actionLabel) {
       host.append(el("button", {
         class: "toast-action", type: "button", text: actionLabel,
-        on: { click: () => { clearTimeout(toastTimer); host.hidden = true; onAction(); } },
+        on: {
+          click: () => {
+            clearTimeout(toastTimer);
+            clearTimeout(toastFadeTimer);
+            host.classList.remove("in");
+            host.hidden = true;
+            onAction();
+          },
+        },
       }));
     }
     host.hidden = false;
     host.classList.add("in");
     toastTimer = setTimeout(() => {
       host.classList.remove("in");
-      setTimeout(() => { host.hidden = true; }, 200);
+      toastFadeTimer = setTimeout(() => { host.hidden = true; }, 200);
     }, ms || (onAction ? 5000 : 3500));
   }
 

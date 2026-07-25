@@ -116,8 +116,11 @@ ALLOWED_LITERAL_COLOURS = {
     "rgba(0, 0, 0, .35)": "colour-wheel thumb shadow ring",
     "rgba(0, 0, 0, .4)": "colour-wheel thumb shadow ring",
     "rgba(255, 255, 255, .08)": "toast-action button: a fixed white-on-dark "
-        "hover surface for the undo button, matching the toast's own "
-        "always-dark chip background rather than the light/dark ink token",
+        "hover surface for the undo button. The toast chip itself uses "
+        "var(--ink), which flips light/dark with the theme (light chip in "
+        "dark mode), so this fixed white overlay is nearly invisible in "
+        "dark mode there -- cosmetic only, since the button text still "
+        "uses var(--accent) and stays legible",
 }
 
 LITERAL_COLOUR_RE = re.compile(
