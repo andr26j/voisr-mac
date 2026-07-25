@@ -88,6 +88,7 @@ window.Voisr = window.Voisr || {};
     });
     V.views.settings.initColorWheel();
     V.views.history.initKeys();
+    V.views.dictionary.initSearch();
     V.palette.init();
 
     const cfg = await V.api().get_config();

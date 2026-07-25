@@ -88,15 +88,6 @@ window.Voisr = window.Voisr || {};
     return node;
   }
 
-  // Parses a trusted icon SVG constant into a real node so it can be
-  // appended as a plain sibling (not wrapped in an extra container) —
-  // needed by dictRow's inline arrow. Icon constants only, never user data.
-  function iconNode(svg) {
-    const t = document.createElement("template");
-    t.innerHTML = svg;
-    return t.content.firstElementChild;
-  }
-
   function formatDuration(seconds) {
     const s = Math.max(0, Math.round(seconds || 0));
     if (s < 60) return s === 0 ? "—" : `${s}s`;
@@ -120,17 +111,5 @@ window.Voisr = window.Voisr || {};
                      html: ICONS.trash, on: { click: (e) => { e.stopPropagation(); onDelete(item); } } }));
   }
 
-  /* ---------- dictionary rows ---------- */
-
-  function dictRow(spoken, written, onRemove) {
-    return el("li", { class: "item-row", data: { spoken } },
-      el("div", { class: "item-text", style: "display:flex;align-items:center;gap:10px;" },
-        el("span", { class: "dict-spoken", text: spoken }),
-        iconNode(ICONS.arrow),
-        el("span", { class: "dict-written", text: written })),
-      el("button", { class: "icon-btn danger", "aria-label": "Remove entry",
-                     html: ICONS.trash, on: { click: () => onRemove(spoken) } }));
-  }
-
-  V.ui = { el, $, toast, escapeHtml, timeOf, dayOf, formatDuration, ICONS, itemRow, dictRow };
+  V.ui = { el, $, toast, escapeHtml, timeOf, dayOf, formatDuration, ICONS, itemRow };
 })(window.Voisr);

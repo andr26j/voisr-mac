@@ -317,3 +317,11 @@ def test_delete_offers_undo():
 def test_export_is_wired_to_the_save_panel():
     src = (WEB / "js" / "views" / "history.js").read_text()
     assert "export_history" in src and "save_text_file" in src
+
+
+def test_dictionary_supports_inline_edit_and_search():
+    html = INDEX.read_text()
+    assert 'id="dict-search"' in html
+    src = (WEB / "js" / "views" / "dictionary.js").read_text()
+    assert "contenteditable" in src or "beginEdit" in src
+    assert "innerHTML" not in src

@@ -159,11 +159,18 @@ mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
   margin-bottom: 6px;
 }
 
+.dict-pair { display: flex; align-items: center; gap: 10px; }
+
 .dict-arrow { color: var(--muted); flex-shrink: 0; width: 14px; height: 14px; }
 
 .dict-spoken { color: var(--muted); }
 
-.dict-written { font-weight: 600; }
+.dict-written {
+  font-weight: 600; padding: 2px 6px; border-radius: 6px;
+  border: 1px solid transparent;
+}
+.dict-written:hover { border-color: var(--border); background: var(--surface-2); }
+.dict-written:focus { outline: 2px solid var(--ring); outline-offset: 1px; }
 
 /* ---------- Settings ---------- */
 
