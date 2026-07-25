@@ -58,22 +58,31 @@ window.Voisr = window.Voisr || {};
     applyQuery(q);
   }
 
-  function matches(item) {
-    const q = query.trim();
-    return !q || item.text.toLowerCase().includes(q.toLowerCase());
+  /* Pure: takes the needle as a parameter rather than reading module state,
+     so the search semantics are directly testable (tests/js/views.test.mjs).
+     The trim lives HERE, at match time only -- never on the way in from the
+     input field, which is what used to eat the spaces in "site visit". */
+  function matchesQuery(text, q) {
+    const needle = (q || "").trim();
+    return !needle || text.toLowerCase().includes(needle.toLowerCase());
   }
 
-  /* Highlight without markup injection: split on the match and build nodes. */
-  function highlighted(text) {
-    const q = query.trim();
-    if (!q) return [text];
-    const lower = text.toLowerCase(), qLower = q.toLowerCase();
+  function matches(item) {
+    return matchesQuery(item.text, query);
+  }
+
+  /* Highlight without markup injection: split on the match and build nodes.
+     Pure for the same reason as matchesQuery above. */
+  function highlighted(text, q) {
+    const needle = (q || "").trim();
+    if (!needle) return [text];
+    const lower = text.toLowerCase(), qLower = needle.toLowerCase();
     const out = [];
     let at = 0, i;
     while ((i = lower.indexOf(qLower, at)) !== -1) {
       if (i > at) out.push(text.slice(at, i));
-      out.push(V.ui.el("mark", { text: text.slice(i, i + q.length) }));
-      at = i + q.length;
+      out.push(V.ui.el("mark", { text: text.slice(i, i + needle.length) }));
+      at = i + needle.length;
     }
     if (at < text.length) out.push(text.slice(at));
     return out;
@@ -127,7 +136,7 @@ window.Voisr = window.Voisr || {};
                 onCopy: onCopy, onDelete: onDelete,
               });
               const txt = row.querySelector(".txt");
-              txt.replaceChildren(...highlighted(item.text));
+              txt.replaceChildren(...highlighted(item.text, query));
               row.addEventListener("click", () => row.classList.toggle("expanded"));
               return row;
             }))))));
@@ -200,5 +209,5 @@ window.Voisr = window.Voisr || {};
   }
 
   V.views = V.views || {};
-  V.views.history = { render, setQuery, initKeys };
+  V.views.history = { render, setQuery, initKeys, matchesQuery, highlighted };
 })(window.Voisr);
