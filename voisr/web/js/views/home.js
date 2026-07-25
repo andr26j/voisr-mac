@@ -69,15 +69,29 @@ window.Voisr = window.Voisr || {};
     V.ui.$("#hero-keycap").textContent = display || "unset";
   }
 
+  /* 14 daily word counts -> a polyline across a 240x40 viewBox. A flat run
+     (including all-zero) draws along the baseline rather than dividing by 0. */
+  function sparklinePath(daily) {
+    if (!daily || daily.length < 2) return "";
+    const max = Math.max(...daily.map((d) => d.words), 0);
+    const stepX = 240 / (daily.length - 1);
+    return daily.map((d, i) => {
+      const x = (i * stepX).toFixed(1);
+      const y = (max === 0 ? 38 : 38 - (d.words / max) * 34).toFixed(1);
+      return `${i === 0 ? "M" : "L"}${x} ${y}`;
+    }).join(" ");
+  }
+
   async function render() {
     const $ = V.ui.$;
     $("#greeting").textContent = greeting();
     renderPermissions();
     renderHero();
     const [stats, history] = await Promise.all([V.api().get_stats(), V.api().get_history()]);
+    $("#stat-saved").textContent = V.ui.formatDuration(stats.time_saved_seconds);
     $("#stat-words").textContent = stats.total_words.toLocaleString();
-    $("#stat-wpm").textContent = stats.avg_wpm.toLocaleString();
     $("#stat-streak").textContent = stats.streak_days.toLocaleString();
+    $("#spark-path").setAttribute("d", sparklinePath(stats.daily));
 
     const recent = history.slice(0, 5);
     $("#recent-list").replaceChildren(...recent.map((item) => V.ui.itemRow(item, { onCopy, onDelete })));
@@ -130,5 +144,5 @@ window.Voisr = window.Voisr || {};
   }
 
   V.views = V.views || {};
-  V.views.home = { render, toggleRecord, renderPermissions, renderHero };
+  V.views.home = { render, toggleRecord, renderPermissions, renderHero, sparklinePath };
 })(window.Voisr);

@@ -19,8 +19,6 @@
 .perm-chip.perm-denied .perm-dot { background: var(--warning); }
 .perm-chip.perm-unknown { color: var(--muted); }
 
-.home-grid { display: grid; grid-template-columns: 1fr 240px; gap: 18px; align-items: start; }
-
 .home-main { display: flex; flex-direction: column; gap: 18px; }
 
 .record-card { display: flex; flex-direction: column; align-items: center;
@@ -98,13 +96,26 @@
 
 .result-badge svg { width: 12px; height: 12px; }
 
-.home-side { display: flex; flex-direction: column; gap: 14px; }
+.stats-strip {
+  display: flex; gap: 28px; align-items: stretch; margin-bottom: 18px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 22px;
+}
 
-.stat-card { display: flex; flex-direction: column; gap: 6px; padding: 18px 20px; }
+.stat { display: flex; flex-direction: column; gap: 4px; justify-content: center; }
+.stat-lead { flex: 1; position: relative; min-width: 0; }
 
-.stat-label { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.stat-label { font-size: 12px; font-weight: 600; color: var(--muted);
+              text-transform: uppercase; letter-spacing: .04em; }
+.stat-num { font-size: 34px; font-weight: 650; letter-spacing: -0.025em;
+            font-variant-numeric: tabular-nums; }
+.stat-sm { font-size: 22px; }
+.stat-note { font-size: 12px; color: var(--muted); }
 
-.stat-num { font-size: 32px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.spark {
+  position: absolute; inset: auto 0 0 0; height: 40px; width: 100%;
+  color: var(--accent); opacity: .28; pointer-events: none;
+}
 
 /* ---------- History ---------- */
 
@@ -151,9 +162,8 @@
 /* ---------- Narrow window ---------- */
 
 @media (max-width: 900px) {
-  .home-grid { grid-template-columns: 1fr; }
-  .home-side { flex-direction: row; }
-  .stat-card { flex: 1; }
+  .stats-strip { flex-wrap: wrap; gap: 18px; }
+  .stat-lead { flex-basis: 100%; }
 }
 
 .setting-status { font-size: 12px; font-weight: 600; color: var(--success); margin-top: 6px; }

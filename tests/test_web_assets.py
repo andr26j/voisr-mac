@@ -215,3 +215,27 @@ def test_hero_renders_the_configured_hotkey_label():
     src = (WEB / "js" / "views" / "home.js").read_text()
     assert "hotkey_display" in src
     assert "cfg.hotkey" not in src
+
+
+def test_stats_strip_replaces_the_stacked_column():
+    html = INDEX.read_text()
+    assert 'class="stats-strip"' in html
+    assert 'id="stat-saved"' in html
+    assert 'id="spark"' in html
+    assert 'class="home-side"' not in html
+
+
+def test_home_uses_time_saved_and_daily():
+    src = (WEB / "js" / "views" / "home.js").read_text()
+    assert "time_saved_seconds" in src
+    assert "daily" in src
+    assert "sparklinePath" in src
+
+
+def test_ui_exposes_format_duration():
+    assert "formatDuration" in (WEB / "js" / "ui.js").read_text()
+
+
+def test_mock_stats_include_the_new_keys():
+    src = (WEB / "js" / "api.js").read_text()
+    assert "time_saved_seconds" in src and "daily" in src

@@ -68,56 +68,58 @@
         <p class="sub">Hold a key to dictate, transcribed entirely on this Mac and never sent to the cloud.</p>
       </header>
 
-      <div class="home-grid">
-        <div class="home-main">
-          <div class="record-card card">
-            <p class="hero-line">
-              Hold <kbd id="hero-keycap" class="keycap">…</kbd> to dictate
-            </p>
-            <div id="hero-wave" class="hero-wave" aria-hidden="true">
-              <span class="hb"></span><span class="hb"></span><span class="hb"></span>
-              <span class="hb"></span><span class="hb"></span><span class="hb"></span>
-              <span class="hb"></span>
-            </div>
-            <p class="hero-sub">Anywhere on your Mac. Release and the text lands where you were typing.</p>
-
-            <button id="record-btn" class="btn-secondary" aria-label="Start recording">
-              or click to record
-            </button>
-            <p id="record-status" class="record-status">Ready</p>
-            <p id="record-error" class="record-error" role="alert"></p>
-            <div id="record-result" class="record-result" hidden>
-              <p id="result-text"></p>
-              <span class="result-badge">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
-                Copied to clipboard
-              </span>
-            </div>
+      <div class="home-main">
+        <div class="record-card card">
+          <p class="hero-line">
+            Hold <kbd id="hero-keycap" class="keycap">…</kbd> to dictate
+          </p>
+          <div id="hero-wave" class="hero-wave" aria-hidden="true">
+            <span class="hb"></span><span class="hb"></span><span class="hb"></span>
+            <span class="hb"></span><span class="hb"></span><span class="hb"></span>
+            <span class="hb"></span>
           </div>
+          <p class="hero-sub">Anywhere on your Mac. Release and the text lands where you were typing.</p>
 
-          <div class="card">
-            <div class="card-head">
-              <h2>Recent activity</h2>
-              <button class="link-btn" data-view="history">View all</button>
-            </div>
-            <ul id="recent-list" class="item-list"></ul>
-            <p id="recent-empty" class="empty" hidden>No dictations yet — your recent transcripts will appear here.</p>
+          <button id="record-btn" class="btn-secondary" aria-label="Start recording">
+            or click to record
+          </button>
+          <p id="record-status" class="record-status">Ready</p>
+          <p id="record-error" class="record-error" role="alert"></p>
+          <div id="record-result" class="record-result" hidden>
+            <p id="result-text"></p>
+            <span class="result-badge">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+              Copied to clipboard
+            </span>
           </div>
         </div>
 
-        <div class="home-side">
-          <div class="stat-card card">
+        <div class="stats-strip">
+          <div class="stat stat-lead">
+            <span class="stat-label">Time saved</span>
+            <span class="stat-num" id="stat-saved">—</span>
+            <span class="stat-note">vs typing at 40 words per minute</span>
+            <svg class="spark" id="spark" viewBox="0 0 240 40" preserveAspectRatio="none" aria-hidden="true">
+              <path id="spark-path" d="" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div class="stat">
             <span class="stat-label">Words dictated</span>
-            <span class="stat-num" id="stat-words">0</span>
+            <span class="stat-num stat-sm" id="stat-words">0</span>
           </div>
-          <div class="stat-card card">
-            <span class="stat-label">Average words / min</span>
-            <span class="stat-num" id="stat-wpm">0</span>
-          </div>
-          <div class="stat-card card">
+          <div class="stat">
             <span class="stat-label">Day streak</span>
-            <span class="stat-num" id="stat-streak">0</span>
+            <span class="stat-num stat-sm" id="stat-streak">0</span>
           </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Recent activity</h2>
+            <button class="link-btn" data-view="history">View all</button>
+          </div>
+          <ul id="recent-list" class="item-list"></ul>
+          <p id="recent-empty" class="empty" hidden>No dictations yet — your recent transcripts will appear here.</p>
         </div>
       </div>
     </section>

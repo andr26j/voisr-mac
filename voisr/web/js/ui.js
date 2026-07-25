@@ -76,6 +76,13 @@ window.Voisr = window.Voisr || {};
     return t.content.firstElementChild;
   }
 
+  function formatDuration(seconds) {
+    const s = Math.max(0, Math.round(seconds || 0));
+    if (s < 60) return s === 0 ? "—" : `${s}s`;
+    const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+    return h ? `${h}h ${m}m` : `${m}m`;
+  }
+
   /* ---------- shared item rows (used by home + history) ---------- */
 
   function itemRow(item, { onCopy, onDelete }) {
@@ -101,5 +108,5 @@ window.Voisr = window.Voisr || {};
                      html: ICONS.trash, on: { click: () => onRemove(spoken) } }));
   }
 
-  V.ui = { el, $, toast, escapeHtml, timeOf, dayOf, ICONS, itemRow, dictRow };
+  V.ui = { el, $, toast, escapeHtml, timeOf, dayOf, formatDuration, ICONS, itemRow, dictRow };
 })(window.Voisr);

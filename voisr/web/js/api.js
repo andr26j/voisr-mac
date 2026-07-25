@@ -35,7 +35,14 @@ window.Voisr = window.Voisr || {};
       ]}),
       open_settings_pane: async () => ({ ok: true }),
       get_history: async () => [...mockHistory].sort((a, b) => b.ts - a.ts),
-      get_stats: async () => ({ total_words: 12480, dictations: mockHistory.length, avg_wpm: 132, streak_days: 6 }),
+      get_stats: async () => ({
+        total_words: 12480, dictations: mockHistory.length, avg_wpm: 132,
+        streak_days: 6, total_seconds: 5400, time_saved_seconds: 13320,
+        daily: Array.from({ length: 14 }, (_, i) => ({
+          date: `2026-07-${String(12 + i).padStart(2, "0")}`,
+          words: [0, 120, 340, 90, 0, 610, 480, 220, 0, 130, 700, 540, 310, 260][i],
+        })),
+      }),
       get_config: async () => JSON.parse(JSON.stringify(mockCfg)),
       set_config: async (u) => Object.assign(mockCfg, u),
       delete_history_item: async (id) => { mockHistory = mockHistory.filter((i) => i.id !== id); return { ok: true }; },
