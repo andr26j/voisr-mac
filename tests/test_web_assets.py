@@ -143,3 +143,15 @@ def test_no_unlisted_literal_colours_outside_tokens():
 def test_titlebar_inset_is_reserved():
     assert "--titlebar-h" in TOKENS.read_text()
     assert "var(--titlebar-h)" in (WEB / "css" / "base.css").read_text()
+
+
+def test_row_renderers_do_not_use_innerhtml():
+    for rel in ["js/views/home.js", "js/views/history.js",
+                "js/views/dictionary.js"]:
+        src = (WEB / rel).read_text()
+        assert "innerHTML" not in src, f"{rel} still builds rows with innerHTML"
+
+
+def test_ui_exposes_the_el_helper():
+    assert "el:" in (WEB / "js" / "ui.js").read_text() or \
+           "el," in (WEB / "js" / "ui.js").read_text()

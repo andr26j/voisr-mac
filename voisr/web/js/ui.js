@@ -40,34 +40,69 @@ window.Voisr = window.Voisr || {};
     toastTimer = setTimeout(() => { el.hidden = true; }, 3500);
   }
 
+  /* Build a node without string templating. Text goes through textContent and
+     attributes through setAttribute, so nothing user-supplied is ever parsed
+     as markup — which retires the escapeHtml-into-attribute pattern.
+
+     NOTE on naming: this is NOT exposed as `V.ui.el` — that property already
+     means "querySelector shorthand" (`const $ = V.ui.el`) across main.js,
+     dictionary.js and (untouchable, per this task's scope) settings.js.
+     Overwriting it would silently break every one of those call sites
+     (`el("#foo")` would try to createElement a tag named "#foo" instead of
+     finding the node). So this builder stays private to ui.js and is used
+     only to construct the row helpers below (`itemRow`, `dictRow`), which
+     *are* exported. `V.ui.el` keeps its original meaning unchanged. */
+  function el(tag, props, ...children) {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(props || {})) {
+      if (v === null || v === undefined || v === false) continue;
+      if (k === "class") node.className = v;
+      else if (k === "text") node.textContent = v;
+      else if (k === "html") node.innerHTML = v;   // trusted constants only
+      else if (k === "on") for (const [ev, fn] of Object.entries(v)) node.addEventListener(ev, fn);
+      else if (k === "data") for (const [d, dv] of Object.entries(v)) node.dataset[d] = dv;
+      else node.setAttribute(k, v);
+    }
+    for (const child of children.flat()) {
+      if (child === null || child === undefined || child === false) continue;
+      node.append(child);
+    }
+    return node;
+  }
+
+  // Parses a trusted icon SVG constant into a real node so it can be
+  // appended as a plain sibling (not wrapped in an extra container) —
+  // needed by dictRow's inline arrow. Icon constants only, never user data.
+  function iconNode(svg) {
+    const t = document.createElement("template");
+    t.innerHTML = svg;
+    return t.content.firstElementChild;
+  }
+
   /* ---------- shared item rows (used by home + history) ---------- */
 
-  function itemRow(item) {
-    return `<li class="item-row" data-id="${item.id}" data-text="${escapeHtml(item.text)}">
-    <div class="item-text">
-      <div class="txt">${escapeHtml(item.text)}</div>
-      <div class="item-meta">${timeOf(item.ts)} · ${item.words} words</div>
-    </div>
-    <button class="icon-btn act-copy" aria-label="Copy text">${ICONS.copy}</button>
-    <button class="icon-btn danger act-delete" aria-label="Delete dictation">${ICONS.trash}</button>
-  </li>`;
+  function itemRow(item, { onCopy, onDelete }) {
+    return el("li", { class: "item-row", data: { id: item.id } },
+      el("div", { class: "item-text" },
+        el("div", { class: "txt", text: item.text }),
+        el("div", { class: "item-meta", text: `${timeOf(item.ts)} · ${item.words} words` })),
+      el("button", { class: "icon-btn", "aria-label": "Copy text",
+                     html: ICONS.copy, on: { click: () => onCopy(item) } }),
+      el("button", { class: "icon-btn danger", "aria-label": "Delete dictation",
+                     html: ICONS.trash, on: { click: () => onDelete(item) } }));
   }
 
-  function bindRows(root) {
-    root.querySelectorAll(".act-copy").forEach((b) => b.addEventListener("click", async (e) => {
-      const row = e.currentTarget.closest(".item-row");
-      await V.api().copy_text(row.dataset.text);
-      toast("Copied to clipboard");
-    }));
-    root.querySelectorAll(".act-delete").forEach((b) => b.addEventListener("click", async (e) => {
-      const row = e.currentTarget.closest(".item-row");
-      if (!confirm("Delete this dictation? This can't be undone.")) return;
-      await V.api().delete_history_item(row.dataset.id);
-      toast("Dictation deleted");
-      V.views.home.render();
-      if (!$("#view-history").hidden) V.views.history.render();
-    }));
+  /* ---------- dictionary rows ---------- */
+
+  function dictRow(spoken, written, onRemove) {
+    return el("li", { class: "item-row", data: { spoken } },
+      el("div", { class: "item-text", style: "display:flex;align-items:center;gap:10px;" },
+        el("span", { class: "dict-spoken", text: spoken }),
+        iconNode(ICONS.arrow),
+        el("span", { class: "dict-written", text: written })),
+      el("button", { class: "icon-btn danger", "aria-label": "Remove entry",
+                     html: ICONS.trash, on: { click: () => onRemove(spoken) } }));
   }
 
-  V.ui = { el: $, toast, escapeHtml, timeOf, dayOf, ICONS, itemRow, bindRows };
+  V.ui = { el: $, toast, escapeHtml, timeOf, dayOf, ICONS, itemRow, dictRow };
 })(window.Voisr);

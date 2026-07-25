@@ -1,6 +1,17 @@
 "use strict";
 window.Voisr = window.Voisr || {};
 (function (V) {
+  async function onCopy(item) {
+    await V.api().copy_text(item.text);
+    V.ui.toast("Copied to clipboard");
+  }
+
+  async function onDelete(item) {
+    await V.api().delete_history_item(item.id);
+    await render();
+    V.ui.toast("Dictation deleted");
+  }
+
   async function render() {
     const $ = V.ui.el;
     const items = await V.api().get_history();
@@ -14,12 +25,24 @@ window.Voisr = window.Voisr || {};
       groups.get(day).push(item);
     }
 
-    container.innerHTML = [...groups.entries()].map(([day, rows]) => `
-    <div class="day-group">
-      <div class="day-label">${day}</div>
-      <div class="card"><ul class="item-list">${rows.map(V.ui.itemRow).join("")}</ul></div>
-    </div>`).join("");
-    V.ui.bindRows(container);
+    container.replaceChildren(...[...groups.entries()].map(([day, rows]) => {
+      const list = document.createElement("ul");
+      list.className = "item-list";
+      list.replaceChildren(...rows.map((item) => V.ui.itemRow(item, { onCopy, onDelete })));
+
+      const card = document.createElement("div");
+      card.className = "card";
+      card.append(list);
+
+      const label = document.createElement("div");
+      label.className = "day-label";
+      label.textContent = day;
+
+      const group = document.createElement("div");
+      group.className = "day-group";
+      group.append(label, card);
+      return group;
+    }));
   }
 
   V.views = V.views || {};

@@ -1,6 +1,17 @@
 "use strict";
 window.Voisr = window.Voisr || {};
 (function (V) {
+  async function onCopy(item) {
+    await V.api().copy_text(item.text);
+    V.ui.toast("Copied to clipboard");
+  }
+
+  async function onDelete(item) {
+    await V.api().delete_history_item(item.id);
+    await render();
+    V.ui.toast("Dictation deleted");
+  }
+
   function greeting() {
     const h = new Date().getHours();
     if (h < 5) return "Working late";
@@ -18,9 +29,8 @@ window.Voisr = window.Voisr || {};
     $("#stat-streak").textContent = stats.streak_days.toLocaleString();
 
     const recent = history.slice(0, 5);
-    $("#recent-list").innerHTML = recent.map(V.ui.itemRow).join("");
+    $("#recent-list").replaceChildren(...recent.map((item) => V.ui.itemRow(item, { onCopy, onDelete })));
     $("#recent-empty").hidden = recent.length > 0;
-    V.ui.bindRows($("#recent-list"));
   }
 
   /* ---------- record flow ---------- */
