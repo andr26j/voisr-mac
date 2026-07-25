@@ -264,3 +264,18 @@ def test_format_duration_rounds_to_minutes_before_splitting_hours():
     )
     assert new_pattern.search(src), \
         "formatDuration is not rounding to whole minutes first (totalM = Math.round(s / 60))"
+
+
+def test_palette_markup_and_binding_exist():
+    assert 'id="palette"' in INDEX.read_text()
+    src = (WEB / "js" / "palette.js").read_text()
+    assert "metaKey" in src and '"k"' in src
+    assert "Escape" in src
+    assert "ArrowDown" in src and "ArrowUp" in src
+
+
+def test_palette_registers_the_specified_commands():
+    src = (WEB / "js" / "palette.js").read_text()
+    for cmd in ["Start dictation", "Search history", "Settings",
+                "push-to-talk", "appearance", "Copy last dictation"]:
+        assert cmd.lower() in src.lower(), cmd

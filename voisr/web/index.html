@@ -241,6 +241,13 @@
   </main>
 </div>
 
+<div id="palette" class="palette-scrim" hidden>
+  <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+    <input id="palette-input" class="palette-input" type="text"
+           placeholder="Type a command…" autocomplete="off" spellcheck="false">
+    <ul id="palette-list" class="palette-list" role="listbox"></ul>
+  </div>
+</div>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 <script src="js/api.js"></script>
 <script src="js/ui.js"></script>

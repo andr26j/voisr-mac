@@ -87,6 +87,7 @@ window.Voisr = window.Voisr || {};
       }
     });
     V.views.settings.initColorWheel();
+    V.palette.init();
 
     const cfg = await V.api().get_config();
     V.applyAppearance(cfg.appearance || "system");

@@ -45,6 +45,13 @@ window.Voisr = window.Voisr || {};
       }),
       get_config: async () => JSON.parse(JSON.stringify(mockCfg)),
       set_config: async (u) => Object.assign(mockCfg, u),
+      // mirrors Api.set_appearance() in voisr/ui.py, used by the command
+      // palette's "Toggle appearance" command.
+      set_appearance: async (mode) => {
+        if (!["system", "light", "dark"].includes(mode)) return { error: `unknown appearance: ${mode}` };
+        mockCfg.appearance = mode;
+        return { ok: true, appearance: mode };
+      },
       delete_history_item: async (id) => { mockHistory = mockHistory.filter((i) => i.id !== id); return { ok: true }; },
       copy_text: async () => ({ ok: true }),
       capture_hotkey: async () => {
