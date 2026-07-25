@@ -1,0 +1,18 @@
+:root {
+  --bg: #F6F3EE;
+  --surface: #FFFFFF;
+  --ink: #1F1D1A;
+  --muted: #6E6A63;
+  --border: #E8E3DA;
+  --accent: #E8643C;
+  --accent-hover: #D6572F;
+  --accent-soft: #FBEAE3;
+  --on-accent: #FFFFFF;
+  --success: #3E7C4F;
+  --success-soft: #E9F2EC;
+  --destructive: #C93A2E;
+  --ring: #E8643C;
+  --shadow: 0 1px 3px rgba(31, 29, 26, .06), 0 8px 24px rgba(31, 29, 26, .05);
+  --radius-card: 16px;
+  --radius-btn: 10px;
+}
