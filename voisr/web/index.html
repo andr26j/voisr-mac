@@ -177,17 +177,19 @@
         <h1>Settings</h1>
         <p class="sub">Stored in <code>config.json</code>, shared with the command-line modes.</p>
       </header>
-      <div class="card settings-card">
+
+      <div class="settings-section card">
+        <h2 class="section-title">Dictation</h2>
         <div class="setting-row">
           <div>
-            <h2>Copy to clipboard after dictation</h2>
+            <h3>Copy to clipboard after dictation</h3>
             <p class="setting-desc">Each finished dictation is placed on your clipboard, ready to paste anywhere.</p>
           </div>
           <span class="pill">Always on</span>
         </div>
         <div class="setting-row">
           <div>
-            <h2>Auto-paste in hotkey mode</h2>
+            <h3>Auto-paste in hotkey mode</h3>
             <p class="setting-desc">After a push-to-talk dictation, paste the text straight into the app you're in (Cmd-V). Needs Accessibility permission.</p>
           </div>
           <label class="switch">
@@ -197,7 +199,18 @@
         </div>
         <div class="setting-row">
           <div>
-            <h2>Push-to-talk key</h2>
+            <h3>Transcription model</h3>
+            <p class="setting-desc">Small is more accurate; Base is faster. Both run on this Mac.</p>
+          </div>
+          <select id="model-select" class="select"></select>
+        </div>
+      </div>
+
+      <div class="settings-section card">
+        <h2 class="section-title">Push-to-talk</h2>
+        <div class="setting-row">
+          <div>
+            <h3>Push-to-talk key</h3>
             <p class="setting-desc">Hold this key in any app to dictate; release to transcribe and paste. Needs Input Monitoring permission (System Settings &rarr; Privacy &amp; Security).</p>
             <p class="setting-status" id="hotkey-status"></p>
           </div>
@@ -208,7 +221,7 @@
         </div>
         <div class="setting-row">
           <div>
-            <h2>Recording widget</h2>
+            <h3>Recording widget</h3>
             <p class="setting-desc">Show the floating pill at the bottom of your screen while you hold the push-to-talk key — waveform while listening, then a tick when your text is ready.</p>
           </div>
           <label class="switch">
@@ -216,36 +229,77 @@
             <span class="slider" aria-hidden="true"></span>
           </label>
         </div>
-        <div class="setting-row setting-row--stack">
+        <div class="setting-row">
           <div>
-            <h2>Pill theme</h2>
-            <p class="setting-desc">Color and animation of the recording pill while you dictate. Applies from your next dictation.</p>
+            <h3>Launch at login</h3>
+            <p class="setting-desc">Start Voisr automatically so the push-to-talk key always works.</p>
           </div>
-          <div id="theme-grid" class="theme-grid" role="group" aria-label="Pill theme"></div>
-          <div class="color-block">
-            <div class="wheel-wrap">
-              <canvas id="color-wheel" width="200" height="200" aria-label="Custom bar color"></canvas>
-              <div id="wheel-thumb" hidden></div>
-            </div>
-            <div class="color-side">
-              <p class="setting-desc">Optional: recolor the bars of any theme. The animation stays; only the color changes.</p>
-              <div class="mini-pill" id="color-preview">
-                <span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span>
-              </div>
-              <div class="color-meta">
-                <span class="swatch" id="color-swatch"></span>
-                <code id="color-hex">theme default</code>
-                <button type="button" class="btn-secondary" id="color-reset">Theme default</button>
-              </div>
-            </div>
+          <label class="switch">
+            <input type="checkbox" id="launch-toggle">
+            <span class="slider" aria-hidden="true"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="settings-section card">
+        <h2 class="section-title">Appearance</h2>
+        <div class="setting-row">
+          <div>
+            <h3>Theme</h3>
+            <p class="setting-desc">Follow macOS, or pin Voisr to light or dark.</p>
           </div>
+          <select id="appearance-select" class="select">
+            <option value="system">Match system</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
         </div>
         <div class="setting-row">
           <div>
-            <h2>Privacy</h2>
+            <h3>Pill theme</h3>
+            <p class="setting-desc">Color and animation of the recording pill while you dictate. Applies from your next dictation.</p>
+          </div>
+        </div>
+        <div id="theme-grid" class="theme-grid" role="group" aria-label="Pill theme"></div>
+        <div class="setting-row">
+          <div>
+            <h3>Pill colour</h3>
+            <p class="setting-desc">Recolour the bars of any theme. The animation stays.</p>
+          </div>
+          <div class="color-control">
+            <button type="button" id="color-open" class="swatch-btn">
+              <span class="swatch" id="color-swatch"></span>
+              <code id="color-hex">theme default</code>
+            </button>
+            <div id="color-popover" class="popover" hidden>
+              <div class="wheel-wrap">
+                <canvas id="color-wheel" width="200" height="200" aria-label="Custom bar colour"></canvas>
+                <div id="wheel-thumb" hidden></div>
+              </div>
+              <div class="mini-pill" id="color-preview">
+                <span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span>
+              </div>
+              <button type="button" class="btn-secondary" id="color-reset">Theme default</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section card">
+        <h2 class="section-title">Privacy & data</h2>
+        <div class="setting-row">
+          <div>
+            <h3>Privacy</h3>
             <p class="setting-desc">Audio is recorded to a temp file, transcribed by whisper.cpp on this Mac, then deleted. No network calls, no accounts, no telemetry.</p>
           </div>
           <span class="pill pill-good">Local only</span>
+        </div>
+        <div class="setting-row">
+          <div>
+            <h3>Clear all history</h3>
+            <p class="setting-desc">Permanently delete every stored dictation. This cannot be undone.</p>
+          </div>
+          <button type="button" id="clear-history" class="btn-danger">Clear…</button>
         </div>
       </div>
     </section>

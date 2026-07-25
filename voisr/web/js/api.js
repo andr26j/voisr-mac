@@ -13,7 +13,7 @@ window.Voisr = window.Voisr || {};
       { id: "a2", ts: now - 7200, text: "Draft a follow-up about the Brunswick site visit next week.", words: 10, duration_s: 6 },
       { id: "a3", ts: now - 90000, text: "Remember to book the trailer for Saturday morning.", words: 8, duration_s: 4 },
     ];
-    let mockCfg = { hotkey: "alt_r", paste: true, show_widget: true, device: ":0", pill_theme: "classic", pill_color: null, dictionary: { trademake: "TradeMate", "trade mate": "TradeMate" } };
+    let mockCfg = { hotkey: "alt_r", paste: true, show_widget: true, device: ":0", pill_theme: "classic", pill_color: null, dictionary: { trademake: "TradeMate", "trade mate": "TradeMate" }, model: "small.en", launch_at_login: false };
     let recording = false;
     // mirrors voisr/ui.py's HOTKEY_OPTIONS, used both for the dropdown mock
     // and to resolve a human label for hotkey_display() below.
@@ -54,6 +54,27 @@ window.Voisr = window.Voisr || {};
       },
       delete_history_item: async (id) => { mockHistory = mockHistory.filter((i) => i.id !== id); return { ok: true }; },
       restore_history_item: async (item) => { mockHistory.push(item); return { ok: true }; },
+      // mirrors Api.clear_history() in voisr/ui.py: a single atomic truncate,
+      // never a per-row delete_history_item loop.
+      clear_history: async () => {
+        const removed = mockHistory.length;
+        mockHistory = [];
+        return { ok: true, removed };
+      },
+      // mirrors Api.get_models() in voisr/ui.py; one model is left
+      // uninstalled here so the mock exercises the disabled-option path.
+      get_models: async () => ({
+        models: [
+          { value: "small.en", label: "Small — best accuracy", installed: true, bytes: 488 * 1024 * 1024 },
+          { value: "base.en", label: "Base — fastest", installed: false, bytes: 0 },
+        ],
+        active: mockCfg.model || "small.en",
+      }),
+      // mirrors Api.set_launch_at_login() in voisr/ui.py.
+      set_launch_at_login: async (enabled) => {
+        mockCfg.launch_at_login = !!enabled;
+        return { ok: true, enabled: !!enabled };
+      },
       export_history: async (fmt) => {
         const stamp = new Date().toISOString().slice(0, 10);
         let text;

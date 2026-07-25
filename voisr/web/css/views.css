@@ -174,7 +174,12 @@ mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
 
 /* ---------- Settings ---------- */
 
-.settings-card { padding: 6px 22px; }
+.settings-section { padding: 6px 22px 8px; margin-bottom: 18px; }
+.settings-section .section-title {
+  font-size: 12px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .05em;
+  padding: 16px 0 4px;
+}
 
 .setting-row {
   display: flex;
@@ -184,8 +189,9 @@ mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
   padding: 20px 0;
   border-top: 1px solid var(--border);
 }
+.setting-row h3 { font-size: 15px; font-weight: 600; }
 
-.settings-card .setting-row:first-child { border-top: none; }
+.section-title + .setting-row { border-top: none; }
 
 .setting-desc { color: var(--muted); font-size: 13px; margin-top: 3px; max-width: 52ch; }
 
@@ -205,13 +211,11 @@ mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
 
 /* ---------- Pill theme picker ---------- */
 
-.setting-row--stack { flex-direction: column; align-items: stretch; gap: 0; }
-
 .theme-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
   gap: 10px;
-  margin-top: 14px;
+  margin: 4px 0 10px;
 }
 
 .theme-opt {
@@ -234,16 +238,33 @@ mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
 
 .theme-opt.active .theme-name { color: var(--ink); }
 
-/* ---------- Custom color wheel ---------- */
+/* ---------- Custom color wheel + popover ---------- */
 
-.color-block {
-  display: flex;
-  gap: 24px;
-  align-items: center;
-  margin-top: 18px;
-  padding-top: 18px;
-  border-top: 1px solid var(--border);
-  flex-wrap: wrap;
+.color-control { position: relative; }
+
+.swatch-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 36px; padding: 0 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.swatch-btn:hover { background: var(--bg); }
+
+.popover {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 50;
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 16px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-pop);
+  animation: rise var(--fast) var(--ease);
+}
+/* Author `display: flex` above beats the UA stylesheet's `[hidden] { display:
+   none }` at equal specificity (author wins ties), so the popover would stay
+   visible even while `hidden` is true without this override -- same fix as
+   .palette-scrim[hidden] above in components.css. */
+.popover[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .popover { animation: none; }
 }
 
 .wheel-wrap { position: relative; width: 200px; height: 200px; flex-shrink: 0; }
@@ -262,10 +283,6 @@ mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
   transform: translate(-50%, -50%);
 }
 
-.color-side { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; min-width: 240px; flex: 1; }
-
-.color-meta { display: flex; align-items: center; gap: 10px; }
-
 .swatch {
   width: 18px; height: 18px;
   border-radius: 50%;
@@ -273,3 +290,10 @@ mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
   background: transparent;
   flex-shrink: 0;
 }
+
+.btn-danger {
+  height: 36px; padding: 0 16px; border-radius: var(--radius-sm);
+  border: 1px solid var(--destructive); color: var(--destructive);
+  background: transparent; font-weight: 600;
+}
+.btn-danger:hover { background: var(--destructive-soft); }

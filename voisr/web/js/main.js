@@ -86,7 +86,6 @@ window.Voisr = window.Voisr || {};
         V.views.settings.render();
       }
     });
-    V.views.settings.initColorWheel();
     V.views.history.initKeys();
     V.views.dictionary.initSearch();
     V.palette.init();

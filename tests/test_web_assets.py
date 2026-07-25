@@ -325,3 +325,24 @@ def test_dictionary_supports_inline_edit_and_search():
     src = (WEB / "js" / "views" / "dictionary.js").read_text()
     assert "contenteditable" in src or "beginEdit" in src
     assert "innerHTML" not in src
+
+
+def test_settings_is_split_into_four_sections():
+    html = INDEX.read_text()
+    for section in ["Dictation", "Push-to-talk", "Appearance", "Privacy & data"]:
+        assert section in html, section
+    assert html.count('class="settings-section') >= 4
+
+
+def test_settings_has_the_new_controls():
+    html = INDEX.read_text()
+    for el_id in ["appearance-select", "model-select", "launch-toggle",
+                  "color-popover", "clear-history"]:
+        assert f'id="{el_id}"' in html, el_id
+
+
+def test_colour_wheel_is_drawn_lazily():
+    src = (WEB / "js" / "views" / "settings.js").read_text()
+    assert "drawColorWheel" in src
+    # the wheel must not be drawn during initial render
+    assert "wheelDrawn" in src

@@ -1,20 +1,23 @@
 "use strict";
 window.Voisr = window.Voisr || {};
 (function (V) {
-  function miniPillHtml(value) {
-    return `<div class="mini-pill" data-theme="${V.ui.escapeHtml(value)}">${'<span class="mb"></span>'.repeat(7)}</div>`;
+  function miniPillNode(value) {
+    const node = V.ui.el("div", { class: "mini-pill", data: { theme: value } });
+    for (let i = 0; i < 7; i++) node.append(V.ui.el("span", { class: "mb" }));
+    return node;
   }
 
   async function renderThemes() {
     const $ = V.ui.$;
     const [cfg, themes] = await Promise.all([V.api().get_config(), V.api().get_pill_themes()]);
     const active = cfg.pill_theme || "classic";
-    $("#theme-grid").innerHTML = themes.map((t) => `
-    <button type="button" class="theme-opt${t.value === active ? " active" : ""}"
-            data-value="${V.ui.escapeHtml(t.value)}" aria-pressed="${t.value === active}">
-      ${miniPillHtml(t.value)}
-      <span class="theme-name">${V.ui.escapeHtml(t.label)}</span>
-    </button>`).join("");
+    $("#theme-grid").replaceChildren(...themes.map((t) =>
+      V.ui.el("button", {
+        type: "button",
+        class: `theme-opt${t.value === active ? " active" : ""}`,
+        data: { value: t.value },
+        "aria-pressed": String(t.value === active),
+      }, miniPillNode(t.value), V.ui.el("span", { class: "theme-name", text: t.label }))));
   }
 
   /* ----- custom color wheel (HSV, V=1; standard f(5),f(3),f(1) mapping) ----- */
@@ -91,7 +94,6 @@ window.Voisr = window.Voisr || {};
 
   function initColorWheel() {
     const $ = V.ui.$;
-    drawColorWheel();
     const cv = $("#color-wheel");
     let dragging = false, lastHex = null;
 
@@ -122,19 +124,83 @@ window.Voisr = window.Voisr || {};
     });
   }
 
+  /* the 200x200 wheel canvas is only ever drawn (and its pointer handlers
+     only ever bound) the first time the popover opens -- not on every
+     Settings render, which would waste a full-canvas repaint nobody sees. */
+  let wheelDrawn = false;
+
+  function openColorPopover() {
+    const pop = document.getElementById("color-popover");
+    if (!wheelDrawn) { drawColorWheel(); initColorWheel(); wheelDrawn = true; }
+    pop.hidden = !pop.hidden;
+  }
+
   async function render() {
     const $ = V.ui.$;
-    const [cfg, status] = await Promise.all([
+    const [cfg, status, models, hotkey] = await Promise.all([
       V.api().get_config(), V.api().get_hotkey_status(),
+      V.api().get_models(), V.api().hotkey_display(),
     ]);
     $("#paste-toggle").checked = !!cfg.paste;
     $("#widget-toggle").checked = cfg.show_widget !== false;
-    $("#hotkey-current").textContent = cfg.hotkey_label || cfg.hotkey || "alt_r";
+    $("#hotkey-current").textContent = hotkey.display || "unset";
     $("#hotkey-status").textContent = status.status;
+    $("#appearance-select").value = cfg.appearance || "system";
+    $("#launch-toggle").checked = !!cfg.launch_at_login;
+
+    const select = $("#model-select");
+    select.replaceChildren(...models.models.map((m) =>
+      V.ui.el("option", {
+        value: m.value,
+        text: m.installed ? m.label : `${m.label} (not installed)`,
+        disabled: !m.installed || null,
+      })));
+    select.value = models.active || (models.models.find((m) => m.installed) || {}).value || "";
+
     renderThemes();
     renderColorWheel();
   }
 
+  /* ---------- bind, once (elements exist as soon as this script parses,
+     since it loads after index.html's body) ---------- */
+
+  document.getElementById("appearance-select").addEventListener("change", async (e) => {
+    const res = await V.api().set_appearance(e.target.value);
+    if (res.error) return V.ui.toast(res.error);
+    V.applyAppearance(e.target.value);
+    V.ui.toast(`Theme: ${e.target.value}`);
+  });
+
+  document.getElementById("model-select").addEventListener("change", async (e) => {
+    await V.api().set_config({ model: e.target.value });
+    V.ui.toast(`Model: ${e.target.value} — applies from your next dictation`);
+  });
+
+  document.getElementById("launch-toggle").addEventListener("change", async (e) => {
+    const res = await V.api().set_launch_at_login(e.target.checked);
+    if (res.error) { e.target.checked = !e.target.checked; return V.ui.toast(res.error); }
+    V.ui.toast(e.target.checked ? "Voisr will start at login" : "Launch at login off");
+  });
+
+  document.getElementById("color-open").addEventListener("click", openColorPopover);
+
+  document.getElementById("clear-history").addEventListener("click", async () => {
+    // destructive and irreversible, so it keeps a confirmation -- an in-app
+    // arm/disarm one, never the browser's native dialog
+    const btn = document.getElementById("clear-history");
+    if (btn.dataset.armed !== "1") {
+      btn.dataset.armed = "1";
+      btn.textContent = "Click again to erase everything";
+      setTimeout(() => { btn.dataset.armed = "0"; btn.textContent = "Clear…"; }, 4000);
+      return;
+    }
+    btn.dataset.armed = "0";
+    btn.textContent = "Clear…";
+    const res = await V.api().clear_history();
+    if (res.error) return V.ui.toast(res.error);
+    V.ui.toast(`History cleared — ${res.removed} removed`);
+  });
+
   V.views = V.views || {};
-  V.views.settings = { render, renderThemes, renderColorWheel, initColorWheel };
+  V.views.settings = { render, renderThemes, renderColorWheel, initColorWheel, openColorPopover };
 })(window.Voisr);
