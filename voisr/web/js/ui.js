@@ -33,22 +33,51 @@ window.Voisr = window.Voisr || {};
 
   let toastTimer = null;
   let toastFadeTimer = null;
+  let toastQueue = [];
+  // True from the moment an actionable toast (Undo, etc.) is shown until it
+  // is either clicked or fully dismissed. `toast()` calls `replaceChildren`
+  // on the shared host, which would otherwise tear a pending action's button
+  // out of the DOM before the user gets a chance to click it (History and
+  // Dictionary both rely on this for undo-delete). Chosen fix: queue rather
+  // than drop -- a toast requested while an action is live waits its turn
+  // instead of clobbering it, so no undo opportunity is ever silently lost.
+  let toastActionLive = false;
+
   function toast(msg, opts) {
+    if (toastActionLive) {
+      toastQueue.push([msg, opts]);
+      return;
+    }
+    showToast(msg, opts);
+  }
+
+  function advanceToastQueue() {
+    if (toastQueue.length) {
+      const [msg, opts] = toastQueue.shift();
+      showToast(msg, opts);
+    }
+  }
+
+  function showToast(msg, opts) {
     const { actionLabel, onAction, ms } = opts || {};
     const host = document.getElementById("toast");
     clearTimeout(toastTimer);
     clearTimeout(toastFadeTimer);
+    toastActionLive = false;
     host.replaceChildren(el("span", { text: msg }));
     if (onAction && actionLabel) {
+      toastActionLive = true;
       host.append(el("button", {
         class: "toast-action", type: "button", text: actionLabel,
         on: {
           click: () => {
             clearTimeout(toastTimer);
             clearTimeout(toastFadeTimer);
+            toastActionLive = false;
             host.classList.remove("in");
             host.hidden = true;
             onAction();
+            advanceToastQueue();
           },
         },
       }));
@@ -57,7 +86,11 @@ window.Voisr = window.Voisr || {};
     host.classList.add("in");
     toastTimer = setTimeout(() => {
       host.classList.remove("in");
-      toastFadeTimer = setTimeout(() => { host.hidden = true; }, 200);
+      toastFadeTimer = setTimeout(() => {
+        host.hidden = true;
+        toastActionLive = false;
+        advanceToastQueue();
+      }, 200);
     }, ms || (onAction ? 5000 : 3500));
   }
 

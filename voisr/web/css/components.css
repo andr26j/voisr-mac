@@ -155,6 +155,13 @@
 }
 .toast.in { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+/* Author `display: flex` above beats the UA stylesheet's `[hidden] { display:
+   none }` at equal specificity (author wins ties), so the toast would stay
+   visible (and its fixed, z-index: 300 box would keep intercepting clicks
+   over whatever sits beneath it) even while `hidden` is true without this
+   override -- same fix as .palette-scrim[hidden] and .popover[hidden]. */
+.toast[hidden] { display: none; }
+
 .toast-action {
   color: var(--accent); font-weight: 700;
   padding: 4px 12px; border-radius: 99px;
