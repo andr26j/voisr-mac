@@ -432,6 +432,27 @@ class HistoryStore:
 
         self._mutate(remove)
 
+    def restore(self, item: dict) -> dict:
+        """Re-insert a previously deleted record, keeping its id and ts.
+        Used by the dashboard's undo-delete. Idempotent."""
+        def put_back(items):
+            if any(i["id"] == item["id"] for i in items):
+                return item
+            items.append(dict(item))
+            return item
+
+        return self._mutate(put_back)
+
+    def clear(self) -> int:
+        """Remove every record in a single atomic write. Deleting row by row
+        would rewrite the whole file once per row."""
+        def wipe(items):
+            count = len(items)
+            items[:] = []
+            return count
+
+        return self._mutate(wipe)
+
     def _daily_series(self, items, days: int = 14) -> list[dict]:
         """Word counts per day for the last `days` days, oldest first,
         zero-filled. Entries outside the window are ignored."""

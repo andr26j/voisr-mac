@@ -1222,3 +1222,45 @@ def test_stats_daily_ignores_entries_older_than_the_window(tmp_path):
     stats = store.stats()
     assert sum(d["words"] for d in stats["daily"]) == 0
     assert stats["total_words"] == 3  # totals still count it
+
+
+from voisr.app import DEFAULT_CONFIG
+
+
+def test_default_config_has_the_new_keys():
+    assert DEFAULT_CONFIG["appearance"] == "system"
+    assert DEFAULT_CONFIG["launch_at_login"] is False
+    assert DEFAULT_CONFIG["model"] is None
+
+
+def test_restore_puts_a_deleted_item_back_with_its_identity(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    item = store.add("bring me back", duration_s=2.0)
+    store.delete(item["id"])
+    assert store.list() == []
+    store.restore(item)
+    back = store.list()
+    assert len(back) == 1
+    assert back[0]["id"] == item["id"]
+    assert back[0]["ts"] == item["ts"]
+    assert back[0]["text"] == "bring me back"
+
+
+def test_restore_is_a_no_op_when_the_id_is_already_present(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    item = store.add("only once", duration_s=1.0)
+    store.restore(item)
+    assert len(store.list()) == 1
+
+
+def test_clear_removes_everything_in_one_write_and_reports_the_count(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    for n in range(3):
+        store.add(f"entry {n}", duration_s=1.0)
+    assert store.clear() == 3
+    assert store.list() == []
+    assert store.stats()["total_words"] == 0
+
+
+def test_clear_on_empty_history_returns_zero(tmp_path):
+    assert HistoryStore(tmp_path / "h.jsonl").clear() == 0
