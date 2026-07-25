@@ -678,3 +678,18 @@ def test_close_releases_the_status_item(tmp_path):
     api.close()
 
     assert status.release_calls == 1
+
+
+def test_save_text_file_writes_through_the_injected_panel(tmp_path):
+    api = make_api(tmp_path)
+    target = tmp_path / "out.txt"
+    api._save_panel_fn = lambda name: str(target)
+    out = api.save_text_file("hello there", "out.txt")
+    assert out["ok"] is True
+    assert target.read_text() == "hello there"
+
+
+def test_save_text_file_reports_cancellation(tmp_path):
+    api = make_api(tmp_path)
+    api._save_panel_fn = lambda name: None
+    assert api.save_text_file("x", "a.txt") == {"ok": False, "path": None}

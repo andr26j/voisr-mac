@@ -53,6 +53,17 @@ window.Voisr = window.Voisr || {};
         return { ok: true, appearance: mode };
       },
       delete_history_item: async (id) => { mockHistory = mockHistory.filter((i) => i.id !== id); return { ok: true }; },
+      restore_history_item: async (item) => { mockHistory.push(item); return { ok: true }; },
+      export_history: async (fmt) => {
+        const stamp = new Date().toISOString().slice(0, 10);
+        let text;
+        if (fmt === "json") text = JSON.stringify(mockHistory, null, 2);
+        else if (fmt === "md") text = mockHistory.map((i) => `- ${i.text}`).join("\n");
+        else if (fmt === "txt") text = mockHistory.map((i) => i.text).join("\n");
+        else return { error: `unsupported format: ${fmt}` };
+        return { text, suggested_name: `voisr-history-${stamp}.${fmt}` };
+      },
+      save_text_file: async (text, suggestedName) => ({ ok: true, path: `/tmp/${suggestedName}` }),
       copy_text: async () => ({ ok: true }),
       capture_hotkey: async () => {
         await new Promise((r) => setTimeout(r, 1200));

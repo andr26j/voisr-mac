@@ -12,7 +12,14 @@ window.Voisr = window.Voisr || {};
   async function onDelete(item) {
     await V.api().delete_history_item(item.id);
     await render();
-    V.ui.toast("Dictation deleted");
+    V.ui.toast("Dictation deleted", {
+      actionLabel: "Undo",
+      onAction: async () => {
+        await V.api().restore_history_item(item);
+        await render();
+        V.ui.toast("Restored");
+      },
+    });
   }
 
   function setQuery(q) {
@@ -110,6 +117,14 @@ window.Voisr = window.Voisr || {};
     document.getElementById("history-more").addEventListener("click", () => {
       shown += PAGE;
       render();
+    });
+
+    document.getElementById("history-export").addEventListener("click", async () => {
+      const out = await V.api().export_history("txt");
+      if (out.error) return V.ui.toast(out.error);
+      const saved = await V.api().save_text_file(out.text, out.suggested_name);
+      if (saved.error) return V.ui.toast(saved.error);
+      if (saved.ok) V.ui.toast("History exported");
     });
 
     document.addEventListener("keydown", (e) => {

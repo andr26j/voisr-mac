@@ -53,7 +53,14 @@ window.Voisr = window.Voisr || {};
   async function onDelete(item) {
     await V.api().delete_history_item(item.id);
     await render();
-    V.ui.toast("Dictation deleted");
+    V.ui.toast("Dictation deleted", {
+      actionLabel: "Undo",
+      onAction: async () => {
+        await V.api().restore_history_item(item);
+        await render();
+        V.ui.toast("Restored");
+      },
+    });
   }
 
   function greeting() {

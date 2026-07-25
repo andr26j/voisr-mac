@@ -32,12 +32,23 @@ window.Voisr = window.Voisr || {};
   }
 
   let toastTimer = null;
-  function toast(msg) {
-    const el = $("#toast");
-    el.textContent = msg;
-    el.hidden = false;
+  function toast(msg, opts) {
+    const { actionLabel, onAction, ms } = opts || {};
+    const host = document.getElementById("toast");
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { el.hidden = true; }, 3500);
+    host.replaceChildren(el("span", { text: msg }));
+    if (onAction && actionLabel) {
+      host.append(el("button", {
+        class: "toast-action", type: "button", text: actionLabel,
+        on: { click: () => { clearTimeout(toastTimer); host.hidden = true; onAction(); } },
+      }));
+    }
+    host.hidden = false;
+    host.classList.add("in");
+    toastTimer = setTimeout(() => {
+      host.classList.remove("in");
+      setTimeout(() => { host.hidden = true; }, 200);
+    }, ms || (onAction ? 5000 : 3500));
   }
 
   /* Build a node without string templating. Text goes through textContent and

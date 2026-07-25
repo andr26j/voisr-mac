@@ -143,18 +143,26 @@
 /* ---------- Toast ---------- */
 
 .toast {
-  position: fixed;
-  bottom: 26px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--ink);
-  color: var(--surface);
-  border-radius: 99px;
-  padding: 10px 20px;
-  font-size: 13px;
-  font-weight: 500;
-  box-shadow: var(--shadow);
-  z-index: 100;
+  position: fixed; bottom: 26px; left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  display: flex; align-items: center; gap: 14px;
+  background: var(--ink); color: var(--bg);
+  border-radius: 99px; padding: 10px 12px 10px 20px;
+  font-size: 13px; font-weight: 500;
+  box-shadow: var(--shadow-pop); z-index: 300;
+  opacity: 0; transition: opacity var(--base) var(--ease),
+                          transform var(--base) var(--ease);
+}
+.toast.in { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+.toast-action {
+  color: var(--accent); font-weight: 700;
+  padding: 4px 12px; border-radius: 99px;
+  background: rgba(255, 255, 255, .08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast { transition: none; }
 }
 
 /* ---------- Select ---------- */

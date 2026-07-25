@@ -115,6 +115,9 @@ ALLOWED_LITERAL_COLOURS = {
     "rgba(232, 100, 60, 0)": "record button pulse animation end (transparent ember)",
     "rgba(0, 0, 0, .35)": "colour-wheel thumb shadow ring",
     "rgba(0, 0, 0, .4)": "colour-wheel thumb shadow ring",
+    "rgba(255, 255, 255, .08)": "toast-action button: a fixed white-on-dark "
+        "hover surface for the undo button, matching the toast's own "
+        "always-dark chip background rather than the light/dark ink token",
 }
 
 LITERAL_COLOUR_RE = re.compile(
@@ -294,3 +297,20 @@ def test_history_binds_keyboard_navigation():
         assert key in src, key
     assert "setQuery" in src
     assert "PAGE" in src
+
+
+def test_no_confirm_dialogs_remain_in_the_web_layer():
+    for path in WEB.rglob("*.js"):
+        assert "confirm(" not in path.read_text(), path.name
+    assert "confirm(" not in INDEX.read_text()
+
+
+def test_delete_offers_undo():
+    src = (WEB / "js" / "views" / "history.js").read_text()
+    assert "restore_history_item" in src
+    assert "Undo" in src
+
+
+def test_export_is_wired_to_the_save_panel():
+    src = (WEB / "js" / "views" / "history.js").read_text()
+    assert "export_history" in src and "save_text_file" in src

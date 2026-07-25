@@ -77,6 +77,29 @@ def apply_app_appearance(mode: str) -> None:
         pass
 
 
+def _run_save_panel(suggested_name: str):
+    """Show a save panel on the main thread and return the chosen path."""
+    from PyObjCTools import AppHelper
+    import AppKit
+    result = {}
+    done = threading.Event()
+
+    def go():
+        try:
+            panel = AppKit.NSSavePanel.savePanel()
+            panel.setNameFieldStringValue_(suggested_name)
+            if panel.runModal() == AppKit.NSModalResponseOK:
+                result["path"] = panel.URL().path()
+        except Exception:
+            pass
+        finally:
+            done.set()
+
+    AppHelper.callAfter(go)
+    done.wait(120)
+    return result.get("path")
+
+
 def paste_ready() -> bool:
     try:
         import Quartz
@@ -679,6 +702,7 @@ class Api:
         self._window = None
         self._status_item = None
         self._is_recording = False
+        self._save_panel_fn = None
         self._recordings = RecordingQueue(
             recorder_factory=recorder_factory,
             fallback_recorder_factory=fallback_recorder_factory,
@@ -1009,6 +1033,22 @@ class Api:
         else:
             return {"error": f"unsupported format: {fmt}"}
         return {"text": text, "suggested_name": f"voisr-history-{stamp}.{fmt}"}
+
+    def save_text_file(self, text, suggested_name):
+        """Write text to a user-chosen path via NSSavePanel. Returns
+        ok=False with path=None when the user cancels."""
+        chooser = self._save_panel_fn or _run_save_panel
+        try:
+            path = chooser(suggested_name)
+        except Exception as e:
+            return {"error": str(e)}
+        if not path:
+            return {"ok": False, "path": None}
+        try:
+            Path(path).write_text(text)
+        except OSError as e:
+            return {"error": str(e)}
+        return {"ok": True, "path": str(path)}
 
     def prime_microphone(self):
         """Retained for interface parity — intentionally does NOT open the
