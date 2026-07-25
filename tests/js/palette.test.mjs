@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { loadVoisr } from "./load.mjs";
+
+const PALETTE_SRC = readFileSync(path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..", "..", "voisr", "web", "js", "palette.js"), "utf8");
 
 /* palette.js reaches for V.ui.el when it draws, so ui.js loads first. */
 const { V } = loadVoisr(["js/ui.js", "js/palette.js"]);
@@ -20,6 +27,18 @@ const COMMANDS = [
 ];
 
 const ids = (q, items = COMMANDS) => match(q, items).map((c) => c.id);
+
+/* The fixture above is a hand-copy, so it can drift away from the real
+   command list without anything failing. Pin it to the source: a renamed
+   command now breaks this test instead of quietly leaving the ranking
+   assertions exercising titles the app no longer has. */
+test("the fixture titles still exist verbatim in palette.js", () => {
+  for (const { id, title } of COMMANDS) {
+    assert.ok(PALETTE_SRC.includes(`"${title}"`),
+      `palette.js no longer contains the title "${title}" (command ${id}) -- ` +
+      "update this fixture to match the real command list.");
+  }
+});
 
 test("match returns every item for an empty query", () => {
   assert.deepEqual(ids(""), COMMANDS.map((c) => c.id));

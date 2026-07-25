@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { loadVoisr } from "./load.mjs";
+import { makeNode } from "./dom.mjs";
 
 /* ui.js first: both views call V.ui.el / V.ui.$ at module scope. */
 const { V } = loadVoisr(["js/ui.js", "js/views/home.js", "js/views/history.js"]);
@@ -131,4 +132,130 @@ test("highlighted never parses the query as markup", () => {
   assert.equal(ms.length, 1);
   assert.equal(ms[0].textContent, "<img", "the query must land as literal text");
   assert.equal(ms[0].innerHTML, "", "nothing may reach innerHTML");
+});
+
+/* ---------- history: the real search input path ----------
+
+   Everything above tests the hoisted pure seams. The space-eating bug the
+   comments in views/history.js describe shipped in the *input path* --
+   the `input` listener, the debounce and applyQuery -- which those pure
+   tests never touch. These mount the module against fake nodes and drive it
+   the way a typist does: set input.value, fire `input`, let the debounce
+   expire, then look at what actually rendered.                            */
+
+const HISTORY = [
+  { id: "a1", ts: 1752000000, text: "Hello team, please send the invoice by Friday.", words: 8, duration_s: 5 },
+  { id: "a2", ts: 1752000100, text: "Draft a follow-up about the Brunswick site visit next week.", words: 10, duration_s: 6 },
+  { id: "a3", ts: 1752000200, text: "Remember to book the trailer for Saturday morning.", words: 8, duration_s: 4 },
+];
+
+const NODE_IDS = ["history-search", "history-empty", "history-more",
+                  "history-groups", "history-export"];
+
+/* Mock timers are enabled BEFORE the scripts load so every setTimeout they
+   register -- history.js's search debounce and api.js's dev-fallback -- is
+   the mock's. t.mock restores them when the test ends. */
+async function mountHistory(t) {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const env = loadVoisr(["js/ui.js", "js/api.js", "js/views/history.js"]);
+  // js/api.js resolves the bridge lazily as `window.pywebview.api`, so
+  // stubbing the property is enough -- no need to replace V.api itself.
+  env.window.pywebview = { api: { get_history: async () => HISTORY.map((i) => ({ ...i })) } };
+
+  const nodes = {};
+  for (const id of NODE_IDS) {
+    nodes[id] = makeNode(id === "history-search" ? "input" : "div");
+    env.register(id, nodes[id]);
+  }
+  nodes["history-search"].value = "";
+
+  await env.V.views.history.render();   // the one genuine bridge round-trip
+  env.V.views.history.initKeys();       // binds the `input` listener
+  return { V: env.V, ...nodes };
+}
+
+/* Depth-first collect of rendered nodes carrying a class. */
+function byClass(node, cls, out = []) {
+  for (const kid of node.children || []) {
+    if (!kid || typeof kid !== "object") continue;
+    if (String(kid.className || "").split(/\s+/).includes(cls)) out.push(kid);
+    byClass(kid, cls, out);
+  }
+  return out;
+}
+
+const rowsIn = (groups) => byClass(groups, "item-row");
+const rowText = (row) => byClass(row, "txt")[0].children
+  .map((seg) => (typeof seg === "string" ? seg : seg.textContent)).join("");
+const rowMarks = (row) => byClass(row, "txt")[0].children
+  .filter((seg) => typeof seg !== "string").map((m) => m.textContent);
+
+test("typing a multi-word query filters the list without touching input.value", async (t) => {
+  const h = await mountHistory(t);
+  const search = h["history-search"], groups = h["history-groups"];
+
+  assert.equal(rowsIn(groups).length, 3, "all three items render before any query");
+
+  search.value = "site visit";
+  search.dispatch("input");
+
+  // Debounced: nothing may have happened yet on the keystroke itself.
+  assert.equal(rowsIn(groups).length, 3, "the input handler must not re-render synchronously");
+
+  t.mock.timers.tick(500);   // past SEARCH_DEBOUNCE_MS
+
+  const rows = rowsIn(groups);
+  assert.equal(rows.length, 1, "only the Brunswick site visit item survives the filter");
+  assert.equal(rowText(rows[0]), HISTORY[1].text, "the row reassembles to the original text");
+  assert.deepEqual(rowMarks(rows[0]), ["site visit"],
+    "the whole multi-word phrase is highlighted as one span");
+  assert.equal(h["history-empty"].hidden, true, "a match means the empty state stays hidden");
+
+  // The regression itself: the old code trimmed on the way in and wrote the
+  // result back to the field, eating the space as the user typed it.
+  assert.equal(search.value, "site visit", "the input's value must survive untouched");
+});
+
+test("a mid-typing trailing space is neither eaten nor allowed to break the match", async (t) => {
+  const h = await mountHistory(t);
+  const search = h["history-search"], groups = h["history-groups"];
+
+  // "site visit " is what the field holds the instant before the next word --
+  // exactly the state a write-back of the trimmed value used to destroy.
+  search.value = "site visit ";
+  search.dispatch("input");
+  t.mock.timers.tick(500);
+
+  assert.equal(search.value, "site visit ", "the trailing space must still be there");
+  assert.equal(rowsIn(groups).length, 1, "trimming at match time still finds the item");
+});
+
+test("a query that matches nothing empties the list and shows the empty state", async (t) => {
+  const h = await mountHistory(t);
+  const search = h["history-search"], groups = h["history-groups"];
+
+  search.value = "Altona";
+  search.dispatch("input");
+  t.mock.timers.tick(500);
+
+  assert.equal(rowsIn(groups).length, 0);
+  assert.equal(h["history-empty"].hidden, false, "the empty state shows when nothing matches");
+  assert.equal(h["history-more"].hidden, true, "nothing to page through either");
+  assert.equal(search.value, "Altona");
+});
+
+test("only the last keystroke of a fast burst is applied", async (t) => {
+  const h = await mountHistory(t);
+  const search = h["history-search"], groups = h["history-groups"];
+
+  for (const v of ["s", "si", "site", "site ", "site v", "site visit"]) {
+    search.value = v;
+    search.dispatch("input");
+    t.mock.timers.tick(10);   // well inside the debounce window
+    assert.equal(rowsIn(groups).length, 3, `"${v}" must not have rendered yet`);
+  }
+
+  t.mock.timers.tick(500);
+  assert.equal(rowsIn(groups).length, 1, "the burst collapses into a single render");
+  assert.equal(search.value, "site visit");
 });
