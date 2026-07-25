@@ -297,3 +297,10 @@ mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
   background: transparent; font-weight: 600;
 }
 .btn-danger:hover { background: var(--destructive-soft); }
+/* armed (awaiting confirm click) state must be unmistakable, not just a
+   label swap -- filled with the destructive colour instead of outlined. */
+.btn-danger.armed {
+  background: var(--destructive); border-color: var(--destructive);
+  color: var(--on-accent);
+}
+.btn-danger.armed:hover { background: var(--destructive); }

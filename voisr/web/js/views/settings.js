@@ -135,6 +135,16 @@ window.Voisr = window.Voisr || {};
     pop.hidden = !pop.hidden;
   }
 
+  function closeColorPopover() {
+    document.getElementById("color-popover").hidden = true;
+  }
+
+  /* known-applied appearance value, kept in sync by render() and the change
+     handler below -- lets the handler revert the <select> to what's actually
+     applied if set_appearance() fails, rather than leaving it showing a
+     theme that was never applied or persisted. */
+  let appliedAppearance = "system";
+
   async function render() {
     const $ = V.ui.$;
     const [cfg, status, models, hotkey] = await Promise.all([
@@ -145,7 +155,8 @@ window.Voisr = window.Voisr || {};
     $("#widget-toggle").checked = cfg.show_widget !== false;
     $("#hotkey-current").textContent = hotkey.display || "unset";
     $("#hotkey-status").textContent = status.status;
-    $("#appearance-select").value = cfg.appearance || "system";
+    appliedAppearance = cfg.appearance || "system";
+    $("#appearance-select").value = appliedAppearance;
     $("#launch-toggle").checked = !!cfg.launch_at_login;
 
     const select = $("#model-select");
@@ -165,10 +176,13 @@ window.Voisr = window.Voisr || {};
      since it loads after index.html's body) ---------- */
 
   document.getElementById("appearance-select").addEventListener("change", async (e) => {
-    const res = await V.api().set_appearance(e.target.value);
-    if (res.error) return V.ui.toast(res.error);
-    V.applyAppearance(e.target.value);
-    V.ui.toast(`Theme: ${e.target.value}`);
+    const prev = appliedAppearance;
+    const next = e.target.value;
+    const res = await V.api().set_appearance(next);
+    if (res.error) { e.target.value = prev; return V.ui.toast(res.error); }
+    appliedAppearance = next;
+    V.applyAppearance(next);
+    V.ui.toast(`Theme: ${next}`);
   });
 
   document.getElementById("model-select").addEventListener("change", async (e) => {
@@ -184,18 +198,58 @@ window.Voisr = window.Voisr || {};
 
   document.getElementById("color-open").addEventListener("click", openColorPopover);
 
+  /* click-outside / Escape dismissal for the colour popover -- registered
+     once here (module load), not inside openColorPopover, so repeated opens
+     never stack extra listeners. The click listener bails out early on any
+     click still inside the popover or on the swatch button that opened it,
+     so the very click that opens the popover (which bubbles to document
+     right after) can never immediately close it again. Mirrors the
+     scrim/Escape pattern in palette.js. */
+  document.addEventListener("click", (e) => {
+    const pop = document.getElementById("color-popover");
+    if (pop.hidden) return;
+    if (pop.contains(e.target) || e.target.closest("#color-open")) return;
+    closeColorPopover();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (!document.getElementById("color-popover").hidden) closeColorPopover();
+  });
+
+  /* destructive and irreversible, so it keeps a confirmation -- an in-app
+     arm/disarm one, never the browser's native dialog. The disarm timer id
+     is tracked (like ui.js's toastTimer) so it can always be cleared --
+     re-arming, disarming, and firing all cancel any pending disarm, so a
+     stale timeout can never fire against a button that's since moved on. */
+  let clearHistoryDisarmTimer = null;
+  let clearHistoryArmedAt = 0;
+
+  function disarmClearHistory(btn) {
+    clearTimeout(clearHistoryDisarmTimer);
+    clearHistoryDisarmTimer = null;
+    btn.dataset.armed = "0";
+    btn.classList.remove("armed");
+    btn.textContent = "Clear…";
+  }
+
   document.getElementById("clear-history").addEventListener("click", async () => {
-    // destructive and irreversible, so it keeps a confirmation -- an in-app
-    // arm/disarm one, never the browser's native dialog
     const btn = document.getElementById("clear-history");
     if (btn.dataset.armed !== "1") {
+      clearTimeout(clearHistoryDisarmTimer);
       btn.dataset.armed = "1";
+      btn.classList.add("armed");
       btn.textContent = "Click again to erase everything";
-      setTimeout(() => { btn.dataset.armed = "0"; btn.textContent = "Clear…"; }, 4000);
+      clearHistoryArmedAt = Date.now();
+      clearHistoryDisarmTimer = setTimeout(() => disarmClearHistory(btn), 4000);
       return;
     }
-    btn.dataset.armed = "0";
-    btn.textContent = "Clear…";
+    // two click events landing in quick succession -- an accidental
+    // double-click, or a stuck key/trackpad -- both arrive before any async
+    // gap, so without a minimum dwell the second one reads as deliberate
+    // confirmation. This is the app's only irreversible action; require the
+    // confirm click to land at least ~600ms after arming.
+    if (Date.now() - clearHistoryArmedAt < 600) return;
+    disarmClearHistory(btn);
     const res = await V.api().clear_history();
     if (res.error) return V.ui.toast(res.error);
     V.ui.toast(`History cleared — ${res.removed} removed`);
