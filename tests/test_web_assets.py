@@ -87,13 +87,57 @@ def test_boot_script_sets_the_theme_before_stylesheets_paint():
     assert "data-appearance" in head or "dataset.appearance" in head
 
 
-def test_no_hardcoded_hex_outside_tokens():
+# Literal colour strings permitted in the consumer stylesheets (base.css,
+# components.css, views.css), keyed to a short reason. Everything here is a
+# deliberate exception to "no hardcoded colours outside tokens.css" — most
+# are the recording pill's fixed per-theme brand colours, which intentionally
+# do NOT follow light/dark appearance because the pill renders on its own
+# dark chrome in every theme. A few are pre-existing generic shadow/glow
+# tints unrelated to the pill. Adding a new literal colour anywhere in these
+# files requires adding it here explicitly — the test will otherwise fail.
+ALLOWED_LITERAL_COLOURS = {
+    # -- recording-pill per-theme brand colours (components.css, views.css) --
+    "rgb(255, 255, 255)": "pill theme: default/white waveform bars, and the colour-wheel thumb's white ring",
+    "rgb(232, 100, 60)": "pill theme: Ember (orange)",
+    "rgba(232, 100, 60, .8)": "pill theme: Ember glow (box-shadow)",
+    "rgb(74, 222, 222)": "pill theme: Aurora (cyan half of the gradient)",
+    "rgb(155, 93, 229)": "pill theme: Aurora (purple half of the gradient)",
+    "rgb(90, 169, 230)": "pill theme: Ocean (blue)",
+    "rgb(57, 255, 136)": "pill theme: Neon (green)",
+    "rgba(57, 255, 136, .75)": "pill theme: Neon glow (box-shadow)",
+    "rgb(168, 230, 207)": "pill theme: Breathe (mint)",
+    "rgb(237, 237, 237)": "pill theme: Scanner (grey)",
+    # -- pre-existing generic shadow/glow tints, not theme-bound --
+    "rgba(31, 29, 26, .25)": "switch thumb drop shadow",
+    "rgba(28, 26, 23, .96)": "mini-pill's own fixed dark chrome background",
+    "rgba(232, 100, 60, .35)": "record button glow shadow (ember accent)",
+    "rgba(232, 100, 60, .45)": "record button pulse animation start (ember accent)",
+    "rgba(232, 100, 60, 0)": "record button pulse animation end (transparent ember)",
+    "rgba(0, 0, 0, .35)": "colour-wheel thumb shadow ring",
+    "rgba(0, 0, 0, .4)": "colour-wheel thumb shadow ring",
+}
+
+LITERAL_COLOUR_RE = re.compile(
+    r"#[0-9A-Fa-f]{3,8}\b|rgba?\([^)]*\)"
+)
+
+
+def test_no_unlisted_literal_colours_outside_tokens():
+    """Enforces the "no hardcoded colours outside tokens.css" constraint for
+    base.css, components.css and views.css. Catches hex (#rgb/#rrggbb/
+    #rrggbbaa), rgb(...) and rgba(...) forms alike -- not just hex -- so a
+    literal colour can't slip through by switching syntax. Anything found
+    must be pre-approved in ALLOWED_LITERAL_COLOURS above; unlisted literals
+    fail the test. (tokens.css itself legitimately uses rgba() inside token
+    definitions and is intentionally not scanned here.)
+    """
     # brand SVG markup in index.html is exempt; stylesheets are not
     for rel in ["css/base.css", "css/components.css", "css/views.css"]:
         css = (WEB / rel).read_text()
         stripped = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
-        hexes = re.findall(r"#[0-9A-Fa-f]{3,8}\b", stripped)
-        assert hexes == [], f"{rel} has hardcoded colours: {hexes}"
+        found = LITERAL_COLOUR_RE.findall(stripped)
+        unlisted = [c for c in found if c not in ALLOWED_LITERAL_COLOURS]
+        assert unlisted == [], f"{rel} has unlisted literal colours: {unlisted}"
 
 
 def test_titlebar_inset_is_reserved():

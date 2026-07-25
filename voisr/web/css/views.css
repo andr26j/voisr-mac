@@ -199,6 +199,8 @@
   position: absolute;
   width: 18px; height: 18px;
   border-radius: 50%;
+  /* fixed pill-theme brand colour (colour-wheel thumb's white ring) -- does
+     not vary by light/dark appearance; matches the pill's own dark chrome */
   border: 3px solid rgb(255, 255, 255);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, .35), 0 1px 4px rgba(0, 0, 0, .4);
   pointer-events: none;

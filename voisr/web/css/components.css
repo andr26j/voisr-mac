@@ -205,6 +205,8 @@
 .mini-pill .mb {
   width: 2.5px; height: 5px;
   border-radius: 1.5px;
+  /* fixed pill-theme brand colour (default/white waveform bars) -- does not
+     vary by light/dark appearance; the pill has its own dark chrome */
   background: var(--mb-color, rgb(255, 255, 255)); opacity: .9;
   animation: mwave 1s ease-in-out infinite;
 }
@@ -217,6 +219,9 @@
 .mini-pill .mb:nth-child(6) { animation-delay: .75s; }
 .mini-pill .mb:nth-child(7) { animation-delay: .9s; }
 
+/* the following per-theme colours are fixed pill-theme brand colours.
+   They intentionally do NOT follow light/dark appearance -- the recording
+   pill renders on its own dark chrome in every theme. */
 .mini-pill[data-theme="ember"] .mb { background: var(--mb-color, rgb(232, 100, 60)); box-shadow: 0 0 4px var(--mb-glow, rgba(232, 100, 60, .8)); animation-name: mflick; animation-duration: .9s; }
 .mini-pill[data-theme="aurora"] .mb { background: var(--mb-color, linear-gradient(180deg, rgb(74, 222, 222), rgb(155, 93, 229))); animation-name: mwave, hue; animation-duration: 1.1s, 3s; animation-timing-function: ease-in-out, linear; }
 .mini-pill[data-custom-color][data-theme="aurora"] .mb { animation-name: mwave; animation-duration: 1.1s; animation-timing-function: ease-in-out; }
