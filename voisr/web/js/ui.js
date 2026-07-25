@@ -79,7 +79,10 @@ window.Voisr = window.Voisr || {};
   function formatDuration(seconds) {
     const s = Math.max(0, Math.round(seconds || 0));
     if (s < 60) return s === 0 ? "—" : `${s}s`;
-    const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+    // round to whole minutes FIRST, then split -- deriving h and m from the raw
+    // seconds independently lets m round up to 60 and print "1h 60m"
+    const totalM = Math.round(s / 60);
+    const h = Math.floor(totalM / 60), m = totalM % 60;
     return h ? `${h}h ${m}m` : `${m}m`;
   }
 

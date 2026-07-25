@@ -239,3 +239,28 @@ def test_ui_exposes_format_duration():
 def test_mock_stats_include_the_new_keys():
     src = (WEB / "js" / "api.js").read_text()
     assert "time_saved_seconds" in src and "daily" in src
+
+
+def test_format_duration_rounds_to_minutes_before_splitting_hours():
+    """Ensures formatDuration does not independently round minutes from the
+    remainder, which can produce m=60. Instead, it must round to whole minutes
+    first, then derive both h and m from that single rounded value."""
+    src = (WEB / "js" / "ui.js").read_text()
+
+    # The old broken pattern: independently rounding (s % 3600) / 60
+    # This can produce m=60, leading to "60m" or "1h 60m".
+    # Allow flexible whitespace: Math.round(\s*(\(\s*s\s*%\s*3600\s*\)\s*/\s*60|...))
+    old_pattern = re.compile(
+        r"Math\.round\s*\(\s*\(\s*s\s*%\s*3600\s*\)\s*/\s*60\s*\)"
+    )
+    assert not old_pattern.search(src), \
+        "formatDuration still independently rounds (s % 3600) / 60, risking m=60"
+
+    # The new correct pattern: round to whole minutes first
+    # const totalM = Math.round(s / 60);
+    # This must exist and be followed by deriving h and m from totalM
+    new_pattern = re.compile(
+        r"const\s+totalM\s*=\s*Math\.round\s*\(\s*s\s*/\s*60\s*\)"
+    )
+    assert new_pattern.search(src), \
+        "formatDuration is not rounding to whole minutes first (totalM = Math.round(s / 60))"
