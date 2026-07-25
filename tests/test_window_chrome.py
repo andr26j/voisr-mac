@@ -75,6 +75,14 @@ class FakeWebView:
         self.values[key] = value
 
 
+class RaisingWebView:
+    """A webview whose drawsBackground write always raises -- exercises the
+    vibrancy try/except independently of the titlebar try/except above it."""
+
+    def setValue_forKey_(self, value, key):
+        raise RuntimeError("webview blew up")
+
+
 def fake_appkit():
     return types.SimpleNamespace(
         NSVisualEffectView=FakeEffectView,
@@ -128,3 +136,14 @@ def test_vibrancy_disabled_leaves_the_webview_opaque():
 def test_apply_chrome_never_raises_on_a_broken_window():
     out = window_chrome.apply_chrome(object(), appkit=fake_appkit())
     assert out == {"titlebar": False, "vibrancy": False}
+
+
+def test_titlebar_succeeds_independently_when_vibrancy_raises():
+    """The module's core independent-failure property: a webview that blows
+    up applying vibrancy must not take the already-successful titlebar
+    result down with it, and the exception must not propagate."""
+    win, wv = FakeWindow(), RaisingWebView()
+    out = window_chrome.apply_chrome(win, webview=wv, vibrancy=True,
+                                     appkit=fake_appkit())
+    assert out == {"titlebar": True, "vibrancy": False}
+    assert win.titlebar_transparent is True

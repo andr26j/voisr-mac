@@ -108,6 +108,40 @@ def test_dispatch_routes_each_menu_action_to_its_handler():
     assert calls == ["dictate", "open", "quit"]
 
 
+def test_menu_items_carry_the_expected_selector_and_route_to_dispatch():
+    """The ObjC target's dictate_/openDashboard_/quitApp_ selectors are the
+    only wiring between a menu click and _dispatch -- untested, a typo in
+    either the NSMenuItem selector string or the target's method name would
+    silently kill the only menu-bar affordance (no exception, the item
+    would just never fire)."""
+    calls = []
+    si, _ = make(on_dictate=lambda: calls.append("dictate"),
+                 on_open=lambda: calls.append("open"),
+                 on_quit=lambda: calls.append("quit"))
+    si.create()
+
+    by_title = {str(item.title()): item for item in si.item.menu.itemArray()}
+
+    dictate_item = by_title["Dictate now"]
+    assert str(dictate_item.action()) == "dictate:"
+    assert dictate_item.target() is si._menu_target
+
+    open_item = by_title["Open Dashboard"]
+    assert str(open_item.action()) == "openDashboard:"
+    assert open_item.target() is si._menu_target
+
+    quit_item = by_title["Quit Voisr"]
+    assert str(quit_item.action()) == "quitApp:"
+    assert quit_item.target() is si._menu_target
+
+    # Firing each selector directly (as AppKit would on a real click) must
+    # route through _dispatch to the matching handler.
+    si._menu_target.dictate_(None)
+    si._menu_target.openDashboard_(None)
+    si._menu_target.quitApp_(None)
+    assert calls == ["dictate", "open", "quit"]
+
+
 def test_dispatch_ignores_an_unknown_action_and_swallows_handler_errors():
     def boom():
         raise RuntimeError("handler blew up")
