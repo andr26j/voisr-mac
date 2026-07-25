@@ -354,6 +354,14 @@ def test_view_transition_class_exists_and_respects_reduced_motion():
     assert "prefers-reduced-motion" in css
     block = css.split("prefers-reduced-motion", 1)[1]
     assert "animation: none" in block
+    # both the view fade and the row stagger must be disabled together — a
+    # revert that drops only one half of the selector list would otherwise
+    # still pass, silently leaving rows (or the view) stuck at opacity: 0
+    rule = re.search(r"([^{}]+)\{\s*animation:\s*none;?\s*\}", block)
+    assert rule, "expected an 'animation: none' rule inside the reduced-motion block"
+    disabled_selectors = rule.group(1)
+    assert ".view.entering" in disabled_selectors
+    assert ".item-list .item-row" in disabled_selectors
 
 
 def test_show_applies_the_entering_class():

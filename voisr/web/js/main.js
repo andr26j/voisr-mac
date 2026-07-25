@@ -3,14 +3,41 @@ window.Voisr = window.Voisr || {};
 (function (V) {
   /* ---------- navigation ---------- */
 
+  // tracks whichever section is mid view-in animation, so a rapid switch
+  // (or re-selecting the same view) can clean it up instead of leaving it
+  // stuck with a stale "entering" class or an orphaned listener
+  let enteringTarget = null;
+  let enteringController = null;
+
   function show(view) {
     document.querySelectorAll(".view").forEach((v) => { v.hidden = v.id !== `view-${view}`; });
     document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     const target = document.getElementById(`view-${view}`);
+
+    if (enteringController) {
+      enteringController.abort();
+      if (enteringTarget) enteringTarget.classList.remove("entering");
+    }
+
+    // restart the CSS animation from frame 0, same technique as kick() in
+    // widget.html: drop the class, force a reflow so the drop takes effect,
+    // then re-add it. This replays the animation (even for the same view
+    // re-selected) and, critically, lets it run to completion instead of
+    // being cancelled mid-flight by an immediate class removal.
+    target.classList.remove("entering");
+    void target.offsetWidth; // force reflow
     target.classList.add("entering");
-    // remove on the next frame pair so re-selecting the same view replays it
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => target.classList.remove("entering")));
+
+    const controller = new AbortController();
+    enteringTarget = target;
+    enteringController = controller;
+    const finishEntering = () => {
+      target.classList.remove("entering");
+      if (enteringController === controller) { enteringController = null; enteringTarget = null; }
+    };
+    target.addEventListener("animationend", finishEntering, { once: true, signal: controller.signal });
+    target.addEventListener("animationcancel", finishEntering, { once: true, signal: controller.signal });
+
     if (view === "home") V.views.home.render();
     if (view === "history") V.views.history.render();
     if (view === "dictionary") V.views.dictionary.render();
