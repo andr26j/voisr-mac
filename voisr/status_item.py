@@ -44,6 +44,11 @@ class StatusItem:
             self._build_menu()
         except Exception as e:
             print(f"Voisr status item: create failed: {e}", flush=True)
+            if self.item is not None:
+                try:
+                    self._bar().removeStatusItem_(self.item)
+                except Exception:
+                    pass
             self.item = None
             return False
         return True
@@ -137,8 +142,8 @@ class StatusItem:
             return
         try:
             self._render(recording=bool(is_recording))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Voisr status item: set_recording failed: {e}", flush=True)
 
     def release(self) -> None:
         item, self.item = self.item, None

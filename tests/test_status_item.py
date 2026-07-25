@@ -117,6 +117,32 @@ def test_dispatch_ignores_an_unknown_action_and_swallows_handler_errors():
     si._dispatch("dictate")    # must not raise
 
 
+def test_a_partial_create_failure_does_not_leak_a_status_item():
+    class ExplodingButton(FakeButton):
+        def setTitle_(self, t):
+            raise RuntimeError("button blew up")
+
+    class ExplodingItem(FakeItem):
+        def __init__(self):
+            super().__init__()
+            self.button_obj = ExplodingButton()
+
+    class ExplodingBar(FakeStatusBar):
+        def statusItemWithLength_(self, length):
+            item = ExplodingItem()
+            self.items.append(item)
+            return item
+
+    bar = ExplodingBar()
+    si = StatusItem(on_dictate=lambda: None, on_open=lambda: None,
+                    on_quit=lambda: None, hotkey_label_fn=lambda: "Fn",
+                    status_bar=bar)
+
+    assert si.create() is False
+    assert si.create() is False
+    assert len(bar.items) == len(bar.removed)
+
+
 def test_a_broken_status_bar_reports_failure_without_raising():
     class Broken:
         def statusItemWithLength_(self, _):
