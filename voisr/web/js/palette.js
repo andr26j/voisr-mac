@@ -57,7 +57,11 @@ window.Voisr = window.Voisr || {};
   async function run(cmd) {
     const query = document.getElementById("palette-input").value.trim();
     close();
-    await cmd.run(query);
+    try {
+      await cmd.run(query);
+    } catch (err) {
+      V.ui.toast(`${cmd.title}: ${err.message}`);
+    }
   }
 
   function init() {
@@ -109,20 +113,45 @@ window.Voisr = window.Voisr || {};
     register({ id: "dictionary", title: "Go to Dictionary", run: () => V.show("dictionary") });
     register({ id: "settings", title: "Go to Settings", run: () => V.show("settings") });
     register({ id: "hotkey", title: "Change push-to-talk key",
-               run: async () => { V.show("settings"); await V.api().capture_hotkey(); } });
+               run: async () => {
+                 V.show("settings");
+                 const res = await V.api().capture_hotkey();
+                 if (res.error) {
+                   V.ui.toast(res.error);
+                 } else {
+                   V.ui.toast(`Push-to-talk key set to ${res.label}`);
+                 }
+               } });
     register({ id: "appearance", title: "Toggle appearance", hint: "light / dark",
                run: async () => {
                  const cfg = await V.api().get_config();
+                 if (cfg.error) {
+                   V.ui.toast(cfg.error);
+                   return;
+                 }
                  const next = cfg.appearance === "dark" ? "light" : "dark";
-                 await V.api().set_appearance(next);
-                 V.applyAppearance(next);
+                 const res = await V.api().set_appearance(next);
+                 if (res.error) {
+                   V.ui.toast(res.error);
+                 } else {
+                   V.applyAppearance(next);
+                   V.ui.toast(`Appearance: ${next}`);
+                 }
                } });
     register({ id: "copy-last", title: "Copy last dictation",
                run: async () => {
                  const items = await V.api().get_history();
+                 if (items.error) {
+                   V.ui.toast(items.error);
+                   return;
+                 }
                  if (!items.length) return V.ui.toast("Nothing to copy yet");
-                 await V.api().copy_text(items[0].text);
-                 V.ui.toast("Copied to clipboard");
+                 const res = await V.api().copy_text(items[0].text);
+                 if (res.error) {
+                   V.ui.toast(res.error);
+                 } else {
+                   V.ui.toast("Copied to clipboard");
+                 }
                } });
   }
 
