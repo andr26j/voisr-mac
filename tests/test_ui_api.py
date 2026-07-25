@@ -5,6 +5,7 @@ import pytest
 
 from voisr.history import HistoryStore
 from voisr.pasteboard import PasteDeliveryError
+from voisr.recording_queue import RecordingQueueError
 from voisr.ui import Api
 
 
@@ -647,7 +648,33 @@ def test_status_item_follows_the_record_cycle(tmp_path):
 
 def test_a_failed_start_does_not_mark_recording(tmp_path):
     api = make_api(tmp_path)
-    api.start_recording()
-    api.start_recording()   # second start is rejected by the queue
-    api.stop_recording()
+
+    def raise_rejected():
+        raise RecordingQueueError("start", "already recording")
+
+    api._recordings.start = raise_rejected
+
+    result = api.start_recording()
+
+    assert result.get("error")
     assert api.is_recording() is False
+
+
+def test_close_releases_the_status_item(tmp_path):
+    class FakeStatus:
+        def __init__(self):
+            self.release_calls = 0
+
+        def set_recording(self, value):
+            pass
+
+        def release(self):
+            self.release_calls += 1
+
+    api = make_api(tmp_path)
+    status = FakeStatus()
+    api.attach_status_item(status)
+
+    api.close()
+
+    assert status.release_calls == 1
