@@ -94,9 +94,9 @@ window.Voisr = window.Voisr || {};
         el("div", { class: "txt", text: item.text }),
         el("div", { class: "item-meta", text: `${timeOf(item.ts)} · ${item.words} words` })),
       el("button", { class: "icon-btn", "aria-label": "Copy text",
-                     html: ICONS.copy, on: { click: () => onCopy(item) } }),
+                     html: ICONS.copy, on: { click: (e) => { e.stopPropagation(); onCopy(item); } } }),
       el("button", { class: "icon-btn danger", "aria-label": "Delete dictation",
-                     html: ICONS.trash, on: { click: () => onDelete(item) } }));
+                     html: ICONS.trash, on: { click: (e) => { e.stopPropagation(); onDelete(item); } } }));
   }
 
   /* ---------- dictionary rows ---------- */

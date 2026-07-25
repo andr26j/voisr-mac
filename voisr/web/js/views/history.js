@@ -51,6 +51,18 @@ window.Voisr = window.Voisr || {};
     if (rows[cursor]) rows[cursor].scrollIntoView({ block: "nearest" });
   }
 
+  /* The single source of truth for "is there a selected item right now".
+     Never trust `cursor`/`flat` alone — always confirm a row actually
+     carries `.selected` in the live DOM before acting on it. This is what
+     keeps a stale cursor from ever deleting a row the user didn't pick. */
+  function selectedItem() {
+    if (cursor < 0 || cursor >= flat.length) return null;
+    const rows = document.querySelectorAll("#history-groups .item-row");
+    const row = rows[cursor];
+    if (!row || !row.classList.contains("selected")) return null;
+    return flat[cursor];
+  }
+
   async function render() {
     items = await V.api().get_history();
     const visible = items.filter(matches);
@@ -80,6 +92,15 @@ window.Voisr = window.Voisr || {};
               row.addEventListener("click", () => row.classList.toggle("expanded"));
               return row;
             }))))));
+
+    // `flat` was just rebuilt (delete / Load more / search / background
+    // refresh can all land here) and row indices may have shifted, so any
+    // previous `cursor` position is no longer trustworthy. Clear it rather
+    // than try to remap it — a stale index reapplied to new rows is exactly
+    // how a Backspace can delete something the user never selected. The
+    // user must arrow again to re-select, and `selectedItem()` above
+    // refuses to act on anything until they do.
+    cursor = -1;
   }
 
   function initKeys() {
@@ -101,14 +122,23 @@ window.Voisr = window.Voisr || {};
       if (e.target.tagName === "INPUT") return;
       if (e.key === "ArrowDown") { e.preventDefault(); moveCursor(1); }
       else if (e.key === "ArrowUp") { e.preventDefault(); moveCursor(-1); }
-      else if (e.key === "Enter" && flat[cursor]) {
+      else if (e.key === "Enter") {
+        const item = selectedItem();
+        if (!item) return;
         e.preventDefault();
         document.querySelectorAll("#history-groups .item-row")[cursor]
           .classList.toggle("expanded");
-      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c" && flat[cursor]) {
-        e.preventDefault(); onCopy(flat[cursor]);
-      } else if (e.key === "Backspace" && flat[cursor]) {
-        e.preventDefault(); onDelete(flat[cursor]);
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
+        const item = selectedItem();
+        if (!item) return;
+        e.preventDefault(); onCopy(item);
+      } else if (e.key === "Backspace") {
+        // Deliberately re-derive the item from the live DOM selection
+        // instead of trusting `flat[cursor]` — see selectedItem()'s
+        // comment. If nothing is visibly selected, Backspace is a no-op.
+        const item = selectedItem();
+        if (!item) return;
+        e.preventDefault(); onDelete(item);
       }
     });
   }
