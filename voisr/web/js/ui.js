@@ -82,16 +82,43 @@ window.Voisr = window.Voisr || {};
        unbounded queue turns a burst of failures (several tryApi calls losing
        the bridge in one render) into a minutes-long parade of stale messages
        long after the user has moved on. The newest message is the most
-       relevant, so the oldest goes.
+       relevant, so the oldest goes -- but only among toasts that carry no
+       action.
 
-       Plain "drop the oldest", with no exemption for action toasts: an undo
-       is never *queued* any more. A delete that lands while an undo is live
-       upgrades that undo in place (see offerUndo below), so each undo batch
-       occupies at most one slot and that slot is the live toast. Dropping an
-       entry still resolves it, so an owner never keeps state for a toast the
-       user will never see. */
+       DO NOT "simplify" this back to a plain shift-the-oldest. Read this
+       first:
+
+         - Deleting is a hard delete on the Python side. The queued Undo's
+           closure is the only handle on the deleted rows, and evicting an
+           entry calls its onResolve, which empties the batch. Dropping a
+           queued undo is therefore silent, permanent data loss with no
+           message to the user.
+         - Chatter alone gets you there. Three plain toasts need not be three
+           user actions: home.js's "Permissions failed to refresh" and every
+           tryApi failure toast fire on their own, so one flaky-bridge moment
+           emits several inside a five-second window with nobody clicking
+           anything.
+
+       This is NOT the unbounded exemption the H4 review rejected. What made
+       that one unacceptable was that N deletes queued N undos, so the exempt
+       population grew without limit. Coalescing fixed that at the source:
+       offerUndo gives a batch at most one queue slot (it upgrades the live
+       toast in place, or rewrites its own queued entry in place), and there
+       are exactly two batches, one of which owns the live toast whenever
+       anything is queueing at all. So at most one undo is ever queued.
+
+       The exemption also does not lengthen the backlog: a skipped entry is
+       still *counted* against TOAST_QUEUE_MAX, so the queue only exceeds the
+       cap when every entry in it is an action toast -- and at most one can
+       be. The loop terminates for the same reason: it stops as soon as there
+       is no droppable entry left.
+
+       An evicted entry is resolved exactly once and then gone from the
+       queue, so it can never be shown or resolved again. */
     while (toastQueue.length > TOAST_QUEUE_MAX) {
-      const [, dropped] = toastQueue.shift();
+      const i = toastQueue.findIndex(([, o]) => !hasAction(o));
+      if (i === -1) break;
+      const [, dropped] = toastQueue.splice(i, 1)[0];
       if (dropped && dropped.onResolve) dropped.onResolve();
     }
   }
@@ -136,7 +163,33 @@ window.Voisr = window.Voisr || {};
                the user just earned with a stale queued message. Whatever it
                put up drains the queue when its own window ends, so nothing is
                stranded either way. Comparing the counter rather than deferring
-               keeps this ordering exact -- no timer, no delay. */
+               keeps this ordering exact -- no timer, no delay.
+
+               KNOWN RESIDUE, cross-entity only. The real callers are async
+               (runUndo awaits restore + refresh), so the counter is unchanged
+               here and the drain runs. If what it promotes is the *other*
+               batch's queued undo, the user's click reads as "nothing
+               happened": the host immediately shows "Dictation deleted" with
+               a live Undo, and the confirmation this click earned
+               ("Restored 2 entries") queues behind it for the promoted
+               undo's full 5s window. Clicking again then undoes a different
+               entity.
+
+               Exact reachability: remove a dictionary entry, switch views
+               within 5s, delete a dictation (its undo queues behind the live
+               entry undo -- different batch, so no upgrade), then click Undo.
+               The two views cannot be on screen at once, so it needs a
+               deliberate cross-view sequence inside one 5s window.
+
+               Not fixed, deliberately. The obvious fix -- skip action toasts
+               when draining on click -- breaks the invariant that keeps this
+               queue provably drainable (host idle => queue empty; every
+               advance happens at a fade-end or here), and would strand a
+               queued undo, unshown and unresolved, whenever the clicked
+               action toasts nothing. An unresolved batch is worse than this:
+               a delete minutes later coalesces onto stale entries. Since the
+               cap no longer evicts queued undos, this residue costs ordering
+               and clarity, not data. */
             const seq = toastSeq;
             onAction();
             resolveLiveToast();
@@ -175,11 +228,21 @@ window.Voisr = window.Voisr || {};
         2 -> "2 dictations deleted" Undo restores both
         N -> "N dictations deleted" Undo restores all N
 
-     Consequences, deliberate: the undo queue is length 1 by construction (so
-     the cap above needs no exemption), and there is never a queued action
-     toast to bury a confirmation behind. */
+     Consequence, deliberate: a batch occupies at most one toast slot, so the
+     number of undos in flight is bounded by the number of batches (two)
+     rather than by the number of deletes. That bound is what makes the cap's
+     skip-actions rule above safe; it is not a claim that an undo is never
+     queued. One *can* be -- see the cross-entity note at the click drain. */
 
   const undoBatches = new Map();
+
+  /* The last failure message tryApi put on screen. runUndo reads it so that a
+     batch where *nothing* came back can report its count and the reason in
+     one line, instead of replacing the reason with a bare count (or, as
+     before, saying nothing at all and letting one reason stand for N lost
+     rows). Cleared at the start of every undo run, so a stale reason from
+     minutes ago can never be attributed to this one. */
+  let lastApiFailure = null;
 
   function batchFor(key) {
     let batch = undoBatches.get(key);
@@ -234,37 +297,51 @@ window.Voisr = window.Voisr || {};
     batch.entries = [];
     if (!entries.length) return;
 
+    lastApiFailure = null;
     let ok = 0;
     const refreshes = [];
     for (const entry of entries) {
       if (await entry.restore()) ok += 1;
       if (entry.refresh && !refreshes.includes(entry.refresh)) refreshes.push(entry.refresh);
     }
+    // Capture before the refreshes run: a refresh can fail too, and its
+    // reason is not why the restore did not come back.
+    const reason = lastApiFailure;
     // Re-render either way: on a partial or total failure the list must show
     // what is really there, not what we hoped.
     for (const refresh of refreshes) await refresh();
 
     /* Never claim more than actually came back. `done` returns null when
-       there is nothing honest left to add -- with nothing restored, tryApi's
-       own failure toast is the truthful last word and must not be replaced. */
-    const msg = spec.done(ok, entries.length);
+       there is nothing honest left to add -- with a single row nothing
+       restored, tryApi's own failure toast is the whole story and must not be
+       replaced. */
+    const msg = spec.done(ok, entries.length, reason);
     if (msg) toast(msg);
+  }
+
+  /* Nothing came back at all. At n === 1, tryApi's own toast already says
+     everything true and stays the last word (null = say nothing). At n > 1 it
+     names one reason while N rows are gone, which under-reports -- so restate
+     it with the count rather than in place of it. */
+  function noneRestored(n, reason, noun) {
+    if (n === 1) return null;
+    return reason ? `${reason} (0 of ${n} restored)` : `No ${noun} restored (0 of ${n})`;
   }
 
   const DICTATION_UNDO = {
     message: (n) => (n === 1 ? "Dictation deleted" : `${n} dictations deleted`),
-    done: (ok, n) => (ok === n ? (n === 1 ? "Restored" : `Restored ${n} dictations`)
+    done: (ok, n, reason) => (ok === n ? (n === 1 ? "Restored" : `Restored ${n} dictations`)
                     : ok ? `Restored ${ok} of ${n} dictations`
-                    : null),
+                    : noneRestored(n, reason, "dictations")),
   };
 
   const ENTRY_UNDO = {
     message: (n) => (n === 1 ? "Entry removed" : `${n} entries removed`),
     // A single clean restore stays silent, as it always has: the row
     // reappearing in the list is the confirmation.
-    done: (ok, n) => (ok === n ? (n === 1 ? null : `Restored ${n} entries`)
+    done: (ok, n, reason) => (ok === n ? (n === 1 ? null : `Restored ${n} entries`)
                     : ok ? `Restored ${ok} of ${n} entries`
-                    : null),
+                    : noneRestored(n, reason, "entries")),
   };
 
   /* home.js and history.js render the same rows and must offer the same undo,
@@ -276,11 +353,14 @@ window.Voisr = window.Voisr || {};
      response becomes a toast, and callers get null back. A view must never
      blank silently because Python hiccuped. */
   async function tryApi(promise, label) {
+    // Show the reason and remember it, so runUndo can report a whole batch
+    // that failed with its count without losing the reason.
+    const fail = (m) => { lastApiFailure = m; toast(m); };
     let res;
     try { res = await promise; }
-    catch (e) { toast(`${label} failed: ${e && e.message ? e.message : e}`); return null; }
+    catch (e) { fail(`${label} failed: ${e && e.message ? e.message : e}`); return null; }
     if (res && typeof res === "object" && res.error) {
-      toast(`${label} failed: ${res.error}`);
+      fail(`${label} failed: ${res.error}`);
       return null;
     }
     return res;

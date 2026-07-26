@@ -307,11 +307,19 @@ test("the queue keeps only the newest three plain toasts", (t) => {
    replacements below pin that instead —
    "a burst of deletes leaves exactly one live undo, never a queue of them"
    is the direct counterpart of the second test (N deletes, one toast rather
-   than N), and "chatter can no longer evict an undo, because an undo is never
-   queued" is the direct counterpart of the first (the guarantee survives, but
-   structurally rather than by exemption). The plain cap of three is unchanged
-   and still pinned by "the queue keeps only the newest three plain toasts"
-   above, which now runs against an exemption-free cap. */
+   than N).
+
+   The first test's counterpart is a PAIR, and it was originally shipped as
+   one, which is how the cap regained the ability to destroy a dictation:
+   "chatter cannot evict the live undo" plus "chatter cannot evict a QUEUED
+   undo either". Coalescing bounds how many undos can be in flight (one per
+   batch, two batches) but does NOT stop one being queued — a dictation
+   delete while a dictionary undo is live queues, as "a dictionary removal
+   keeps its own batch" demonstrates. So the cap keeps a *bounded* exemption:
+   it skips over action toasts and drops plain ones. "the queue keeps only the
+   newest three plain toasts" above and "the cap still drops plain toasts when
+   an undo is queued among them" below pin that the exemption did not turn
+   into a licence to grow. */
 
 /* Lets the async undo chain (restore -> refresh -> confirmation toast)
    settle: microtasks drain fully before a macrotask runs. */
@@ -437,23 +445,38 @@ test("a partial restore reports what actually came back, not full success", asyn
   await settle();
 
   assert.equal(toastMsg(), "Restored 2 of 3 dictations");
-  assert.doesNotMatch(toastMsg(), /Restored 3/, "a partial restore must never read as complete");
 });
 
-test("a restore that fails outright leaves the failure message as the last word", async (t) => {
+test("a single restore that fails outright leaves the failure message as the last word", async (t) => {
   const ui = freshUi(t);
-  const del = (id) => ui.offerDictationUndo({
-    // what tryApi does on an {error}: toast the reason, answer null
-    restore: async () => { ui.toast("Restore dictation failed: disk full"); return null; },
+  ui.offerDictationUndo({
+    restore: async () => ui.tryApi(Promise.resolve({ error: "disk full" }), "Restore dictation"),
     refresh: async () => {},
   });
 
-  del("a1"); del("a2");
   toastBtn().dispatch("click");
   await settle();
 
   assert.equal(toastMsg(), "Restore dictation failed: disk full",
-    "nothing may be layered over the real reason when nothing came back");
+    "with one row, tryApi's reason is the whole story and nothing may be layered over it");
+});
+
+test("an all-fail batch reports how many were lost without discarding the reason", async (t) => {
+  /* Three deletes, every restore fails. Staying silent here left the user
+     reading one singular failure ("Restore dictation failed: gone 3") while
+     three rows were gone -- accurate about one row, silent about the other
+     two. The count is now carried, and the reason survives with it. */
+  const ui = freshUi(t);
+  const del = (id) => ui.offerDictationUndo({
+    restore: async () => ui.tryApi(Promise.resolve({ error: `gone ${id}` }), "Restore dictation"),
+    refresh: async () => {},
+  });
+
+  del("a1"); del("a2"); del("a3");
+  toastBtn().dispatch("click");
+  await settle();
+
+  assert.equal(toastMsg(), "Restore dictation failed: gone a3 (0 of 3 restored)");
 });
 
 test("a burst of deletes leaves exactly one live undo, never a queue of them", async (t) => {
@@ -473,7 +496,14 @@ test("a burst of deletes leaves exactly one live undo, never a queue of them", a
   assert.equal(shown(), "Restored 5 dictations");
 });
 
-test("chatter can no longer evict an undo, because an undo is never queued", (t) => {
+/* NAME MATTERS HERE. This was called "chatter can no longer evict an undo,
+   because an undo is never queued" -- which asserted in its title something
+   the code does not guarantee, three lines above a test that *demonstrates* a
+   queued undo ("a dictionary removal keeps its own batch"). That mis-framing
+   is exactly why the cap shipped able to evict one. What this test actually
+   proves is narrower: chatter cannot dislodge the *live* undo. The queued
+   case is the separate test below it. */
+test("chatter cannot evict the live undo", (t) => {
   const ui = freshUi(t);
   const log = [];
   const del = deleter(ui, log);
@@ -497,6 +527,81 @@ test("chatter can no longer evict an undo, because an undo is never queued", (t)
   assert.equal(toastMsg(), "chatter 5");
   endOfPlainToast(t);
   assert.equal(toastHost.hidden, true);
+});
+
+test("chatter cannot evict a QUEUED undo either (permanent-data-loss regression)", async (t) => {
+  /* The counterpart the rename above exposes as missing, and the sequence a
+     plain shift-the-oldest cap loses outright:
+
+       offerEntryUndo()      -> "Entry removed" LIVE
+       offerDictationUndo()  -> QUEUED (different batch, so no upgrade)
+       three plain toasts    -> the cap shifts the OLDEST, i.e. the dictation
+                                undo, firing its onResolve and emptying the
+                                batch
+
+     Delete is a hard delete; that closure was the only handle on the row.
+     Three plain toasts are not three user actions -- tryApi failures and
+     home.js's permission-refresh toast fire on their own, so one flaky-bridge
+     moment reaches this with nobody clicking anything.
+
+     Mutation check: replace the findIndex/splice loop in queueToast with
+     `toastQueue.shift()` and this test fails on the "Dictation deleted"
+     assertion. */
+  const ui = freshUi(t);
+  const log = [];
+
+  ui.offerEntryUndo({ restore: async () => { log.push("e1"); return true; }, refresh: async () => {} });
+  assert.equal(toastMsg(), "Entry removed", "the entry undo owns the host");
+
+  ui.offerDictationUndo({
+    restore: async () => { log.push("d1"); return true; },
+    refresh: async () => { log.push("refresh:d1"); },
+  });
+  assert.equal(toastMsg(), "Entry removed", "the dictation undo is queued, not shown");
+
+  for (const m of ["Copied to clipboard 1", "Copied to clipboard 2", "Copied to clipboard 3"]) ui.toast(m);
+
+  // The live entry undo runs its full window first...
+  endOfActionToast(t);
+
+  // ...and the dictation undo must still be there, not evicted by the chatter.
+  assert.equal(toastMsg(), "Dictation deleted",
+    "the queued undo survives the cap -- evicting it destroys the row for good");
+  assert.ok(toastBtn(), "and it still carries a working Undo");
+
+  toastBtn().dispatch("click");
+  await settle();
+  assert.deepEqual(log, ["d1", "refresh:d1"], "the row is really restored, and the list re-rendered");
+  assert.equal(toastMsg(), "Restored", "and the click's own confirmation is what is left on screen");
+
+  // Chatter is what the cap ate: the undo occupies a slot but is skipped
+  // over, so the OLDEST plain toast went instead. The newest still drains.
+  endOfPlainToast(t);
+  assert.equal(toastMsg(), "Copied to clipboard 3");
+  endOfPlainToast(t);
+  assert.equal(toastHost.hidden, true);
+});
+
+test("the cap still drops plain toasts when an undo is queued among them", (t) => {
+  /* The exemption is bounded, not a licence to grow. The queued undo is
+     skipped over, but it is still *counted* against TOAST_QUEUE_MAX, so five
+     plain toasts behind it leave two rather than three: the backlog can never
+     get longer because an undo is in it. */
+  const ui = freshUi(t);
+
+  ui.offerEntryUndo({ restore: async () => true, refresh: async () => {} });
+  ui.offerDictationUndo({ restore: async () => true, refresh: async () => {} });
+  for (const m of ["one", "two", "three", "four", "five"]) ui.toast(m);
+
+  endOfActionToast(t);
+  assert.equal(toastMsg(), "Dictation deleted", "the undo is never the one dropped");
+
+  endOfActionToast(t);
+  assert.equal(toastMsg(), "four", "the oldest plain toasts went");
+  endOfPlainToast(t);
+  assert.equal(toastMsg(), "five");
+  endOfPlainToast(t);
+  assert.equal(toastHost.hidden, true, "three slots, one held by the undo, so two chatter survived");
 });
 
 test("a dictionary removal keeps its own batch, separate from dictations", (t) => {
