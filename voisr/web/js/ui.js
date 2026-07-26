@@ -31,9 +31,15 @@ window.Voisr = window.Voisr || {};
     return d.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
   }
 
+  const TOAST_QUEUE_MAX = 3;
+
   let toastTimer = null;
   let toastFadeTimer = null;
   let toastQueue = [];
+  // Bumped by every toast() call, shown or queued. The action-click handler
+  // samples it around onAction() so it can tell whether the action put up its
+  // own message; see the comment there.
+  let toastSeq = 0;
   // True from the moment an actionable toast (Undo, etc.) is shown until it
   // is either clicked or fully dismissed. `toast()` calls `replaceChildren`
   // on the shared host, which would otherwise tear a pending action's button
@@ -43,12 +49,40 @@ window.Voisr = window.Voisr || {};
   // instead of clobbering it, so no undo opportunity is ever silently lost.
   let toastActionLive = false;
 
+  function hasAction(opts) {
+    return !!(opts && opts.onAction && opts.actionLabel);
+  }
+
   function toast(msg, opts) {
+    toastSeq += 1;
     if (toastActionLive) {
-      toastQueue.push([msg, opts]);
+      queueToast(msg, opts);
       return;
     }
     showToast(msg, opts);
+  }
+
+  function queueToast(msg, opts) {
+    toastQueue.push([msg, opts]);
+    /* Cap the backlog. Queued toasts drain one at a time at 3.5s each, so an
+       unbounded queue turns a burst of failures (several tryApi calls losing
+       the bridge in one render) into a minutes-long parade of stale messages
+       long after the user has moved on. The newest message is the most
+       relevant, so the oldest goes.
+
+       Exception, deliberate: an action-bearing toast is never evicted.
+       Deleting rows in quick succession while an undo is up queues one Undo
+       per delete, and silently dropping one destroys the only recovery path
+       for a row the user just deleted -- the exact loss this queue exists to
+       prevent. So the cap evicts the oldest *droppable* (action-free) entry,
+       and when every queued entry carries an action the queue is allowed past
+       the cap. Its length is then bounded by the user's own deliberate
+       deletes rather than by incidental chatter, which is a safe bound. */
+    while (toastQueue.length > TOAST_QUEUE_MAX) {
+      const oldestDroppable = toastQueue.findIndex(([, o]) => !hasAction(o));
+      if (oldestDroppable === -1) break;
+      toastQueue.splice(oldestDroppable, 1);
+    }
   }
 
   function advanceToastQueue() {
@@ -60,12 +94,13 @@ window.Voisr = window.Voisr || {};
 
   function showToast(msg, opts) {
     const { actionLabel, onAction, ms } = opts || {};
+    const withAction = hasAction(opts);
     const host = document.getElementById("toast");
     clearTimeout(toastTimer);
     clearTimeout(toastFadeTimer);
     toastActionLive = false;
     host.replaceChildren(el("span", { text: msg }));
-    if (onAction && actionLabel) {
+    if (withAction) {
       toastActionLive = true;
       host.append(el("button", {
         class: "toast-action", type: "button", text: actionLabel,
@@ -76,8 +111,17 @@ window.Voisr = window.Voisr || {};
             toastActionLive = false;
             host.classList.remove("in");
             host.hidden = true;
+            /* Draining the queue is how this action hands the host on -- but
+               only if the action didn't claim the host itself. A callback
+               that toasts synchronously (say "Restored") has already taken
+               over, and draining on top of it would replace a confirmation
+               the user just earned with a stale queued message. Whatever it
+               put up drains the queue when its own window ends, so nothing is
+               stranded either way. Comparing the counter rather than deferring
+               keeps this ordering exact -- no timer, no delay. */
+            const seq = toastSeq;
             onAction();
-            advanceToastQueue();
+            if (toastSeq === seq) advanceToastQueue();
           },
         },
       }));
@@ -91,7 +135,7 @@ window.Voisr = window.Voisr || {};
         toastActionLive = false;
         advanceToastQueue();
       }, 200);
-    }, ms || (onAction ? 5000 : 3500));
+    }, ms || (withAction ? 5000 : 3500));
   }
 
   /* Single convention for bridge calls: a thrown bridge error or an {error}

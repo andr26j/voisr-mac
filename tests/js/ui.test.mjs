@@ -173,3 +173,205 @@ test("tryApi tolerates a non-Error rejection and a non-object result", async (t)
   assert.equal(await V.ui.tryApi(Promise.resolve(list), "Load history"), list);
   assert.equal(toastText(), "", "an array result is not an error");
 });
+
+/* ---------- the toast queue ----------
+
+   There is one shared #toast host and `toast()` calls replaceChildren on it,
+   so a newer toast would tear a pending Undo button out of the DOM before the
+   user could click it. Undo is the only safety net on delete (confirm() is
+   gone), so losing one silently is data-loss-adjacent. Hence: while an action
+   toast is live, incoming toasts queue instead of clobbering it.
+
+   Each test below reloads ui.js so it starts from a clean queue — the module
+   state (queue, live flag, timers) is private, and node:test discards a test's
+   fake timers when it ends, which would otherwise strand `toastActionLive`
+   true for every following test. The same host node is re-registered each
+   time so the tests above keep resolving #toast against the newest env. */
+
+function freshUi(t) {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const env = loadVoisr(["js/ui.js"]);
+  env.register("toast", toastHost);
+  toastHost.replaceChildren();
+  toastHost.hidden = false;
+  toastHost.classList.remove("in");
+  return env.V.ui;
+}
+
+/* Toast text alone, without the action button's label. */
+const toastMsg = () =>
+  toastHost.children
+    .filter((c) => !(c && c.className === "toast-action"))
+    .map((c) => (typeof c === "string" ? c : c.textContent))
+    .join(" ");
+const toastBtn = () => toastHost.children.find((c) => c && c.className === "toast-action") || null;
+/* An action toast's full window: 5000ms display + the 200ms fade-out, at the
+   end of which the host hides and the queue drains. */
+const endOfActionToast = (t) => { t.mock.timers.tick(5000); t.mock.timers.tick(200); };
+const endOfPlainToast = (t) => { t.mock.timers.tick(3500); t.mock.timers.tick(200); };
+
+test("a plain toast requested behind a live action waits its turn", (t) => {
+  const ui = freshUi(t);
+
+  ui.toast("Dictation deleted", { actionLabel: "Undo", onAction: () => {} });
+  ui.toast("Copied to clipboard");
+
+  assert.equal(toastMsg(), "Dictation deleted", "the action toast must not be replaced");
+  assert.ok(toastBtn(), "the Undo button is still in the DOM and clickable");
+  assert.equal(toastBtn().textContent, "Undo");
+
+  endOfActionToast(t);
+  assert.equal(toastMsg(), "Copied to clipboard", "the queued toast appears once the window ends");
+  assert.equal(toastBtn(), null);
+});
+
+test("a second action toast waits for the first one's window, then shows its own", (t) => {
+  const ui = freshUi(t);
+  let secondUndone = false;
+
+  ui.toast("Deleted A", { actionLabel: "Undo", onAction: () => {} });
+  ui.toast("Deleted B", { actionLabel: "Undo", onAction: () => { secondUndone = true; } });
+
+  assert.equal(toastMsg(), "Deleted A", "the first undo survives its full window");
+
+  endOfActionToast(t);
+  assert.equal(toastMsg(), "Deleted B");
+  assert.ok(toastBtn(), "the second undo is offered with a working button");
+  toastBtn().dispatch("click");
+  assert.equal(secondUndone, true);
+});
+
+test("a plain toast is replaced immediately by a newer plain toast", (t) => {
+  const ui = freshUi(t);
+
+  ui.toast("Copied to clipboard");
+  assert.equal(toastMsg(), "Copied to clipboard");
+  ui.toast("Theme: dark");
+
+  assert.equal(toastMsg(), "Theme: dark", "nothing is queued behind a toast with no action");
+  // and the replaced toast's timer went with it: the survivor gets a full
+  // window rather than being cut short by its predecessor's expiry.
+  t.mock.timers.tick(3499);
+  assert.equal(toastHost.hidden, false);
+});
+
+test("clicking the action drains the queue immediately", (t) => {
+  const ui = freshUi(t);
+
+  ui.toast("Dictation deleted", { actionLabel: "Undo", onAction: () => {} });
+  ui.toast("Copied to clipboard");
+  ui.toast("Theme: dark");
+
+  toastBtn().dispatch("click");
+  assert.equal(toastMsg(), "Copied to clipboard", "the queue drains on click, not only on expiry");
+  endOfPlainToast(t);
+  assert.equal(toastMsg(), "Theme: dark");
+  endOfPlainToast(t);
+  assert.equal(toastHost.hidden, true, "an empty queue leaves the host hidden");
+});
+
+test("the queue keeps only the newest three plain toasts", (t) => {
+  const ui = freshUi(t);
+
+  ui.toast("Dictation deleted", { actionLabel: "Undo", onAction: () => {} });
+  for (const m of ["one", "two", "three", "four", "five"]) ui.toast(m);
+
+  // Five queued, cap of three, oldest dropped: "one" and "two" never show.
+  const seen = [];
+  endOfActionToast(t);
+  seen.push(toastMsg());
+  endOfPlainToast(t);
+  seen.push(toastMsg());
+  endOfPlainToast(t);
+  seen.push(toastMsg());
+
+  assert.deepEqual(seen, ["three", "four", "five"], "newest three, in order");
+  endOfPlainToast(t);
+  assert.equal(toastHost.hidden, true, "nothing else was queued");
+});
+
+test("the cap never evicts a queued undo", (t) => {
+  const ui = freshUi(t);
+  let undone = false;
+
+  ui.toast("Deleted A", { actionLabel: "Undo", onAction: () => {} });
+  ui.toast("chatter 1");
+  // A second delete while A's undo is up: this one MUST survive the cap. It
+  // is the only recovery path for a row the user just deleted, which is the
+  // whole reason the queue exists.
+  ui.toast("Deleted B", { actionLabel: "Undo", onAction: () => { undone = true; } });
+  for (const m of ["chatter 2", "chatter 3", "chatter 4", "chatter 5"]) ui.toast(m);
+
+  endOfActionToast(t);
+  assert.equal(toastMsg(), "Deleted B", "the queued undo kept its place at the head");
+  assert.ok(toastBtn(), "and it still has a live button");
+  toastBtn().dispatch("click");
+  assert.equal(undone, true);
+
+  // Three survivors total: the undo plus the newest two chatter messages.
+  assert.equal(toastMsg(), "chatter 4");
+  endOfPlainToast(t);
+  assert.equal(toastMsg(), "chatter 5");
+  endOfPlainToast(t);
+  assert.equal(toastHost.hidden, true);
+});
+
+test("action toasts are never dropped even when they alone exceed the cap", (t) => {
+  const ui = freshUi(t);
+
+  ui.toast("Deleted A", { actionLabel: "Undo", onAction: () => {} });
+  for (const m of ["Deleted B", "Deleted C", "Deleted D", "Deleted E"]) {
+    ui.toast(m, { actionLabel: "Undo", onAction: () => {} });
+  }
+
+  const seen = [];
+  for (let i = 0; i < 4; i += 1) { endOfActionToast(t); seen.push(toastMsg()); }
+  assert.deepEqual(seen, ["Deleted B", "Deleted C", "Deleted D", "Deleted E"],
+    "four queued undos all survive a cap of three");
+});
+
+/* GAP 2: a confirmation raised by onAction() must not be clobbered by the
+   drain that follows it. The click handler used to run onAction() and then
+   advanceToastQueue() unconditionally, so a callback that toasted
+   synchronously had its message replaced by a stale queued one in the same
+   tick. Not reachable through today's three callers (history, home and
+   dictionary all await before toasting — see the async test below), but the
+   ordering is wrong at the callback boundary and one sync caller would lose
+   a confirmation. */
+test("a confirmation toasted synchronously by onAction is not clobbered by the drain", (t) => {
+  const ui = freshUi(t);
+
+  ui.toast("Dictation deleted", {
+    actionLabel: "Undo",
+    onAction: () => ui.toast("Restored"),
+  });
+  ui.toast("Copied to clipboard");
+
+  toastBtn().dispatch("click");
+  assert.equal(toastMsg(), "Restored", "the action owns the host once it has toasted");
+
+  // The queue is not stranded: the confirmation drains it when it expires.
+  endOfPlainToast(t);
+  assert.equal(toastMsg(), "Copied to clipboard");
+});
+
+test("an async onAction still ends up showing its confirmation last", async (t) => {
+  // Characterisation of the real callers: onAction returns a pending promise,
+  // so the drain runs first and the queued toast is what "Restored" replaces
+  // a microtask later. The confirmation wins, which is what matters; the fix
+  // above deliberately does not defer the drain across an arbitrary promise,
+  // since a callback that never settles would strand the queue for good.
+  const ui = freshUi(t);
+
+  ui.toast("Dictation deleted", {
+    actionLabel: "Undo",
+    onAction: async () => { await Promise.resolve(); ui.toast("Restored"); },
+  });
+  ui.toast("Copied to clipboard");
+
+  toastBtn().dispatch("click");
+  assert.equal(toastMsg(), "Copied to clipboard", "drained synchronously, before the await lands");
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(toastMsg(), "Restored", "the confirmation is what the user is left looking at");
+});
