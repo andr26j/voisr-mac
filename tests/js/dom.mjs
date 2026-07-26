@@ -1,39 +1,39 @@
 // Minimal DOM stand-in for node:test. No dependencies. Supports exactly what
 // the Voisr web layer touches: el()'s construction surface, classList,
 // dataset, hidden, listeners, and an id registry for getElementById.
-/* Depth-first search for the only selector shape a node is ever asked for by
-   the app: a single class, e.g. `row.querySelector(".txt")` in
-   views/history.js. Anything else returns null, exactly as before.
+/* Depth-first descendant search, shared by node.querySelector and
+   document.querySelector's class branch. Matching goes through
+   matchesSimpleSelector, so every selector-taking method in this file --
+   closest(), node.querySelector, document.querySelector -- accepts exactly
+   the same subset and matches it exactly the same way. The selector is
+   validated by the caller (see checkSelector), so this walk never has to
+   decide what an unsupported one means; by the time it runs, there isn't one.
 
-   NOTE -- policy discrepancy vs. closest() below: querySelector silently
-   returns null for an unsupported selector, while matchesSimpleSelector's
-   closest() throws loudly for the same situation. Pre-existing, predates H6,
-   and left as-is here: querySelector's only real call site
-   (row.querySelector(".txt") in views/history.js) is always a plain class
-   already, so there is no live call site whose behaviour depends on picking
-   one policy over the other today. Flagging it here rather than changing it,
-   since unifying the two would mean deciding which direction is "right" for
-   a call site that doesn't yet exist -- an app-behaviour question, not a
-   harness-fidelity one, and out of scope for H6. */
-function findByClass(children, sel) {
-  if (!sel.startsWith(".") || /[\s>#[:]/.test(sel.slice(1))) return null;
-  const want = sel.slice(1);
+   Descendants only, never the starting node: that is the one place these
+   methods legitimately differ, and it mirrors the real DOM, where closest()
+   includes the element it was called on and querySelector does not. */
+function findDescendant(children, sel) {
   for (const kid of children) {
     if (!kid || typeof kid !== "object") continue;   // text children are strings
-    const classes = String(kid.className || "").split(/\s+/);
-    if (classes.includes(want) || kid.classList?.contains(want)) return kid;
-    const deep = findByClass(kid.children || [], sel);
+    if (matchesSimpleSelector(kid, sel)) return kid;
+    const deep = findDescendant(kid.children || [], sel);
     if (deep) return deep;
   }
   return null;
 }
 
-/* Selector support for closest(): exactly the two shapes the app's real call
-   sites use --
+/* The supported selector subset, shared by every selector-taking method here
+   -- closest(), node.querySelector and document.querySelector -- so none of
+   them can drift apart from the others. Exactly the two shapes the app's real
+   call sites use --
 
      main.js:95            e.target.closest(".theme-opt")
      settings.js:282        e.target.closest("#color-open")
      history.js:240         e.target.closest("#history-export")
+     history.js             row.querySelector(".txt")
+     ui.js:6               document.querySelector(sel), i.e. V.ui.$ -- always
+                           a single "#id" at every call site across home.js,
+                           settings.js, history.js and dictionary.js
 
    i.e. a single class or a single id, nothing compound, no combinators, no
    attribute selectors. A fake that silently matched (or silently returned
@@ -42,9 +42,28 @@ function findByClass(children, sel) {
    worse than no fake. So anything outside this subset throws instead of
    returning null, exactly the way an unsupported selector would surface as
    a loud, obvious test failure rather than a quietly-wrong dismissal. */
+const CLASS_SEL = /^\.[\w-]+$/;
+const ID_SEL = /^#[\w-]+$/;
+
+function unsupportedSelector(fn, sel) {
+  return new Error(
+    `${fn}: unsupported selector "${sel}" -- the fake DOM only supports ` +
+    `a single ".class" or "#id", matching the app's real call sites`);
+}
+
+/* Validate up front, before any walking. A search that only rejected a bad
+   selector when it happened to test it against a node would throw or not
+   depending on the shape of the tree -- an empty node would accept anything
+   and answer null. */
+function checkSelector(fn, sel) {
+  const s = String(sel);
+  if (!CLASS_SEL.test(s) && !ID_SEL.test(s)) throw unsupportedSelector(fn, sel);
+  return s;
+}
+
 function matchesSimpleSelector(node, sel) {
   const s = String(sel);
-  if (/^\.[\w-]+$/.test(s)) {
+  if (CLASS_SEL.test(s)) {
     // Match el()'s real output: ui.js's el() sets `node.className = v`
     // directly for the "class" prop and never touches classList, so a
     // class check that only reads classList silently no-matches every
@@ -56,10 +75,8 @@ function matchesSimpleSelector(node, sel) {
     return String(node.className || "").split(/\s+/).includes(cls)
         || !!(node.classList && node.classList.contains(cls));
   }
-  if (/^#[\w-]+$/.test(s)) return node.id === s.slice(1);
-  throw new Error(
-    `closest(): unsupported selector "${sel}" -- the fake DOM only supports ` +
-    `a single ".class" or "#id", matching the app's real call sites`);
+  if (ID_SEL.test(s)) return node.id === s.slice(1);
+  throw unsupportedSelector("closest()", sel);
 }
 
 export function makeNode(tag = "div") {
@@ -68,7 +85,7 @@ export function makeNode(tag = "div") {
     id: "",
     parent: null,
     children: [], className: "", textContent: "",
-    dataset: {}, attributes: {}, style: {}, hidden: false, disabled: false,
+    dataset: {}, attributes: {}, hidden: false, disabled: false,
     _innerHTML: "", _listeners: {},
     classList: {
       _set: new Set(),
@@ -81,6 +98,28 @@ export function makeNode(tag = "div") {
       },
       contains(c) { return this._set.has(c); },
     },
+    /* The app writes style two ways and reads it back through neither: plain
+       properties (`swatch.style.background = hex`, `thumb.style.left = ...`)
+       and custom properties (settings.js's setColorUi does
+       `preview.style.setProperty("--mb-color", hex)` and removeProperty for
+       the reset). A bare `{}` covers only the first, so setColorUi threw on
+       the second and could not be reached from Node at all. Both spellings
+       land in the same object, exactly as a real CSSStyleDeclaration lets you
+       reach a longhand either way -- so a test can assert on
+       `style.background` and `style.getPropertyValue("--mb-color")` alike. */
+    style: (() => {
+      const style = {
+        setProperty(k, v) { style[k] = String(v); },
+        // Real removeProperty returns the old value, and "" for an unset one.
+        removeProperty(k) {
+          const prev = k in style ? style[k] : "";
+          delete style[k];
+          return prev;
+        },
+        getPropertyValue(k) { return k in style ? style[k] : ""; },
+      };
+      return style;
+    })(),
     // Real DOM reflects the "id" attribute onto `.id` (and vice versa) --
     // ui.js's el() sets id via setAttribute (never `node.id = ...` directly),
     // so without this sync `node.id` stays "" and closest("#id") silently
@@ -136,10 +175,22 @@ export function makeNode(tag = "div") {
         if (kid && typeof kid === "object") kid.parent = node;
       }
     },
-    querySelector(sel) { return findByClass(node.children, String(sel)); },
+    querySelector(sel) {
+      return findDescendant(node.children, checkSelector("node.querySelector()", sel));
+    },
     querySelectorAll() { return []; },
     focus() {}, blur() {}, click() { node.dispatch("click"); },
     scrollIntoView() {},
+    /* An all-zero rect is not a placeholder -- it is what a real browser
+       reports for an element that is detached or display:none, which every
+       node here is. settings.js's pick() reads it to turn client coordinates
+       into a hue/saturation, so a test that cares about wheel geometry must
+       assign a real rect (see mountColorWheel in settings.test.mjs);
+       otherwise every pick lands dead centre, exactly as it would in a
+       browser against an unlaid-out canvas. */
+    getBoundingClientRect() {
+      return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 };
+    },
     // True for the node itself (matching real Node.contains), then walks up
     // `other`'s parent chain looking for `node` -- i.e. "is `other` this node
     // or one of its descendants", never an ancestor or unrelated node.
@@ -209,7 +260,40 @@ export function installDom() {
     createTextNode: (t) => String(t),
     getElementById: (id) => byId.get(id) ?? null,
     ...makeEventTarget(),
-    querySelector: () => null, querySelectorAll: () => [],
+    /* `V.ui.$` (ui.js:6) *is* this function, and it is how every view reaches
+       every element it touches. While this was a flat `() => null`, calling
+       any of those functions from Node threw on the first dereference of the
+       null it handed back (`cv.addEventListener is not a function` for
+       `$("#color-wheel")` in settings.js's initColorWheel), so render paths
+       like home.js's render() and the colour wheel could only be checked in a
+       browser.
+
+       Supports the same subset as closest() -- a single "#id" or ".class" --
+       and throws on anything else for the same reason, spelled out at
+       CLASS_SEL above. An id resolves through the byId registry, i.e. exactly
+       what getElementById returns: the app reads the same element both ways
+       (home.js uses getElementById for #view-home and V.ui.$ for everything
+       else), so the two must never be able to disagree. A class searches the
+       document tree only -- a node that was register()ed but never appended
+       is not in the document, and a real querySelector would not find it
+       either. */
+    querySelector(sel) {
+      const s = checkSelector("document.querySelector()", sel);
+      if (ID_SEL.test(s)) return byId.get(s.slice(1)) ?? null;
+      // Both roots: the real documentElement contains body, but here they
+      // are two independent fake trees, so neither can be assumed to reach
+      // the other. Unlike an element's querySelector, the document's roots
+      // are themselves candidates -- `document.querySelector(".x")` matches
+      // <html class="x"> in a browser.
+      for (const root of [doc.documentElement, doc.body]) {
+        if (!root) continue;
+        if (matchesSimpleSelector(root, s)) return root;
+        const hit = findDescendant(root.children, s);
+        if (hit) return hit;
+      }
+      return null;
+    },
+    querySelectorAll: () => [],
     documentElement: makeNode("html"), body: makeNode("body"),
     activeElement: null,
   };

@@ -106,21 +106,18 @@ test("closest() matches the starting node itself before walking up, by class or 
    (ui.js's el()), never `classList`. The click target here is deliberately
    a *descendant* of the button (the label span), mirroring "child.closest
    -> null" from the report -- #theme-grid's listener fires on whatever was
-   actually clicked inside the button, not the button itself. main.js's own
-   init() can't be driven here (it binds through `V.ui.$`, i.e.
-   `document.querySelector`, which is a pre-existing `() => null` stub --
-   flagged separately, out of H6's scope), so this test patches
-   `document.querySelector` locally, for this test only, to resolve `#id`
-   the way a real browser would -- just enough to let the real renderThemes()
-   run and build a real button, without touching the shared harness or app
-   code. */
+   actually clicked inside the button, not the button itself.
+
+   This used to patch `document.querySelector` locally, for this test only,
+   because the shared stub was `() => null` and renderThemes() reaches
+   #theme-grid through `V.ui.$`. The harness resolves "#id" itself now, so
+   the patch is gone and this runs against exactly the same document every
+   other test gets. */
 test("closest() reaches main.js:95's guard for a real settings.js-built theme button (Critical regression pin)", async () => {
-  const { V, document, register } = loadVoisr(["js/ui.js", "js/views/settings.js"]);
+  const { V, register } = loadVoisr(["js/ui.js", "js/views/settings.js"]);
   const grid = makeNode("div");
   register("theme-grid", grid);
   register("toast", makeNode("div"));
-  document.querySelector = (sel) =>
-    sel.startsWith("#") ? document.getElementById(sel.slice(1)) : null;
 
   V.api = () => ({
     get_config: async () => ({ pill_theme: "sunset" }),
@@ -170,6 +167,184 @@ test("closest() throws loudly on a selector shape the app never actually uses", 
     assert.throws(() => n.closest(sel), /unsupported selector/,
       `closest("${sel}") must throw, not silently return null`);
   }
+});
+
+/* ---------- node.querySelector ----------
+
+   Element-level querySelector now follows the same rule as closest() and
+   document.querySelector: the single ".class"/"#id" subset, and a loud throw
+   for anything outside it. It used to return null silently, which meant
+   `querySelector` behaved one way on a node and another on the document --
+   the same method name, two policies, decided by the receiver. */
+
+test("node.querySelector finds a descendant by class, however the class was set, at any depth", () => {
+  const row = makeNode("li");
+  const wrap = makeNode("div");
+  const txt = makeNode("div");
+  txt.className = "txt item-text";        // history.js's real call site shape
+  const badge = makeNode("span");
+  badge.classList.add("badge");
+  row.append(wrap);
+  wrap.append(txt, badge);
+
+  assert.equal(row.querySelector(".txt"), txt, "reaches a grandchild, not just direct children");
+  assert.equal(row.querySelector(".badge"), badge);
+  assert.equal(row.querySelector(".absent"), null);
+});
+
+test("node.querySelector finds a descendant by id", () => {
+  const wrap = makeNode("div");
+  const inner = makeNode("button");
+  inner.setAttribute("id", "color-open");   // the way ui.js's el() sets an id
+  wrap.append(inner);
+
+  assert.equal(wrap.querySelector("#color-open"), inner);
+  assert.equal(wrap.querySelector("#nope"), null);
+});
+
+test("node.querySelector searches descendants only -- unlike closest(), it never matches the node itself", () => {
+  const n = makeNode("div");
+  n.className = "item-row";
+  n.id = "self";
+
+  // This is the one place the two must NOT agree: closest() includes the
+  // starting element, querySelector does not.
+  assert.equal(n.closest(".item-row"), n);
+  assert.equal(n.querySelector(".item-row"), null);
+  assert.equal(n.querySelector("#self"), null);
+});
+
+test("node.querySelector throws loudly on an unsupported selector, exactly like closest() and document.querySelector", () => {
+  const n = makeNode("div");
+  n.append(makeNode("span"));
+  const childless = makeNode("div");
+
+  for (const sel of ["div.foo", "[data-x]", "ul > li", ".a.b", "#a, #b", "a:hover", "span", ""]) {
+    assert.throws(() => n.querySelector(sel), /unsupported selector/,
+      `node.querySelector("${sel}") must throw, not silently return null`);
+    // The selector must be rejected on its own terms, not incidentally by
+    // whatever the walk happens to bump into: a childless node would
+    // otherwise return null before any matching ever ran, so an unsupported
+    // selector would throw or not depending on the shape of the tree.
+    assert.throws(() => childless.querySelector(sel), /unsupported selector/,
+      `node.querySelector("${sel}") must throw even with nothing to search`);
+  }
+});
+
+/* ---------- document.querySelector ----------
+
+   `V.ui.$` in ui.js is literally `document.querySelector`, and every view
+   (home.js, settings.js, history.js, dictionary.js) reaches every one of its
+   elements through it. While the fake's document.querySelector was a flat
+   `() => null`, calling any of those functions from Node threw on the first
+   dereference (`cv.addEventListener is not a function` for a null
+   `$("#color-wheel")`), so whole render paths could only ever be checked in a
+   browser. These pin the extension that unlocks them. */
+
+test("document.querySelector resolves a single #id through the same registry as getElementById", () => {
+  const { document: doc, register } = installDom();
+  const strip = makeNode("div");
+  register("perm-strip", strip);
+
+  assert.equal(doc.querySelector("#perm-strip"), strip);
+  // The app uses the two interchangeably for the same element -- home.js
+  // reads #view-home via getElementById and #perm-strip via V.ui.$ -- so a
+  // fake where they can disagree is a fake that lies.
+  assert.equal(doc.querySelector("#perm-strip"), doc.getElementById("perm-strip"));
+  assert.equal(doc.querySelector("#never-registered"), null,
+    "an unknown id is a real null, not a throw -- that is what a browser does");
+});
+
+test("document.querySelector finds a single .class anywhere in the document tree, however the class was set", () => {
+  const { document: doc } = installDom();
+  const row = makeNode("li");
+  // Both spellings, for the same reason matchesSimpleSelector checks both:
+  // ui.js's el() writes `node.className` directly for its "class" prop and
+  // never touches classList, so a class lookup that only reads classList
+  // silently no-matches every class the app actually builds.
+  const viaClassName = makeNode("div");
+  viaClassName.className = "txt item-text";
+  const viaClassList = makeNode("span");
+  viaClassList.classList.add("badge");
+  row.append(viaClassName, viaClassList);
+  doc.body.append(row);
+
+  assert.equal(doc.querySelector(".txt"), viaClassName, "matches a descendant several levels down");
+  assert.equal(doc.querySelector(".badge"), viaClassList);
+  assert.equal(doc.querySelector(".absent"), null);
+});
+
+test("document.querySelector can match the document's own roots, which an element's querySelector never does", () => {
+  // `document.querySelector(".app")` matches <body class="app"> in a browser
+  // -- the document's roots are candidates, not just their descendants. This
+  // is the mirror of the descendants-only rule for node.querySelector above.
+  const { document: doc } = installDom();
+  doc.body.className = "app";
+  doc.documentElement.className = "theme-dark";
+
+  assert.equal(doc.querySelector(".app"), doc.body);
+  assert.equal(doc.querySelector(".theme-dark"), doc.documentElement);
+});
+
+test("document.querySelector does not find a node that was never attached to the document", () => {
+  const { document: doc, register } = installDom();
+  const orphan = makeNode("div");
+  orphan.className = "floating";
+  register("floating-thing", orphan);   // reachable by id, still detached
+
+  assert.equal(doc.querySelector(".floating"), null,
+    "a real document.querySelector searches the document, not every node ever created");
+});
+
+test("document.querySelector throws loudly on a selector shape the app never uses, exactly like closest()", () => {
+  const { document: doc } = installDom();
+  // Same rule, same reason as closest() above: silently returning null for a
+  // shape the fake cannot really evaluate would let a future call site pass
+  // its tests here while doing nothing in the real DOM.
+  for (const sel of ["div.foo", "[data-x]", "#a .b", ".a.b", "#a, #b", "a:hover", "canvas", ""]) {
+    assert.throws(() => doc.querySelector(sel), /unsupported selector/,
+      `document.querySelector("${sel}") must throw, not silently return null`);
+  }
+});
+
+/* ---------- style and geometry, as the colour wheel uses them ---------- */
+
+test("style carries plain properties and custom properties in one object, and removeProperty really removes", () => {
+  // settings.js's setColorUi writes both ways against the same element:
+  // `swatch.style.background = hex` and `preview.style.setProperty("--mb-color", hex)`.
+  const n = makeNode("div");
+  n.style.background = "#FF0505";
+  n.style.setProperty("--mb-color", "#FF0505");
+
+  assert.equal(n.style.background, "#FF0505");
+  assert.equal(n.style.getPropertyValue("--mb-color"), "#FF0505");
+  assert.equal(n.style.getPropertyValue("--never-set"), "",
+    "an unset property reads as empty string, like a real CSSStyleDeclaration");
+
+  assert.equal(n.style.removeProperty("--mb-color"), "#FF0505", "removeProperty returns the old value");
+  assert.equal(n.style.getPropertyValue("--mb-color"), "");
+  assert.equal("--mb-color" in n.style, false, "removed means gone, not set to undefined");
+});
+
+test("style state is per node, not shared", () => {
+  const a = makeNode("div"), b = makeNode("div");
+  a.style.setProperty("--mb-color", "#FF0505");
+  b.style.background = "transparent";
+
+  assert.equal(b.style.getPropertyValue("--mb-color"), "");
+  assert.equal(a.style.background, undefined);
+});
+
+test("getBoundingClientRect reports all zeros, which is what a real detached element reports", () => {
+  // Deliberate, not a placeholder: every node here is detached, and a browser
+  // returns a zero rect for those. settings.js's pick() turns this into "every
+  // colour lands dead centre" -- the same thing it would do against an
+  // unlaid-out canvas -- so a test that cares about geometry must supply its
+  // own rect rather than inherit a flattering fake one.
+  const r = makeNode("canvas").getBoundingClientRect();
+  assert.deepEqual(
+    { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height },
+    { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 });
 });
 
 /* ---------- document / window event targets ---------- */
