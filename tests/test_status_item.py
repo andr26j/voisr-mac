@@ -111,6 +111,7 @@ def test_idle_and_recording_states_differ():
     idle = si.item.button().image
     assert idle is not None
     assert idle.isTemplate()
+    assert tuple(idle.size()) == (22.0, 14.0)
     assert si.item.button().title == "", "the title must yield to the image"
 
     si.set_recording(True)
@@ -161,15 +162,26 @@ def test_falling_back_after_a_good_render_clears_the_stale_image(monkeypatch):
 def test_a_button_that_rejects_the_image_falls_back_to_the_text_glyphs():
     """The other failure seam: drawing succeeds but AppKit refuses the
     image. Same requirement -- text glyphs and a tooltip, no exception."""
-    si, bar = make()
+    pytest.importorskip("AppKit")
+    si, _ = make()
     si.create()
+    button = si.item.button()
 
-    def reject(_img):
+    def reject(img):
+        # Rejects the real image, the way AppKit might refuse bad image
+        # data -- but a clear-to-None (the fallback's stale-image cleanup)
+        # is not "an image" and must still go through, or this mock would
+        # block the very seam it exists to exercise.
+        if img is None:
+            button.image = None
+            return
         raise RuntimeError("button refused the image")
 
-    si.item.button().setImage_ = reject
+    button.setImage_ = reject
     si.set_recording(True)
 
+    assert si.item.button().image is None, \
+        "the stale-image clear must have run despite the reject"
     assert si.item.button().title == RECORDING_GLYPH
     assert "Fn" in si.item.button().tooltip
 
