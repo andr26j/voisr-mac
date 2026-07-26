@@ -150,7 +150,8 @@ const HISTORY = [
 ];
 
 const NODE_IDS = ["history-search", "history-empty", "history-more",
-                  "history-groups", "history-export"];
+                  "history-groups", "history-export", "export-popover",
+                  "export-fmt-txt", "export-fmt-md", "export-fmt-json"];
 
 /* Mock timers are enabled BEFORE the scripts load so every setTimeout they
    register -- history.js's search debounce and api.js's dev-fallback -- is
@@ -168,6 +169,9 @@ async function mountHistory(t) {
     env.register(id, nodes[id]);
   }
   nodes["history-search"].value = "";
+  // makeNode() defaults `hidden: false`; index.html ships the export
+  // popover with the `hidden` attribute, i.e. closed until opened.
+  nodes["export-popover"].hidden = true;
 
   await env.V.views.history.render();   // the one genuine bridge round-trip
   env.V.views.history.initKeys();       // binds the `input` listener
@@ -281,6 +285,9 @@ async function mountHistoryWithToast(t, api) {
     env.register(id, nodes[id]);
   }
   nodes["history-search"].value = "";
+  // makeNode() defaults `hidden: false`; index.html ships the export
+  // popover with the `hidden` attribute, i.e. closed until opened.
+  nodes["export-popover"].hidden = true;
 
   await env.V.views.history.render();
   return { V: env.V, restoreCalls, ...nodes };
@@ -428,4 +435,93 @@ test("only the last keystroke of a fast burst is applied", async (t) => {
   t.mock.timers.tick(500);
   assert.equal(rowsIn(groups).length, 1, "the burst collapses into a single render");
   assert.equal(search.value, "site visit");
+});
+
+/* ---------- history: export format picker ----------
+
+   export_history("txt") was hardcoded, so .md and .json were unreachable
+   from the UI even though Api.export_history already supported them. These
+   drive the popover the same way a click would: open it off the Export
+   button, then click one of the three format buttons, and check that the
+   chosen fmt reaches export_history and its {text, suggested_name} reaches
+   save_text_file untouched. Reuses mountHistoryWithToast (already wires a
+   `toast` node and lets the api be overridden) but -- unlike the undo tests,
+   whose click handlers come from itemRow -- the export button and its
+   popover buttons are bound by initKeys(), so each test binds it explicitly,
+   exactly like the very first search test above. */
+
+for (const fmt of ["txt", "md", "json"]) {
+  test(`export format "${fmt}" reaches export_history and save_text_file with its own fmt`, async (t) => {
+    const exportCalls = [], saveCalls = [];
+    const h = await mountHistoryWithToast(t, {
+      export_history: async (f) => {
+        exportCalls.push(f);
+        return { text: `serialised-${f}`, suggested_name: `voisr-history.${f}` };
+      },
+      save_text_file: async (text, name) => {
+        saveCalls.push([text, name]);
+        return { ok: true, path: `/tmp/${name}` };
+      },
+    });
+    h.V.views.history.initKeys();
+
+    h["history-export"].dispatch("click");
+    assert.equal(h["export-popover"].hidden, false, `popover opens for ${fmt}`);
+
+    h[`export-fmt-${fmt}`].dispatch("click");
+    await settle();
+
+    assert.deepEqual(exportCalls, [fmt], `export_history must be called with "${fmt}", not a hardcoded format`);
+    assert.deepEqual(saveCalls, [[`serialised-${fmt}`, `voisr-history.${fmt}`]],
+      `save_text_file must receive export_history's own text/suggested_name for ${fmt}`);
+    assert.equal(h["export-popover"].hidden, true, "popover closes once a format is chosen");
+  });
+}
+
+test("a cancelled save panel stays silent -- no toast, no false success", async (t) => {
+  const h = await mountHistoryWithToast(t, {
+    export_history: async (fmt) => ({ text: "x", suggested_name: `a.${fmt}` }),
+    save_text_file: async () => ({ ok: false, path: null }),
+  });
+  h.V.views.history.initKeys();
+
+  h["history-export"].dispatch("click");
+  h["export-fmt-txt"].dispatch("click");
+  await settle();
+
+  assert.equal(toastTextOf(h["toast"]).trim(), "",
+    "saved.ok === false means the user cancelled the save panel -- stay silent");
+});
+
+test("an export_history error toasts and never reaches save_text_file", async (t) => {
+  const saveCalls = [];
+  const h = await mountHistoryWithToast(t, {
+    export_history: async () => ({ error: "history unreadable" }),
+    save_text_file: async (...args) => { saveCalls.push(args); return { ok: true }; },
+  });
+  h.V.views.history.initKeys();
+
+  h["history-export"].dispatch("click");
+  h["export-fmt-md"].dispatch("click");
+  await settle();
+
+  assert.match(toastTextOf(h["toast"]), /Export history failed: history unreadable/);
+  assert.equal(saveCalls.length, 0, "a failed export must never reach save_text_file");
+});
+
+test("a save_text_file error toasts and does not claim the export succeeded", async (t) => {
+  const h = await mountHistoryWithToast(t, {
+    export_history: async (fmt) => ({ text: "x", suggested_name: `a.${fmt}` }),
+    save_text_file: async () => ({ error: "disk full" }),
+  });
+  h.V.views.history.initKeys();
+
+  h["history-export"].dispatch("click");
+  h["export-fmt-json"].dispatch("click");
+  await settle();
+
+  const text = toastTextOf(h["toast"]);
+  assert.match(text, /Save file failed: disk full/);
+  assert.doesNotMatch(text, /History exported/,
+    "a failed save must never be reported as an export that happened");
 });

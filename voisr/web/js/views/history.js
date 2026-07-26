@@ -176,6 +176,37 @@ window.Voisr = window.Voisr || {};
     }
   }
 
+  /* ---------- export format popover ----------
+
+     export_history(fmt) has always supported "txt"/"md"/"json"; only the
+     UI hardcoded "txt". The three format buttons live as static markup in
+     index.html (mirroring the Settings colour popover), so no dynamic DOM
+     construction is needed here -- open()/close() only flip `hidden`. */
+
+  function openExportPopover() {
+    document.getElementById("export-popover").hidden = false;
+    document.getElementById("history-export").setAttribute("aria-expanded", "true");
+  }
+
+  function closeExportPopover() {
+    document.getElementById("export-popover").hidden = true;
+    document.getElementById("history-export").setAttribute("aria-expanded", "false");
+  }
+
+  async function doExport(fmt) {
+    // Close immediately on the click that chose a format -- the picker's
+    // job is done the instant a format is picked, whether the export
+    // itself goes on to succeed, fail, or get cancelled at the save panel.
+    closeExportPopover();
+    const out = await V.ui.tryApi(V.api().export_history(fmt), "Export history");
+    if (!out) return;
+    const saved = await V.ui.tryApi(
+      V.api().save_text_file(out.text, out.suggested_name), "Save file");
+    // `saved.ok` false is a user cancelling the save panel, not a failure:
+    // stay silent rather than claim an export that did not happen.
+    if (saved && saved.ok) V.ui.toast("History exported");
+  }
+
   function initKeys() {
     document.getElementById("history-search")
       .addEventListener("input", (e) => onSearchInput(e.target.value));
@@ -185,14 +216,33 @@ window.Voisr = window.Voisr || {};
       render();
     });
 
-    document.getElementById("history-export").addEventListener("click", async () => {
-      const out = await V.ui.tryApi(V.api().export_history("txt"), "Export history");
-      if (!out) return;
-      const saved = await V.ui.tryApi(
-        V.api().save_text_file(out.text, out.suggested_name), "Save file");
-      // `saved.ok` false is a user cancelling the save panel, not a failure:
-      // stay silent rather than claim an export that did not happen.
-      if (saved && saved.ok) V.ui.toast("History exported");
+    document.getElementById("history-export").addEventListener("click", () => {
+      const pop = document.getElementById("export-popover");
+      if (pop.hidden) openExportPopover(); else closeExportPopover();
+    });
+
+    for (const fmt of ["txt", "md", "json"]) {
+      document.getElementById(`export-fmt-${fmt}`)
+        .addEventListener("click", () => doExport(fmt));
+    }
+
+    /* click-outside / Escape dismissal for the export popover -- registered
+       once here (initKeys, called once from main.js), not inside
+       openExportPopover, so repeated opens never stack extra listeners.
+       Mirrors settings.js's colour-popover dismissal: the click listener
+       bails out early on any click still inside the popover or on the
+       Export button that opened it, so the very click that opens the
+       popover (which bubbles to document right after) can never
+       immediately close it again. */
+    document.addEventListener("click", (e) => {
+      const pop = document.getElementById("export-popover");
+      if (pop.hidden) return;
+      if (pop.contains(e.target) || e.target.closest("#history-export")) return;
+      closeExportPopover();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      if (!document.getElementById("export-popover").hidden) closeExportPopover();
     });
 
     document.addEventListener("keydown", (e) => {

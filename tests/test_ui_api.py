@@ -693,3 +693,64 @@ def test_save_text_file_reports_cancellation(tmp_path):
     api = make_api(tmp_path)
     api._save_panel_fn = lambda name: None
     assert api.save_text_file("x", "a.txt") == {"ok": False, "path": None}
+
+
+def test_run_save_panel_waits_without_a_timeout(monkeypatch):
+    """_run_save_panel used to cap done.wait(120): if the user left the real
+    NSSavePanel open past that, the calling thread gave up and reported a
+    cancel while the panel was still on screen. runModal() blocks the AppKit
+    main thread until the user acts, so the callback set()s `done` sooner or
+    later regardless -- there is no reason for the caller to time out on it.
+    This asserts the wait is untimed (called with no args), driving the
+    fake AppKit/AppHelper below through the real function body rather than
+    trusting a comment."""
+    import AppKit
+    import PyObjCTools.AppHelper  # noqa: F401 -- import so the attr exists to patch
+    import PyObjCTools
+
+    from voisr import ui as ui_module
+
+    wait_calls = []
+    real_wait = threading.Event.wait
+
+    def spy_wait(self, *args, **kwargs):
+        wait_calls.append((args, kwargs))
+        return real_wait(self, *args, **kwargs)
+
+    monkeypatch.setattr(threading.Event, "wait", spy_wait)
+
+    class FakeURL:
+        def path(self):
+            return "/tmp/voisr-save-panel-test.txt"
+
+    class FakePanel:
+        def setNameFieldStringValue_(self, name):
+            pass
+
+        def runModal(self):
+            return AppKit.NSModalResponseOK
+
+        def URL(self):
+            return FakeURL()
+
+    class FakeNSSavePanel:
+        @staticmethod
+        def savePanel():
+            return FakePanel()
+
+    monkeypatch.setattr(AppKit, "NSSavePanel", FakeNSSavePanel)
+
+    class FakeAppHelper:
+        @staticmethod
+        def callAfter(fn):
+            # Stand-in for the real run loop dispatch: invokes synchronously,
+            # which is fine here since we only care about the done.wait() call.
+            fn()
+
+    monkeypatch.setattr(PyObjCTools, "AppHelper", FakeAppHelper)
+
+    path = ui_module._run_save_panel("out.txt")
+
+    assert path == "/tmp/voisr-save-panel-test.txt"
+    assert wait_calls == [((), {})], \
+        f"done.wait() must be called with no timeout, got {wait_calls}"

@@ -267,6 +267,17 @@ mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
   .popover { animation: none; }
 }
 
+/* ---------- Export format popover ---------- */
+
+.export-control { position: relative; }
+
+/* Three stacked format buttons rather than the colour wheel's centred
+   controls -- override the generic .popover's centring so they run the
+   popover's full width. */
+#export-popover { align-items: stretch; min-width: 190px; }
+
+.export-fmt { height: 36px; text-align: left; padding: 0 12px; }
+
 .wheel-wrap { position: relative; width: 200px; height: 200px; flex-shrink: 0; }
 
 #color-wheel { border-radius: 50%; cursor: crosshair; display: block; }

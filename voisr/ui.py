@@ -130,7 +130,17 @@ def _run_save_panel(suggested_name: str):
             done.set()
 
     AppHelper.callAfter(go)
-    done.wait(120)
+    # Untimed on purpose. panel.runModal() blocks the AppKit main thread
+    # until the user dismisses the panel (Save or Cancel), so `go()` always
+    # reaches its `finally` and calls done.set() -- there is no path where
+    # nobody ever answers. A wait(120) used to cap this: if the user left
+    # the panel open past two minutes, this thread gave up and returned
+    # {"ok": False, "path": None} while the panel was still on screen. That
+    # desync let a later Save write a file the caller had already been told
+    # didn't happen, with no confirmation shown for it. Do not reintroduce a
+    # timeout here -- see tests/test_ui_api.py::
+    # test_run_save_panel_waits_without_a_timeout.
+    done.wait()
     return result.get("path")
 
 
