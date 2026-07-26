@@ -12,6 +12,7 @@
   transition: background var(--fast) var(--ease);
 }
 .perm-chip:not(:disabled):hover { background: var(--surface-2); }
+.perm-chip.perm-denied:not(:disabled):hover { background: var(--warning-soft); }
 .perm-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .perm-chip.perm-ok .perm-dot { background: var(--success); }
 /* the soft fill is what makes a denied chip read as "needs attention" at a
