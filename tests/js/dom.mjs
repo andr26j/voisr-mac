@@ -17,9 +17,37 @@ function findByClass(children, sel) {
   return null;
 }
 
+/* Selector support for closest(): exactly the two shapes the app's real call
+   sites use --
+
+     main.js:95            e.target.closest(".theme-opt")
+     settings.js:282        e.target.closest("#color-open")
+     history.js:240         e.target.closest("#history-export")
+
+   i.e. a single class or a single id, nothing compound, no combinators, no
+   attribute selectors. A fake that silently matched (or silently returned
+   null for) some *other* selector shape would let a future call site pass
+   its own tests while doing nothing in the real DOM -- a fake that lies is
+   worse than no fake. So anything outside this subset throws instead of
+   returning null, exactly the way an unsupported selector would surface as
+   a loud, obvious test failure rather than a quietly-wrong dismissal. */
+function matchesSimpleSelector(node, sel) {
+  const s = String(sel);
+  if (/^\.[\w-]+$/.test(s)) {
+    const cls = s.slice(1);
+    return !!(node.classList && node.classList.contains(cls));
+  }
+  if (/^#[\w-]+$/.test(s)) return node.id === s.slice(1);
+  throw new Error(
+    `closest(): unsupported selector "${sel}" -- the fake DOM only supports ` +
+    `a single ".class" or "#id", matching the app's real call sites`);
+}
+
 export function makeNode(tag = "div") {
   const node = {
     tagName: String(tag).toUpperCase(),
+    id: "",
+    parent: null,
     children: [], className: "", textContent: "",
     dataset: {}, attributes: {}, style: {}, hidden: false, disabled: false,
     _innerHTML: "", _listeners: {},
@@ -37,19 +65,104 @@ export function makeNode(tag = "div") {
     setAttribute(k, v) { node.attributes[k] = String(v); },
     getAttribute(k) { return k in node.attributes ? node.attributes[k] : null; },
     addEventListener(type, fn) { (node._listeners[type] ??= []).push(fn); },
-    removeEventListener() {},
-    dispatch(type, ev = {}) { (node._listeners[type] || []).forEach((f) => f({ target: node, ...ev })); },
-    append(...kids) { kids.flat().forEach((k) => node.children.push(k)); },
-    appendChild(k) { node.children.push(k); return k; },
-    replaceChildren(...kids) { node.children = kids.flat(); },
+    removeEventListener(type, fn) {
+      const arr = node._listeners[type];
+      if (!arr) return;
+      const i = arr.indexOf(fn);
+      if (i !== -1) arr.splice(i, 1);
+    },
+    // .slice() so a handler that removes itself (or another handler of the
+    // same type) mid-dispatch can't skip or double-fire a sibling listener.
+    dispatch(type, ev = {}) {
+      (node._listeners[type] || []).slice().forEach((f) => f({ target: node, ...ev }));
+    },
+    append(...kids) {
+      kids.flat().forEach((k) => {
+        node.children.push(k);
+        if (k && typeof k === "object") k.parent = node;
+      });
+    },
+    appendChild(k) {
+      node.children.push(k);
+      if (k && typeof k === "object") k.parent = node;
+      return k;
+    },
+    // Detaches every outgoing child (parent = null) before adopting the new
+    // ones, so a node that got replaced out of the tree can never satisfy a
+    // later contains()/closest() through a stale parent link.
+    replaceChildren(...kids) {
+      for (const kid of node.children) {
+        if (kid && typeof kid === "object" && kid.parent === node) kid.parent = null;
+      }
+      node.children = kids.flat();
+      for (const kid of node.children) {
+        if (kid && typeof kid === "object") kid.parent = node;
+      }
+    },
     querySelector(sel) { return findByClass(node.children, String(sel)); },
     querySelectorAll() { return []; },
     focus() {}, blur() {}, click() { node.dispatch("click"); },
     scrollIntoView() {},
+    // True for the node itself (matching real Node.contains), then walks up
+    // `other`'s parent chain looking for `node` -- i.e. "is `other` this node
+    // or one of its descendants", never an ancestor or unrelated node.
+    contains(other) {
+      let cur = other;
+      while (cur) {
+        if (cur === node) return true;
+        cur = (cur && typeof cur === "object") ? cur.parent : null;
+      }
+      return false;
+    },
+    // Walks up from the node itself (matching real Element.closest, which
+    // includes the starting element) through `.parent` links, matching the
+    // subset of selector syntax described at matchesSimpleSelector above.
+    closest(sel) {
+      let cur = node;
+      while (cur) {
+        if (matchesSimpleSelector(cur, sel)) return cur;
+        cur = cur.parent || null;
+      }
+      return null;
+    },
     get innerHTML() { return node._innerHTML; },
     set innerHTML(v) { node._innerHTML = String(v); },
   };
   return node;
+}
+
+/* Shared by document and window: both are real EventTargets in a browser, so
+   both need to record listeners and be able to dispatch to them, mirroring
+   the per-node dispatch() above. Kept as a factory rather than duplicated
+   inline so the two stay identical -- a settings.js/history.js document
+   listener and a main.js window listener must behave the same way here. */
+function makeEventTarget() {
+  const listeners = {};
+  return {
+    addEventListener(type, fn) { (listeners[type] ??= []).push(fn); },
+    removeEventListener(type, fn) {
+      const arr = listeners[type];
+      if (!arr) return;
+      const i = arr.indexOf(fn);
+      if (i !== -1) arr.splice(i, 1);
+    },
+    // Test-facing: `document.dispatch("click", { target: someNode })`,
+    // `window.dispatch("keydown", { key: "Escape" })` -- direct equivalent of
+    // makeNode's dispatch(), for driving a listener straight from a test
+    // without needing a real Event object.
+    dispatch(type, ev = {}) {
+      (listeners[type] || []).slice().forEach((f) => f({ target: null, ...ev }));
+    },
+    // App-facing: `window.dispatchEvent(new Event("voisr:new-dictation"))`
+    // (settings.js, after a successful clear-history). A real Event's
+    // `.type`/`.target` are accessor properties, not own-enumerable ones, so
+    // it cannot be spread the way a plain test `ev` object can -- route it
+    // through dispatch() by type only.
+    dispatchEvent(event) {
+      this.dispatch(event && event.type, {});
+      return true;
+    },
+  };
 }
 
 export function installDom() {
@@ -58,17 +171,22 @@ export function installDom() {
     createElement: (t) => makeNode(t),
     createTextNode: (t) => String(t),
     getElementById: (id) => byId.get(id) ?? null,
-    addEventListener() {}, removeEventListener() {},
+    ...makeEventTarget(),
     querySelector: () => null, querySelectorAll: () => [],
     documentElement: makeNode("html"), body: makeNode("body"),
     activeElement: null,
   };
   const win = {
-    addEventListener() {}, removeEventListener() {}, dispatchEvent() {},
+    ...makeEventTarget(),
     matchMedia: () => ({ matches: false, addEventListener() {} }),
     Voisr: {},
   };
   globalThis.window = win;
   globalThis.document = doc;
-  return { window: win, document: doc, register: (id, n) => byId.set(id, n) };
+  return {
+    window: win, document: doc,
+    // Mirrors the real DOM: an element's `.id` reflects the id it was
+    // registered/looked-up under, which is what closest("#id") matches on.
+    register: (id, n) => { byId.set(id, n); if (n && typeof n === "object") n.id = id; },
+  };
 }

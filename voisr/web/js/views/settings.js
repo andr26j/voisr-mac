@@ -120,6 +120,21 @@ window.Voisr = window.Voisr || {};
       try { cv.setPointerCapture(e.pointerId); } catch (_) {}
     });
     cv.addEventListener("pointermove", (e) => dragging && pick(e));
+    cv.addEventListener("pointercancel", async () => {
+      if (!dragging) return;
+      dragging = false;
+      // The gesture was interrupted (capture lost, system gesture took over,
+      // etc.) before it ever reached pointerup, so unlike that handler there
+      // is nothing to save here -- pointerup's own failure branch already
+      // establishes the rule this follows: pick()'s live preview is only
+      // trustworthy once it is confirmed written to config. A cancelled drag
+      // never got that confirmation, so revert the preview to what is
+      // actually stored rather than strand the interrupted colour on
+      // screen -- otherwise hovering the wheel afterwards would look like it
+      // is still dragging, since `dragging` would be the only state left
+      // unrepaired.
+      await renderColorWheel();
+    });
     cv.addEventListener("pointerup", async () => {
       if (!dragging) return;
       dragging = false;
@@ -308,6 +323,12 @@ window.Voisr = window.Voisr || {};
       const res = await V.ui.tryApi(V.api().clear_history(), "Clear history");
       if (!res) return;
       V.ui.toast(`History cleared — ${res.removed} removed`);
+      // Reuses main.js's voisr:new-dictation listener, which refreshes
+      // whichever of Home/History is on screen. From here on the event means
+      // "history changed", not strictly "a dictation was added" -- a clear
+      // is exactly the kind of change those views need to hear about too, or
+      // their stats/rows stay stale until the user switches views.
+      window.dispatchEvent(new Event("voisr:new-dictation"));
     });
   }
 

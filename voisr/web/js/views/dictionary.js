@@ -106,8 +106,15 @@ window.Voisr = window.Voisr || {};
     const all = Object.entries(cfg.dictionary || {});
     const search = document.getElementById("dict-search");
     search.hidden = all.length < SEARCH_AT;
+    // A hidden input must not leave a stale filter in effect -- there is no
+    // longer any visible control to clear it, so the user would be looking
+    // at a filtered list with no way to tell (or undo) why entries are
+    // missing. Reset both the module's filter state and the input's own
+    // value so a later re-show (the list grows past SEARCH_AT again) starts
+    // clean rather than resurrecting whatever was last typed.
+    if (search.hidden) { filter = ""; search.value = ""; }
     const shown = all.filter(([s, w]) =>
-      !filter || s.includes(filter) || w.toLowerCase().includes(filter));
+      !filter || s.toLowerCase().includes(filter) || w.toLowerCase().includes(filter));
     document.getElementById("dict-empty").hidden = shown.length > 0;
     document.getElementById("dict-list")
       .replaceChildren(...shown.map(([s, w]) => entryRow(s, w)));
