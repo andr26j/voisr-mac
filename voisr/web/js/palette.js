@@ -168,5 +168,7 @@ window.Voisr = window.Voisr || {};
                } });
   }
 
-  V.palette = { open, close, register, match, init };
+  /* open/close/register stay module-private: init() is the only entry point
+     the app uses, and match() is the pure matcher the Node tests exercise. */
+  V.palette = { match, init };
 })(window.Voisr);

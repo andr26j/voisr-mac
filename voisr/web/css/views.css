@@ -13,9 +13,11 @@
 }
 .perm-chip:not(:disabled):hover { background: var(--surface-2); }
 .perm-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
-.perm-ok .perm-dot,
 .perm-chip.perm-ok .perm-dot { background: var(--success); }
-.perm-chip.perm-denied { border-color: var(--warning); color: var(--warning); }
+/* the soft fill is what makes a denied chip read as "needs attention" at a
+   glance; --warning stays on the text and the border. */
+.perm-chip.perm-denied { border-color: var(--warning); color: var(--warning);
+                         background: var(--warning-soft); }
 .perm-chip.perm-denied .perm-dot { background: var(--warning); }
 .perm-chip.perm-unknown { color: var(--muted); }
 

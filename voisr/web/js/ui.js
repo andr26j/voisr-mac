@@ -11,12 +11,6 @@ window.Voisr = window.Voisr || {};
     arrow: '<svg class="dict-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>',
   };
 
-  function escapeHtml(s) {
-    // must also cover quotes: the result is interpolated into attribute values
-    return String(s).replace(/[&<>"']/g,
-      (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  }
-
   function timeOf(ts) {
     return new Date(ts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   }
@@ -368,7 +362,9 @@ window.Voisr = window.Voisr || {};
 
   /* Build a node without string templating. Text goes through textContent and
      attributes through setAttribute, so nothing user-supplied is ever parsed
-     as markup — which retires the escapeHtml-into-attribute pattern.
+     as markup — which retired the escape-then-interpolate-into-an-attribute
+     pattern this file used to need (the `escapeHtml` helper it required is
+     gone, along with its last call site).
 
      NOTE on naming: this is exposed as `V.ui.el`. The querySelector shorthand
      (formerly also called `el`) has been renamed back to its original name,
@@ -416,6 +412,6 @@ window.Voisr = window.Voisr || {};
                      html: ICONS.trash, on: { click: (e) => { e.stopPropagation(); onDelete(item); } } }));
   }
 
-  V.ui = { el, $, toast, tryApi, escapeHtml, timeOf, dayOf, formatDuration, ICONS, itemRow,
+  V.ui = { el, $, toast, tryApi, timeOf, dayOf, formatDuration, ICONS, itemRow,
            offerDictationUndo, offerEntryUndo };
 })(window.Voisr);

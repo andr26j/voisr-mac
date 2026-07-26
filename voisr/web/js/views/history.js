@@ -51,17 +51,6 @@ window.Voisr = window.Voisr || {};
     searchDebounceTimer = setTimeout(() => applyQuery(q), SEARCH_DEBOUNCE_MS);
   }
 
-  /* Programmatic entry point (e.g. an external caller jumping to History
-     with a preset query). Unlike onSearchInput, this DOES drive the input
-     field's value (no keystroke is in flight to fight with) and applies
-     immediately rather than waiting out the debounce. */
-  function setQuery(q) {
-    clearTimeout(searchDebounceTimer);
-    const input = document.getElementById("history-search");
-    if (input) input.value = q || "";
-    applyQuery(q);
-  }
-
   /* Pure: takes the needle as a parameter rather than reading module state,
      so the search semantics are directly testable (tests/js/views.test.mjs).
      The trim lives HERE, at match time only -- never on the way in from the
@@ -277,5 +266,5 @@ window.Voisr = window.Voisr || {};
   }
 
   V.views = V.views || {};
-  V.views.history = { render, setQuery, initKeys, matchesQuery, highlighted };
+  V.views.history = { render, initKeys, matchesQuery, highlighted };
 })(window.Voisr);

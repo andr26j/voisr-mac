@@ -136,12 +136,19 @@ test("match ensures search command appears exactly once in all result sets", () 
 test("match preserves order of matched commands before adding pinned search", () => {
   // Query that matches multiple commands: "go" should match "Go to Home", "Go to History", "Go to Dictionary".
   const result = ids("go");
-  const goCommands = result.filter((id) => id.startsWith("home") || id.startsWith("history") || id.startsWith("dictionary"));
   // These should appear in their earliest-first-match order, not affected by search pinning.
-  const expectedOrder = ["home", "history", "dictionary"];
   assert.ok(
     result.indexOf("home") < result.indexOf("history") &&
     result.indexOf("history") < result.indexOf("dictionary"),
     "go-prefixed commands should maintain their matched order"
   );
+  /* ...and the half this test's name promised but never checked: "Search
+     history" has no 'g', so it cannot match "go" naturally and is pinned as
+     the fallback. It must land AFTER every naturally-matched command.
+     "brunswick" above cannot prove this -- nothing matches there, so the
+     pinned command is the only element and it is trivially last either way.
+     Here four commands match first, so this is the assertion that actually
+     distinguishes appending the fallback from prepending it. */
+  assert.equal(result[result.length - 1], "search",
+    "the pinned search fallback must come after every naturally-matched command");
 });

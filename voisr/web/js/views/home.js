@@ -192,5 +192,5 @@ window.Voisr = window.Voisr || {};
   }
 
   V.views = V.views || {};
-  V.views.home = { render, toggleRecord, renderPermissions, renderHero, sparklinePath };
+  V.views.home = { render, toggleRecord, renderPermissions, sparklinePath };
 })(window.Voisr);

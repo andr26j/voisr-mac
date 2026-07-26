@@ -110,9 +110,6 @@ ALLOWED_LITERAL_COLOURS = {
     # -- pre-existing generic shadow/glow tints, not theme-bound --
     "rgba(31, 29, 26, .25)": "switch thumb drop shadow",
     "rgba(28, 26, 23, .96)": "mini-pill's own fixed dark chrome background",
-    "rgba(232, 100, 60, .35)": "record button glow shadow (ember accent)",
-    "rgba(232, 100, 60, .45)": "record button pulse animation start (ember accent)",
-    "rgba(232, 100, 60, 0)": "record button pulse animation end (transparent ember)",
     "rgba(0, 0, 0, .35)": "colour-wheel thumb shadow ring",
     "rgba(0, 0, 0, .4)": "colour-wheel thumb shadow ring",
     "rgba(255, 255, 255, .08)": "toast-action button: a fixed white-on-dark "
@@ -298,7 +295,6 @@ def test_history_binds_keyboard_navigation():
     src = (WEB / "js" / "views" / "history.js").read_text()
     for key in ["ArrowDown", "ArrowUp", "Backspace", "Enter"]:
         assert key in src, key
-    assert "setQuery" in src
     assert "PAGE" in src
 
 
