@@ -28,15 +28,28 @@ def _on_main_thread(action) -> None:
     Main-thread callers stay synchronous, so callers can still read the glyph
     straight after the call. Matches the AppHelper.callAfter convention used
     by ui._run_save_panel/native_setup and permissions.open_pane.
+
+    The import failure and the dispatch failure are caught separately, and
+    only the first one falls back to running inline. Without pyobjc there is
+    no run loop and nothing that could be a real AppKit call, so inline is the
+    only option and is safe. A *dispatch* that fails means we are on a genuine
+    background thread with a run loop that would not take the work -- running
+    inline there is the off-main AppKit call this function exists to prevent,
+    in the process that hosts the Quartz event tap. A missed glyph update is
+    the cheaper failure, so that path renders nothing.
     """
     try:
         from Foundation import NSThread
         from PyObjCTools import AppHelper
+    except Exception:
+        action()  # no pyobjc (tests off macOS): no run loop to defer to
+        return
+    try:
         if not NSThread.isMainThread():
             AppHelper.callAfter(action)
             return
     except Exception:
-        pass  # no pyobjc (tests off macOS), or the dispatch itself failed
+        return  # dispatch failed: skip the render rather than run off-main
     action()
 
 

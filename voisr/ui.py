@@ -749,7 +749,9 @@ class Api:
         self._sessions_in_flight = set()
         self._glyph_busy = False
         self._active_sequence = None
-        self._busy_lock = threading.Lock()
+        # Reentrant: start_recording/_release_recording claim under it and
+        # _mark_session takes it again to push the glyph.
+        self._busy_lock = threading.RLock()
         self._save_panel_fn = None
         self._recordings = RecordingQueue(
             recorder_factory=recorder_factory,
@@ -814,12 +816,13 @@ class Api:
             else:
                 self._sessions_in_flight.discard(sequence)
             busy = bool(self._sessions_in_flight)
-            if busy == self._glyph_busy:
+            status = self._status_item
+            # Read the status item before committing _glyph_busy: committing
+            # with nothing to push to would record a state that was never
+            # rendered, and the next push would be skipped as "no change".
+            if status is None or busy == self._glyph_busy:
                 return
             self._glyph_busy = busy
-            status = self._status_item
-            if status is None:
-                return
             try:
                 status.set_recording(busy)
             except Exception:
@@ -969,25 +972,60 @@ class Api:
             session = self._recordings.start()
         except RecordingQueueError as error:
             return {"error": str(error)}  # rejected: marks neither flag
-        self._active_sequence = session.sequence  # before the mic flag: a
-        self._is_recording = True                 # release must never miss it
-        self._mark_session(session.sequence, True)
+        # Publishing the sequence and lighting the glyph is one unit, under
+        # the lock _release_recording claims through, so a release can never
+        # land between them and leave the glyph lit for a retired session.
+        # The queue call stays *outside*: start() waits on the previous
+        # capture's finalizer, and holding _busy_lock across that would let a
+        # wedged recorder.stop() block every glyph push in the process.
+        with self._busy_lock:
+            self._active_sequence = session.sequence
+            self._is_recording = True
+            self._mark_session(session.sequence, True)  # reentrant: RLock
         return {"recording": True, "session_id": session.sequence}
 
     def _release_recording(self, paste=False):
         """Close the mic. Deliberately does NOT clear the glyph: the dictation
-        runs on until transcription finishes (see _process_session)."""
-        sequence, self._active_sequence = self._active_sequence, None
-        self._is_recording = False
+        runs on until transcription finishes (see _process_session).
+
+        Two threads really can be in here at once: HotkeyService.release()
+        holds _state_lock, while Api.stop_recording() arrives on the
+        pywebview/JS bridge holding nothing. Claiming _active_sequence is a
+        read-modify-write (LOAD_ATTR ... STORE_ATTR, with a GIL switch point
+        between), and the claim only means anything if it agrees with which
+        caller RecordingQueue.release() hands the live session to -- so the
+        two happen together, under _busy_lock.
+
+        Split them and either half can disagree: both callers read the same
+        sequence, or the caller that claimed it loses the queue race. Either
+        way one of them holds a sequence but gets back the queue's
+        *already-resolved* "not recording" failure, so the callback below
+        fires immediately and retires a session that is still transcribing --
+        a dark glyph mid-dictation, the exact defect this lifecycle fixed.
+        Paired, the loser claims None and registers nothing.
+
+        Lock ordering: _busy_lock is only ever taken before RecordingQueue's
+        lock, never after -- the queue's worker calls _process_session (and so
+        _mark_session) outside its own lock, and _finalize_capture never
+        reaches back into Api. _busy_lock is an RLock because _mark_session
+        takes it too; the retire below still runs outside the claim, so a
+        status-item push is never made while the queue lock could be held."""
+        claimed = None
         try:
-            future = self._recordings.release(
-                paste_requested=paste,
-                context=self.get_config(),
-            )
-        except Exception:
-            # Nothing downstream will ever retire this session now.
-            self._mark_session(sequence, False)
-            raise
+            with self._busy_lock:
+                sequence, self._active_sequence = self._active_sequence, None
+                claimed = sequence
+                self._is_recording = False
+                future = self._recordings.release(
+                    paste_requested=paste,
+                    context=self.get_config(),
+                )
+                claimed = None  # handed off; the queue will retire it
+        finally:
+            # Nothing downstream will ever retire this session now. Runs
+            # after the `with` unwinds, so the push is made outside the lock.
+            if claimed is not None:
+                self._mark_session(claimed, False)
         if sequence is not None:
             # Safety net for the paths that never reach _process_session --
             # a recorder whose stop() throws is completed straight from the

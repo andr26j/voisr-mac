@@ -160,6 +160,33 @@ def test_set_recording_on_the_main_thread_still_applies_synchronously(
     assert si.item.button().title != idle
 
 
+def test_a_failed_dispatch_skips_the_render_instead_of_running_off_main(
+        monkeypatch):
+    """The inline fallback is correct only for "no pyobjc at all". If
+    callAfter itself throws we are on a genuine background thread, and
+    falling through to run the render inline is precisely the off-main AppKit
+    call this guards against -- in the process hosting the Quartz event tap.
+    A missed glyph update is strictly the cheaper failure."""
+    import PyObjCTools
+
+    si, _ = make()
+    si.create()
+    idle = si.item.button().title
+    _fake_pyobjc(monkeypatch, main_thread=False)
+
+    class ThrowingAppHelper:
+        @staticmethod
+        def callAfter(fn, *args):
+            raise RuntimeError("run loop is gone")
+
+    monkeypatch.setattr(PyObjCTools, "AppHelper", ThrowingAppHelper)
+
+    si.set_recording(True)  # must not raise
+
+    assert si.item.button().title == idle, \
+        "a failed dispatch fell through to AppKit on a non-main thread"
+
+
 def test_set_recording_never_raises_when_the_render_fails():
     si, _ = make()
     si.create()

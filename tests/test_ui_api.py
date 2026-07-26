@@ -743,24 +743,187 @@ def test_a_failed_release_does_not_strand_a_busy_glyph(tmp_path):
 def test_overlapping_dictations_keep_the_glyph_lit(tmp_path):
     """The queue admits a fresh dictation while an earlier one is still
     transcribing (that is what max_in_flight is for). Retiring the older
-    session must not clear the glyph out from under the newer one."""
+    session must not clear the glyph out from under the newer one.
+
+    The two dictations genuinely overlap here: transcription parks on a gate,
+    so session 2 starts and is released while session 1 is still inside
+    whisper. Each transcription samples the glyph as it runs -- session 2's
+    sample is taken *after* session 1 has been retired, which is the moment a
+    single boolean (or a `clear()` instead of a `discard()`) goes dark on a
+    live dictation."""
     status = FakeStatus()
-    api = make_api(tmp_path)
+    entered = [threading.Event(), threading.Event()]
+    gates = [threading.Event(), threading.Event()]
+    seen = []
+
+    def transcribe(wav):
+        n = len(seen)
+        seen.append(status.recording)
+        entered[n].set()
+        assert gates[n].wait(5), "transcription gate was never released"
+        return "um, hello world"
+
+    api = make_api(tmp_path, transcribe_fn=transcribe)
     api.attach_status_item(status)
 
     first = api.start_recording()["session_id"]
-    api._release_recording(paste=False).result()
-    assert status.recording is False
+    first_future = api._release_recording(paste=False)
+    assert entered[0].wait(5), "session 1 never reached transcription"
+    assert api.is_recording() is False, "session 1's mic should be closed"
+    assert status.recording is True, "the glyph went idle mid-transcription"
 
+    # Session 2 starts while session 1 is still in whisper -- the real overlap.
     second = api.start_recording()["session_id"]
     assert second != first
+    second_future = api._release_recording(paste=False)
     assert status.recording is True
-    # The stale retire of the finished first session must be a no-op.
+
+    gates[0].set()  # session 1 finishes and is retired
+    assert entered[1].wait(5), "session 2 never reached transcription"
+    assert status.recording is True, \
+        "retiring session 1 cleared the glyph out from under session 2"
+    # A stale retire of the already-finished first session is a no-op.
     api._mark_session(first, False)
     assert status.recording is True
 
-    api._release_recording(paste=False).result()
+    gates[1].set()
+    assert first_future.result(5).to_api_dict().get("error") is None
+    assert second_future.result(5).to_api_dict().get("error") is None
+
+    assert seen == [True, True], "the glyph was dark during a live dictation"
     assert status.recording is False
+    assert status.states == [True, False], "the glyph flickered mid-overlap"
+
+
+def test_a_session_marked_before_the_status_item_is_attached_stays_in_sync(
+        tmp_path):
+    """_glyph_busy is a mirror of what the status item was last told. If it
+    were committed with no status item to push to, the later attach would
+    inherit a state it never rendered and the next push would be skipped as
+    "no change" -- a glyph stuck idle for a live dictation."""
+    api = make_api(tmp_path)
+    status = FakeStatus()
+
+    api._mark_session(1, True)  # no status item yet
+    api.attach_status_item(status)
+    api._mark_session(2, True)
+
+    assert status.states == [True], "the busy state was swallowed"
+    assert status.recording is True
+
+
+class WatchedLock:
+    """Reentrant stand-in for _busy_lock that fires `contended` when a
+    *different* thread tries to enter while someone is inside. Reentry by the
+    holder does not count, so this stays honest even though _mark_session
+    re-enters _busy_lock."""
+
+    def __init__(self, contended=None):
+        self._inner = threading.RLock()
+        self._count_lock = threading.Lock()
+        self._holders = []
+        self.contended = contended or threading.Event()
+
+    def __enter__(self):
+        me = threading.get_ident()
+        with self._count_lock:
+            if any(h != me for h in self._holders):
+                self.contended.set()
+            self._holders.append(me)
+        return self._inner.__enter__()
+
+    def __exit__(self, *exc):
+        try:
+            return self._inner.__exit__(*exc)
+        finally:
+            with self._count_lock:
+                self._holders.remove(threading.get_ident())
+
+
+def test_two_concurrent_releases_do_not_both_claim_the_session(tmp_path):
+    """HotkeyService.release() holds _state_lock; Api.stop_recording() comes
+    off the pywebview/JS bridge and holds nothing, so both can be inside
+    _release_recording at once.
+
+    What has to hold is that the caller which claims _active_sequence is the
+    same one RecordingQueue.release() hands the live session to. Break that
+    -- by leaving the read-modify-write unlocked, or by locking the claim but
+    not the hand-off -- and one caller ends up holding a sequence while
+    getting back the queue's *already-resolved* "not recording" failure. Its
+    done-callback fires immediately and retires a session that is still
+    transcribing: the glyph goes dark mid-dictation.
+
+    Driven deterministically, with no sleeps: the queue's release() parks its
+    first caller, and the second thread is only let through once it is
+    provably in position -- blocked on the lock if the two are paired, or
+    already at the queue itself if they are not.
+    """
+    status = FakeStatus()
+    transcribing = threading.Event()
+    finish = threading.Event()
+
+    def transcribe(wav):
+        transcribing.set()
+        assert finish.wait(5), "transcription gate was never released"
+        return "um, hello world"
+
+    api = make_api(tmp_path, transcribe_fn=transcribe)
+    in_position = threading.Event()
+    api._busy_lock = WatchedLock(contended=in_position)
+    api.attach_status_item(status)
+
+    api.start_recording()
+    assert status.recording is True
+
+    real_release = api._recordings.release
+    at_the_queue = threading.Event()
+    resume = threading.Event()
+    arrivals = []
+
+    def gated_release(**kwargs):
+        """Park the first caller inside the hand-off, so the second one can
+        be let in while the first has claimed but not yet handed off."""
+        arrivals.append(threading.current_thread().name)
+        if len(arrivals) == 1:
+            at_the_queue.set()
+            assert resume.wait(5), "the parked caller was never released"
+        else:
+            in_position.set()  # a second caller reached the queue unblocked
+        return real_release(**kwargs)
+
+    api._recordings.release = gated_release
+
+    futures = {}
+
+    def release(name):
+        futures[name] = api._release_recording(paste=False)
+
+    first = threading.Thread(target=release, args=("a",), daemon=True)
+    first.start()
+    assert at_the_queue.wait(5), "the first caller never reached the queue"
+
+    second = threading.Thread(target=release, args=("b",), daemon=True)
+    second.start()
+    assert in_position.wait(5), "the second caller never got into position"
+
+    resume.set()
+    first.join(5)
+    second.join(5)
+    assert not first.is_alive() and not second.is_alive()
+
+    assert transcribing.wait(5), "the claimed session never reached whisper"
+    assert status.recording is True, \
+        "a release that lost the claim retired a live, transcribing session"
+    assert status.states == [True]
+
+    finish.set()
+    errors = [futures[name].result(5).to_api_dict().get("error")
+              for name in ("a", "b")]
+    assert sum(1 for e in errors if e and "not recording" in e) == 1, \
+        f"exactly one release should have claimed the session, got {errors}"
+    assert len(arrivals) == 2, "both callers must reach the queue"
+    assert status.recording is False
+    assert status.states == [True, False]
 
 
 def test_close_releases_the_status_item(tmp_path):
