@@ -343,7 +343,15 @@ test("a failed delete does not offer an Undo for something still present", async
 test("history render surfaces a bridge failure rather than blanking the pane", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const env = loadVoisr(["js/ui.js", "js/api.js", "js/views/history.js"]);
-  env.window.pywebview = { api: { get_history: async () => ({ error: "history unreadable" }) } };
+  let calls = 0;
+  env.window.pywebview = { api: { get_history: async () => {
+    calls++;
+    // First render succeeds so there is something on screen to preserve;
+    // only the second (a refresh) fails -- otherwise this test can't tell
+    // "never blanked" from "never had anything to blank".
+    if (calls === 1) return HISTORY.map((i) => ({ ...i }));
+    return { error: "history unreadable" };
+  } } };
 
   const nodes = {};
   for (const id of UNDO_IDS) {
@@ -352,8 +360,14 @@ test("history render surfaces a bridge failure rather than blanking the pane", a
   }
 
   await env.V.views.history.render();
+  assert.equal(rowsIn(nodes["history-groups"]).length, 3,
+    "first render establishes the rows this test defends");
+
+  await env.V.views.history.render();
 
   assert.match(toastTextOf(nodes["toast"]), /Load history failed: history unreadable/);
+  assert.equal(rowsIn(nodes["history-groups"]).length, 3,
+    "the existing rows must survive a failed refresh, not be blanked");
 });
 
 test("only the last keystroke of a fast burst is applied", async (t) => {

@@ -128,7 +128,9 @@ window.Voisr = window.Voisr || {};
       // do, so re-read and repaint from what is really stored.
       if (!await V.ui.tryApi(
         V.api().set_config({ pill_color: lastHex }), "Save bar color")) {
-        renderColorWheel();
+        // Awaited so a DOM throw inside renderColorWheel (it has no try/catch
+        // of its own) can't become an unhandled rejection nobody sees.
+        await renderColorWheel();
         return;
       }
       V.ui.toast(`Bar color: ${lastHex}`);
@@ -199,7 +201,11 @@ window.Voisr = window.Voisr || {};
       }
 
       // Hand `cfg` down rather than let each re-fetch it (see renderThemes).
-      await Promise.all([renderThemes(cfg), renderColorWheel(cfg)]);
+      // A null cfg here already means get_config failed and toasted once
+      // above -- calling these with nothing to hand down would each re-fetch,
+      // each fail the same way, and each toast the same failure a second and
+      // third time, which is exactly what `known` exists to prevent.
+      if (cfg) await Promise.all([renderThemes(cfg), renderColorWheel(cfg)]);
     } catch (e) {
       V.ui.toast("Settings failed to load");
     }

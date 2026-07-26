@@ -78,20 +78,31 @@ window.Voisr = window.Voisr || {};
     $("#record-btn").addEventListener("click", V.views.home.toggleRecord);
     $("#dict-form").addEventListener("submit", V.views.dictionary.addEntry);
     $("#paste-toggle").addEventListener("change", async (e) => {
-      await V.api().set_config({ paste: e.target.checked });
+      // Same contract as settings.js's launch-toggle: a failed write must
+      // never leave the checkbox claiming a state the app isn't actually in.
+      const res = await V.ui.tryApi(
+        V.api().set_config({ paste: e.target.checked }), "Save auto-paste");
+      if (!res) { e.target.checked = !e.target.checked; return; }
       V.ui.toast(e.target.checked ? "Auto-paste enabled" : "Auto-paste disabled");
     });
     $("#widget-toggle").addEventListener("change", async (e) => {
-      await V.api().set_config({ show_widget: e.target.checked });
+      const res = await V.ui.tryApi(
+        V.api().set_config({ show_widget: e.target.checked }), "Save recording widget");
+      if (!res) { e.target.checked = !e.target.checked; return; }
       V.ui.toast(e.target.checked ? "Recording widget on" : "Recording widget off");
     });
     $("#theme-grid").addEventListener("click", async (e) => {
       const btn = e.target.closest(".theme-opt");
       if (!btn) return;
-      await V.api().set_config({ pill_theme: btn.dataset.value });
-      V.ui.toast(`Pill theme: ${btn.querySelector(".theme-name").textContent}`);
+      const res = await V.ui.tryApi(
+        V.api().set_config({ pill_theme: btn.dataset.value }), "Save pill theme");
+      // Re-render regardless: on success this reflects the newly active
+      // theme, on failure it puts the "active" pill back on what is really
+      // stored -- the grid's equivalent of reverting a toggle.
       V.views.settings.renderThemes();
       V.views.settings.renderColorWheel();
+      if (!res) return;
+      V.ui.toast(`Pill theme: ${btn.querySelector(".theme-name").textContent}`);
     });
     // pushed from Python after each dictation (hotkey ones land while the
     // dashboard is open) — refresh whichever view is on screen
@@ -123,8 +134,11 @@ window.Voisr = window.Voisr || {};
     V.views.settings.init();
     V.palette.init();
 
-    const cfg = await V.api().get_config();
-    V.applyAppearance(cfg.appearance || "system");
+    // The app still has to start even if this read fails, so fall back to
+    // "system" rather than block boot -- tryApi's toast is enough to say why
+    // appearance may not match what was saved.
+    const cfg = await V.ui.tryApi(V.api().get_config(), "Load settings");
+    V.applyAppearance((cfg && cfg.appearance) || "system");
 
     show("home");
   }
