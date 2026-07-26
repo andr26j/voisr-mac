@@ -62,13 +62,15 @@ test("match is a subsequence matcher, not a substring matcher", () => {
 
 test("match requires the query's characters in order", () => {
   const items = [{ id: "search", title: "Search history" }];
-  assert.deepEqual(ids("yhs", items), [], "reversed order must not match");
+  // "yhs" does not match "Search history" in order, but the search command is pinned as a fallback.
+  assert.deepEqual(ids("yhs", items), ["search"], "reversed order doesn't match, search pinned as fallback");
   assert.deepEqual(ids("sh", items), ["search"]);
 });
 
 test("match drops items that do not contain the whole query", () => {
-  assert.deepEqual(ids("zzz"), []);
-  assert.deepEqual(ids("dictationz"), [], "one unmatched character is enough to exclude");
+  // Queries that match nothing still pin the search command as a fallback.
+  assert.deepEqual(ids("zzz"), ["search"], "no matches, search pinned as fallback");
+  assert.deepEqual(ids("dictationz"), ["search"], "one unmatched character is enough to exclude, search pinned");
   assert.ok(!ids("appearance").includes("home"));
 });
 
@@ -95,4 +97,51 @@ test("match keeps the real command set usefully filtered", () => {
   assert.ok(out.includes("dictate"), "Start dictation");
   assert.ok(out.includes("dictionary"), "Go to Dictionary");
   assert.ok(!out.includes("home"), "Go to Home has no 'd'");
+});
+
+test("match pins the search command as a fallback for arbitrary queries", () => {
+  // A query with no matching commands should still offer search.
+  const result = ids("brunswick");
+  assert.ok(result.includes("search"), "search command should be in results");
+  assert.equal(result[result.length - 1], "search", "search should be last when it's a fallback");
+});
+
+test("match does not pin the search command when the query is empty", () => {
+  // Empty query returns all commands unchanged.
+  const result = ids("");
+  const expectedOrder = COMMANDS.map((c) => c.id);
+  assert.deepEqual(result, expectedOrder, "empty query should return all commands in original order");
+});
+
+test("match preserves search command's natural ranking when it matches normally", () => {
+  // "sh" matches "Search history" at the 's' (index 0) and "push-to-talk" much later.
+  // So "Search history" should rank first by its normal scoring, not pinned at the end.
+  const result = ids("sh");
+  assert.equal(result[0], "search", "search should rank first when it matches early");
+  // Verify "hotkey" (Change push-to-talk key) comes after.
+  assert.ok(result.indexOf("search") < result.indexOf("hotkey"),
+    "search should come before hotkey in the ranking");
+});
+
+test("match ensures search command appears exactly once in all result sets", () => {
+  // Verify no duplicates across multiple queries.
+  for (const query of ["", "sh", "brunswick", "go", "toggle"]) {
+    const result = ids(query);
+    const searchCount = result.filter((id) => id === "search").length;
+    assert.equal(searchCount, 1,
+      `search should appear exactly once for query "${query}", got ${searchCount}`);
+  }
+});
+
+test("match preserves order of matched commands before adding pinned search", () => {
+  // Query that matches multiple commands: "go" should match "Go to Home", "Go to History", "Go to Dictionary".
+  const result = ids("go");
+  const goCommands = result.filter((id) => id.startsWith("home") || id.startsWith("history") || id.startsWith("dictionary"));
+  // These should appear in their earliest-first-match order, not affected by search pinning.
+  const expectedOrder = ["home", "history", "dictionary"];
+  assert.ok(
+    result.indexOf("home") < result.indexOf("history") &&
+    result.indexOf("history") < result.indexOf("dictionary"),
+    "go-prefixed commands should maintain their matched order"
+  );
 });
