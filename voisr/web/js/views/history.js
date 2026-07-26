@@ -17,18 +17,14 @@ window.Voisr = window.Voisr || {};
     // for a row that never went anywhere.
     if (!await V.ui.tryApi(V.api().delete_history_item(item.id), "Delete dictation")) return;
     await render();
-    V.ui.toast("Dictation deleted", {
-      actionLabel: "Undo",
-      onAction: async () => {
-        const restored = await V.ui.tryApi(
-          V.api().restore_history_item(item), "Restore dictation");
-        // Re-render either way: on failure the list must show what is really
-        // there, not what we hoped. Undo is the only safety net left on
-        // delete, so a restore that failed must say so rather than toast
-        // "Restored" over a dictation that is actually gone.
-        await render();
-        if (restored) V.ui.toast("Restored");
-      },
+    /* One live undo, always current: deleting again inside the window
+       upgrades this toast to "N dictations deleted" and its Undo restores the
+       whole batch. The wording, the batching and the honest partial-failure
+       reporting all live in V.ui.offerDictationUndo, which home.js shares --
+       both surfaces render the same rows and must behave identically. */
+    V.ui.offerDictationUndo({
+      restore: () => V.ui.tryApi(V.api().restore_history_item(item), "Restore dictation"),
+      refresh: render,
     });
   }
 

@@ -290,25 +290,208 @@ test("the queue keeps only the newest three plain toasts", (t) => {
   assert.equal(toastHost.hidden, true, "nothing else was queued");
 });
 
-test("the cap never evicts a queued undo", (t) => {
+/* ---------- the coalescing undo ----------
+
+   REPLACES two tests that pinned the previous model:
+
+     - "the cap never evicts a queued undo"
+     - "action toasts are never dropped even when they alone exceed the cap"
+
+   Both pinned a cap *exemption* for action toasts, which existed because a
+   dropped Undo is permanent data loss. The exemption was the wrong fix: it
+   let undos pile up FIFO, so the mistake you most want back surfaced last,
+   every one of them read the same text with no row identity, and clicking one
+   promoted the *next* undo into the host instead of the confirmation.
+
+   The replacement is coalescing: one live undo, always current. Their
+   replacements below pin that instead —
+   "a burst of deletes leaves exactly one live undo, never a queue of them"
+   is the direct counterpart of the second test (N deletes, one toast rather
+   than N), and "chatter can no longer evict an undo, because an undo is never
+   queued" is the direct counterpart of the first (the guarantee survives, but
+   structurally rather than by exemption). The plain cap of three is unchanged
+   and still pinned by "the queue keeps only the newest three plain toasts"
+   above, which now runs against an exemption-free cap. */
+
+/* Lets the async undo chain (restore -> refresh -> confirmation toast)
+   settle: microtasks drain fully before a macrotask runs. */
+const settle = () => new Promise((r) => setImmediate(r));
+
+/* What the user can actually read: a hidden host shows nothing at all,
+   whatever stale children it is still holding. */
+const shown = () => (toastHost.hidden ? "" : toastMsg());
+
+/* A stand-in for one delete. `restore` is what history.js/home.js inject —
+   here it just records the id and reports success or failure. */
+function deleter(ui, log, ok = () => true) {
+  return (id) => ui.offerDictationUndo({
+    restore: async () => { log.push(id); return ok(id); },
+    refresh: async () => { log.push(`refresh:${id}`); },
+  });
+}
+
+test("a second delete upgrades the live undo in place instead of queueing", (t) => {
   const ui = freshUi(t);
-  let undone = false;
+  const log = [];
+  const del = deleter(ui, log);
 
-  ui.toast("Deleted A", { actionLabel: "Undo", onAction: () => {} });
-  ui.toast("chatter 1");
-  // A second delete while A's undo is up: this one MUST survive the cap. It
-  // is the only recovery path for a row the user just deleted, which is the
-  // whole reason the queue exists.
-  ui.toast("Deleted B", { actionLabel: "Undo", onAction: () => { undone = true; } });
-  for (const m of ["chatter 2", "chatter 3", "chatter 4", "chatter 5"]) ui.toast(m);
+  del("a1");
+  assert.equal(toastMsg(), "Dictation deleted", "one delete reads in the singular");
 
+  del("a2");
+  assert.equal(toastMsg(), "2 dictations deleted",
+    "the second delete rewrites the live toast rather than lining up behind it");
+  assert.equal(toastHost.children.filter((c) => c && c.className === "toast-action").length, 1,
+    "exactly one Undo button, not one per delete");
+
+  del("a3");
+  assert.equal(toastMsg(), "3 dictations deleted");
+
+  // Nothing is waiting behind it: the window ends and the host goes empty.
   endOfActionToast(t);
-  assert.equal(toastMsg(), "Deleted B", "the queued undo kept its place at the head");
-  assert.ok(toastBtn(), "and it still has a live button");
-  toastBtn().dispatch("click");
-  assert.equal(undone, true);
+  assert.equal(toastHost.hidden, true, "no queued undos were left over");
+});
 
-  // Three survivors total: the undo plus the newest two chatter messages.
+test("the coalesced Undo restores every delete in the batch", async (t) => {
+  const ui = freshUi(t);
+  const log = [];
+  const del = deleter(ui, log);
+
+  del("a1");
+  del("a2");
+  toastBtn().dispatch("click");
+  await settle();
+
+  assert.deepEqual(log.filter((l) => !l.startsWith("refresh")), ["a1", "a2"],
+    "both rows were restored, not just the one the toast was first raised for");
+  assert.equal(toastMsg(), "Restored 2 dictations");
+});
+
+test("clicking Undo shows the result, never another delete toast (H4 regression)", async (t) => {
+  /* The bug that blocked H4. With one queued undo per delete, clicking the
+     first drained the *second* into the host: the toast still read
+     "Dictation deleted" with an Undo button, which reads as "my click didn't
+     register" — and clicking again undid a different row. */
+  const ui = freshUi(t);
+  const log = [];
+  const del = deleter(ui, log);
+
+  del("a1");
+  del("a2");
+  toastBtn().dispatch("click");
+
+  assert.equal(shown(), "",
+    "the undo is dismissed on click and no second 'Dictation deleted' takes its place");
+
+  await settle();
+  assert.equal(shown(), "Restored 2 dictations", "the confirmation is what the user sees");
+  assert.equal(toastBtn(), null, "and it carries no further Undo");
+});
+
+test("upgrading the undo restarts its dismissal window", (t) => {
+  const ui = freshUi(t);
+  const log = [];
+  const del = deleter(ui, log);
+
+  del("a1");
+  t.mock.timers.tick(4000);          // 1s left on the first delete's window
+  del("a2");
+  assert.equal(toastMsg(), "2 dictations deleted");
+
+  t.mock.timers.tick(1500);          // t = 5.5s: past the FIRST delete's 5s
+  assert.equal(toastHost.hidden, false, "the window is measured from the most recent delete");
+  assert.ok(toastBtn(), "the Undo is still clickable");
+
+  endOfActionToast(t);               // t = 9.2s: the second delete's window ends
+  assert.equal(toastHost.hidden, true);
+});
+
+test("the batch clears when the undo expires, so a later delete starts at one", (t) => {
+  const ui = freshUi(t);
+  const log = [];
+  const del = deleter(ui, log);
+
+  del("a1");
+  endOfActionToast(t);
+  assert.equal(toastHost.hidden, true);
+
+  del("a2");
+  assert.equal(toastMsg(), "Dictation deleted",
+    "a delete after the window must not resurrect the long-gone batch");
+
+  toastBtn().dispatch("click");
+  assert.deepEqual(log.filter((l) => !l.startsWith("refresh")), ["a2"],
+    "and its Undo restores only the new delete");
+});
+
+test("a partial restore reports what actually came back, not full success", async (t) => {
+  const ui = freshUi(t);
+  const log = [];
+  // The middle restore fails — tryApi answers null on an {error} response.
+  const del = deleter(ui, log, (id) => (id === "a2" ? null : true));
+
+  del("a1"); del("a2"); del("a3");
+  assert.equal(toastMsg(), "3 dictations deleted");
+
+  toastBtn().dispatch("click");
+  await settle();
+
+  assert.equal(toastMsg(), "Restored 2 of 3 dictations");
+  assert.doesNotMatch(toastMsg(), /Restored 3/, "a partial restore must never read as complete");
+});
+
+test("a restore that fails outright leaves the failure message as the last word", async (t) => {
+  const ui = freshUi(t);
+  const del = (id) => ui.offerDictationUndo({
+    // what tryApi does on an {error}: toast the reason, answer null
+    restore: async () => { ui.toast("Restore dictation failed: disk full"); return null; },
+    refresh: async () => {},
+  });
+
+  del("a1"); del("a2");
+  toastBtn().dispatch("click");
+  await settle();
+
+  assert.equal(toastMsg(), "Restore dictation failed: disk full",
+    "nothing may be layered over the real reason when nothing came back");
+});
+
+test("a burst of deletes leaves exactly one live undo, never a queue of them", async (t) => {
+  const ui = freshUi(t);
+  const log = [];
+  const del = deleter(ui, log);
+
+  for (const id of ["a1", "a2", "a3", "a4", "a5"]) del(id);
+
+  assert.equal(toastMsg(), "5 dictations deleted", "five deletes, one always-current toast");
+  assert.ok(toastBtn());
+
+  toastBtn().dispatch("click");
+  await settle();
+  assert.deepEqual(log.filter((l) => !l.startsWith("refresh")), ["a1", "a2", "a3", "a4", "a5"],
+    "and it restores all five");
+  assert.equal(shown(), "Restored 5 dictations");
+});
+
+test("chatter can no longer evict an undo, because an undo is never queued", (t) => {
+  const ui = freshUi(t);
+  const log = [];
+  const del = deleter(ui, log);
+
+  del("a1");
+  for (const m of ["chatter 1", "chatter 2", "chatter 3", "chatter 4", "chatter 5"]) ui.toast(m);
+  del("a2");
+
+  // The second delete reaches the live undo over the top of five queued
+  // messages -- under the old model it joined the back of that queue and
+  // depended on a cap exemption to survive at all.
+  assert.equal(toastMsg(), "2 dictations deleted");
+  assert.ok(toastBtn(), "the undo is on screen and clickable the whole time");
+
+  toastBtn().dispatch("click");
+  // The chatter is still capped to three and still drains oldest-first.
+  assert.equal(toastMsg(), "chatter 3");
+  endOfPlainToast(t);
   assert.equal(toastMsg(), "chatter 4");
   endOfPlainToast(t);
   assert.equal(toastMsg(), "chatter 5");
@@ -316,18 +499,24 @@ test("the cap never evicts a queued undo", (t) => {
   assert.equal(toastHost.hidden, true);
 });
 
-test("action toasts are never dropped even when they alone exceed the cap", (t) => {
+test("a dictionary removal keeps its own batch, separate from dictations", (t) => {
   const ui = freshUi(t);
+  const log = [];
 
-  ui.toast("Deleted A", { actionLabel: "Undo", onAction: () => {} });
-  for (const m of ["Deleted B", "Deleted C", "Deleted D", "Deleted E"]) {
-    ui.toast(m, { actionLabel: "Undo", onAction: () => {} });
-  }
+  ui.offerEntryUndo({ restore: async () => { log.push("e1"); return true; }, refresh: async () => {} });
+  assert.equal(toastMsg(), "Entry removed");
 
-  const seen = [];
-  for (let i = 0; i < 4; i += 1) { endOfActionToast(t); seen.push(toastMsg()); }
-  assert.deepEqual(seen, ["Deleted B", "Deleted C", "Deleted D", "Deleted E"],
-    "four queued undos all survive a cap of three");
+  ui.offerEntryUndo({ restore: async () => { log.push("e2"); return true; }, refresh: async () => {} });
+  assert.equal(toastMsg(), "2 entries removed", "entries coalesce the same way dictations do");
+
+  // A dictation delete must not be swept into the entry batch -- different
+  // things, so it waits its turn rather than upgrading someone else's undo.
+  ui.offerDictationUndo({ restore: async () => { log.push("a1"); return true; }, refresh: async () => {} });
+  assert.equal(toastMsg(), "2 entries removed", "the live entry undo is not hijacked");
+
+  endOfActionToast(t);
+  assert.equal(toastMsg(), "Dictation deleted");
+  assert.ok(toastBtn());
 });
 
 /* GAP 2: a confirmation raised by onAction() must not be clobbered by the

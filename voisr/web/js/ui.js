@@ -43,14 +43,28 @@ window.Voisr = window.Voisr || {};
   // True from the moment an actionable toast (Undo, etc.) is shown until it
   // is either clicked or fully dismissed. `toast()` calls `replaceChildren`
   // on the shared host, which would otherwise tear a pending action's button
-  // out of the DOM before the user gets a chance to click it (History and
-  // Dictionary both rely on this for undo-delete). Chosen fix: queue rather
-  // than drop -- a toast requested while an action is live waits its turn
-  // instead of clobbering it, so no undo opportunity is ever silently lost.
+  // out of the DOM before the user gets a chance to click it (History, Home
+  // and Dictionary all rely on this for undo-delete). So an ordinary toast
+  // raised while an action is live waits its turn instead of clobbering it.
+  // A *second removal* is the one thing that does not wait: it upgrades the
+  // live undo in place rather than queueing another one -- see offerUndo.
   let toastActionLive = false;
+  /* The live toast's one-shot resolve notification (opts.onResolve), or null.
+     Taken-and-nulled by resolveLiveToast(), which every exit path calls --
+     click, expiry/fade, replacement by a newer toast, and eviction from the
+     queue. So an owner that holds state on the toast's behalf (the undo
+     batches below) learns exactly once that its toast is off screen, and no
+     path can notify twice. */
+  let toastResolve = null;
 
   function hasAction(opts) {
     return !!(opts && opts.onAction && opts.actionLabel);
+  }
+
+  function resolveLiveToast() {
+    const fn = toastResolve;
+    toastResolve = null;
+    if (fn) fn();
   }
 
   function toast(msg, opts) {
@@ -70,18 +84,15 @@ window.Voisr = window.Voisr || {};
        long after the user has moved on. The newest message is the most
        relevant, so the oldest goes.
 
-       Exception, deliberate: an action-bearing toast is never evicted.
-       Deleting rows in quick succession while an undo is up queues one Undo
-       per delete, and silently dropping one destroys the only recovery path
-       for a row the user just deleted -- the exact loss this queue exists to
-       prevent. So the cap evicts the oldest *droppable* (action-free) entry,
-       and when every queued entry carries an action the queue is allowed past
-       the cap. Its length is then bounded by the user's own deliberate
-       deletes rather than by incidental chatter, which is a safe bound. */
+       Plain "drop the oldest", with no exemption for action toasts: an undo
+       is never *queued* any more. A delete that lands while an undo is live
+       upgrades that undo in place (see offerUndo below), so each undo batch
+       occupies at most one slot and that slot is the live toast. Dropping an
+       entry still resolves it, so an owner never keeps state for a toast the
+       user will never see. */
     while (toastQueue.length > TOAST_QUEUE_MAX) {
-      const oldestDroppable = toastQueue.findIndex(([, o]) => !hasAction(o));
-      if (oldestDroppable === -1) break;
-      toastQueue.splice(oldestDroppable, 1);
+      const [, dropped] = toastQueue.shift();
+      if (dropped && dropped.onResolve) dropped.onResolve();
     }
   }
 
@@ -92,13 +103,20 @@ window.Voisr = window.Voisr || {};
     }
   }
 
-  function showToast(msg, opts) {
+  /* `upgrade` is set only by offerUndo when it re-renders the toast that is
+     already on screen for the same batch. That is a continuation of the live
+     toast, not a resolution of it, so the resolve notification is suppressed
+     (the batch must survive) while the dismissal timer below is restarted
+     from scratch (the window is measured from the most recent delete). */
+  function showToast(msg, opts, upgrade) {
     const { actionLabel, onAction, ms } = opts || {};
     const withAction = hasAction(opts);
     const host = document.getElementById("toast");
     clearTimeout(toastTimer);
     clearTimeout(toastFadeTimer);
+    if (!upgrade) resolveLiveToast();
     toastActionLive = false;
+    toastResolve = (opts && opts.onResolve) || null;
     host.replaceChildren(el("span", { text: msg }));
     if (withAction) {
       toastActionLive = true;
@@ -121,6 +139,7 @@ window.Voisr = window.Voisr || {};
                keeps this ordering exact -- no timer, no delay. */
             const seq = toastSeq;
             onAction();
+            resolveLiveToast();
             if (toastSeq === seq) advanceToastQueue();
           },
         },
@@ -133,10 +152,125 @@ window.Voisr = window.Voisr || {};
       toastFadeTimer = setTimeout(() => {
         host.hidden = true;
         toastActionLive = false;
+        resolveLiveToast();
         advanceToastQueue();
       }, 200);
     }, ms || (withAction ? 5000 : 3500));
   }
+
+  /* ---------- coalescing undo (shared by home, history and dictionary) ----
+
+     Removal is a hard delete on the Python side; the only recovery handle is
+     the closure the live toast holds. Queueing one undo per removal made that
+     handle unusable in a burst: FIFO surfaced them oldest-first (the mistake
+     you want back is the one that appears last), every one of them read the
+     same text with no row identity, and clicking one promoted the *next* undo
+     into the host so the confirmation was buried -- indistinguishable from
+     "my click didn't register", and clicking again undid a different row.
+
+     Instead there is one live undo, always current. A removal that lands
+     while an undo is live upgrades it in place:
+
+        1 -> "Dictation deleted"    Undo restores that one
+        2 -> "2 dictations deleted" Undo restores both
+        N -> "N dictations deleted" Undo restores all N
+
+     Consequences, deliberate: the undo queue is length 1 by construction (so
+     the cap above needs no exemption), and there is never a queued action
+     toast to bury a confirmation behind. */
+
+  const undoBatches = new Map();
+
+  function batchFor(key) {
+    let batch = undoBatches.get(key);
+    if (!batch) {
+      batch = { entries: [], spec: null };
+      /* One stable function per batch, used for two things: it is the
+         resolve notification, and its identity is how offerUndo recognises
+         its own toast among whatever else is on screen. */
+      batch.resolve = () => { batch.entries = []; };
+      undoBatches.set(key, batch);
+    }
+    return batch;
+  }
+
+  /* entry: { restore: () => Promise<truthy on success>, refresh: () => Promise }
+     spec:  { message(n) -> string, done(ok, n) -> string|null } */
+  function offerUndo(key, spec, entry) {
+    const batch = batchFor(key);
+    batch.spec = spec;
+    batch.entries.push(entry);
+    const msg = spec.message(batch.entries.length);
+    const opts = {
+      actionLabel: "Undo",
+      onAction: () => runUndo(batch),
+      onResolve: batch.resolve,
+    };
+    if (toastActionLive && toastResolve === batch.resolve) {
+      toastSeq += 1;
+      showToast(msg, opts, true);   // upgrade in place, timer restarted
+      return;
+    }
+    /* Only reachable when a *different* batch's undo owns the host (removing
+       a dictionary entry within seconds of deleting a dictation, i.e. after
+       switching views). This batch's toast is then waiting in the queue --
+       update it in place rather than adding a second one, so the queue still
+       never holds two undos for the same batch. */
+    const queued = toastQueue.find(([, o]) => o && o.onResolve === batch.resolve);
+    if (queued) {
+      toastSeq += 1;
+      queued[0] = msg;
+      queued[1] = opts;
+      return;
+    }
+    toast(msg, opts);
+  }
+
+  async function runUndo(batch) {
+    /* Take the entries synchronously. The click handler resolves the toast
+       immediately after calling this, and resolving empties the batch. */
+    const entries = batch.entries;
+    const spec = batch.spec;
+    batch.entries = [];
+    if (!entries.length) return;
+
+    let ok = 0;
+    const refreshes = [];
+    for (const entry of entries) {
+      if (await entry.restore()) ok += 1;
+      if (entry.refresh && !refreshes.includes(entry.refresh)) refreshes.push(entry.refresh);
+    }
+    // Re-render either way: on a partial or total failure the list must show
+    // what is really there, not what we hoped.
+    for (const refresh of refreshes) await refresh();
+
+    /* Never claim more than actually came back. `done` returns null when
+       there is nothing honest left to add -- with nothing restored, tryApi's
+       own failure toast is the truthful last word and must not be replaced. */
+    const msg = spec.done(ok, entries.length);
+    if (msg) toast(msg);
+  }
+
+  const DICTATION_UNDO = {
+    message: (n) => (n === 1 ? "Dictation deleted" : `${n} dictations deleted`),
+    done: (ok, n) => (ok === n ? (n === 1 ? "Restored" : `Restored ${n} dictations`)
+                    : ok ? `Restored ${ok} of ${n} dictations`
+                    : null),
+  };
+
+  const ENTRY_UNDO = {
+    message: (n) => (n === 1 ? "Entry removed" : `${n} entries removed`),
+    // A single clean restore stays silent, as it always has: the row
+    // reappearing in the list is the confirmation.
+    done: (ok, n) => (ok === n ? (n === 1 ? null : `Restored ${n} entries`)
+                    : ok ? `Restored ${ok} of ${n} entries`
+                    : null),
+  };
+
+  /* home.js and history.js render the same rows and must offer the same undo,
+     so they share one batch ("dictation") and one set of wordings. */
+  const offerDictationUndo = (entry) => offerUndo("dictation", DICTATION_UNDO, entry);
+  const offerEntryUndo = (entry) => offerUndo("entry", ENTRY_UNDO, entry);
 
   /* Single convention for bridge calls: a thrown bridge error or an {error}
      response becomes a toast, and callers get null back. A view must never
@@ -202,5 +336,6 @@ window.Voisr = window.Voisr || {};
                      html: ICONS.trash, on: { click: (e) => { e.stopPropagation(); onDelete(item); } } }));
   }
 
-  V.ui = { el, $, toast, tryApi, escapeHtml, timeOf, dayOf, formatDuration, ICONS, itemRow };
+  V.ui = { el, $, toast, tryApi, escapeHtml, timeOf, dayOf, formatDuration, ICONS, itemRow,
+           offerDictationUndo, offerEntryUndo };
 })(window.Voisr);

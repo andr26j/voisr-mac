@@ -61,23 +61,32 @@ window.Voisr = window.Voisr || {};
     if (!await V.ui.tryApi(
       V.api().set_config({ dictionary: cfg.dictionary }), "Save dictionary")) return;
     render();
-    V.ui.toast("Entry removed", {
-      actionLabel: "Undo",
-      onAction: async () => {
+    /* Coalesced the same way history's delete is (V.ui.offerUndo): removing
+       several entries in a burst used to queue one identical "Entry removed"
+       per removal, so the undos surfaced oldest-first and clicking one
+       promoted the next into the host instead of showing its result. Its own
+       batch, though -- a dictionary entry and a dictation are different
+       things and must never end up under one "2 items removed".
+
+       Restoring is still per-entry and still re-reads config each time, so
+       the conflict rule below (an edit made after the removal wins) keeps
+       working exactly as it did, key by key. */
+    V.ui.offerEntryUndo({
+      restore: async () => {
         const c = await V.ui.tryApi(V.api().get_config(), "Load dictionary");
-        if (!c) return;
+        if (!c) return false;
         c.dictionary = c.dictionary || {};
         const current = c.dictionary[spoken];
         if (current !== undefined && current !== written) {
           V.ui.toast(`Kept newer edit: ${spoken} → ${current}`);
-          return;
+          return false;
         }
-        if (current === written) return; // already restored, nothing to do
+        if (current === written) return true; // already restored, nothing to do
         c.dictionary[spoken] = written;
-        if (!await V.ui.tryApi(
-          V.api().set_config({ dictionary: c.dictionary }), "Restore entry")) return;
-        render();
+        return !!await V.ui.tryApi(
+          V.api().set_config({ dictionary: c.dictionary }), "Restore entry");
       },
+      refresh: render,
     });
   }
 

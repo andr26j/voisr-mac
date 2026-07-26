@@ -258,10 +258,20 @@ async function mountHistoryWithToast(t, api) {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const env = loadVoisr(["js/ui.js", "js/api.js", "js/views/history.js"]);
   let live = HISTORY.map((i) => ({ ...i }));
+  const restoreCalls = [];
   env.window.pywebview = { api: {
     get_history: async () => live.map((i) => ({ ...i })),
     delete_history_item: async (id) => { live = live.filter((i) => i.id !== id); return { ok: true }; },
-    restore_history_item: async () => ({ ok: true }),
+    /* Mirrors Api.restore_history_item: idempotent by id, preserves ts, so
+       the row really comes back and a row count can be asserted after undo. */
+    restore_history_item: async (item) => {
+      restoreCalls.push(item.id);
+      if (!live.some((i) => i.id === item.id)) {
+        live.push({ ...item });
+        live.sort((a, b) => a.ts - b.ts);
+      }
+      return { ok: true };
+    },
     ...api,
   } };
 
@@ -273,7 +283,7 @@ async function mountHistoryWithToast(t, api) {
   nodes["history-search"].value = "";
 
   await env.V.views.history.render();
-  return { V: env.V, ...nodes };
+  return { V: env.V, restoreCalls, ...nodes };
 }
 
 /* Lets every already-resolved promise in the click -> api -> render chain
@@ -321,6 +331,40 @@ test("undo still confirms Restored when the restore actually succeeds", async (t
   await settle();
 
   assert.match(toastTextOf(toast), /Restored/, "the happy path is unchanged");
+});
+
+/* H4b: two deletes in the same window are one undo, and it restores both.
+   Driven through the real view — real rows, real delete/restore bridge calls —
+   because the count on screen is half of what this guarantees. */
+test("two deletes in a row coalesce into one undo that restores both rows", async (t) => {
+  const h = await mountHistoryWithToast(t, {});
+  const toast = h["toast"], groups = h["history-groups"];
+
+  const deleteFirstRow = () =>
+    byClass(rowsIn(groups)[0], "danger")[0].dispatch("click", { stopPropagation() {} });
+
+  deleteFirstRow();
+  await settle();
+  assert.match(toastTextOf(toast), /Dictation deleted/, "a single delete still reads in the singular");
+
+  deleteFirstRow();
+  await settle();
+
+  assert.equal(rowsIn(groups).length, 1, "two rows are gone");
+  assert.match(toastTextOf(toast), /2 dictations deleted/, "one always-current toast, not two");
+  const undos = toast.children.filter(
+    (c) => c && typeof c === "object" && String(c.className).includes("toast-action"));
+  assert.equal(undos.length, 1, "exactly one Undo button");
+
+  undos[0].dispatch("click");
+  await settle();
+
+  assert.deepEqual([...h.restoreCalls].sort(), ["a1", "a2"],
+    "both deletes were restored, not just the first");
+  assert.equal(rowsIn(groups).length, 3, "the list is whole again");
+  assert.match(toastTextOf(toast), /Restored 2 dictations/);
+  assert.doesNotMatch(toastTextOf(toast), /deleted/,
+    "the confirmation replaces the undo — it is not buried behind another delete toast");
 });
 
 test("a failed delete does not offer an Undo for something still present", async (t) => {

@@ -71,14 +71,9 @@ window.Voisr = window.Voisr || {};
   async function onDelete(item) {
     if (!await V.ui.tryApi(V.api().delete_history_item(item.id), "Delete dictation")) return;
     await render();
-    V.ui.toast("Dictation deleted", {
-      actionLabel: "Undo",
-      onAction: async () => {
-        const restored = await V.ui.tryApi(
-          V.api().restore_history_item(item), "Restore dictation");
-        await render();
-        if (restored) V.ui.toast("Restored");
-      },
+    V.ui.offerDictationUndo({
+      restore: () => V.ui.tryApi(V.api().restore_history_item(item), "Restore dictation"),
+      refresh: render,
     });
   }
 
