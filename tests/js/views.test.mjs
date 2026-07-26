@@ -244,6 +244,118 @@ test("a query that matches nothing empties the list and shows the empty state", 
   assert.equal(search.value, "Altona");
 });
 
+/* ---------- history: undo must never claim a restore that failed ----------
+
+   Undo is the only safety net left on delete (the native confirm() was
+   removed). `restore_history_item` can return {"error": ...} — a read-only
+   history file, a full disk — and the old code toasted "Restored"
+   unconditionally, telling the user their dictation was back when it was
+   gone for good. */
+
+const UNDO_IDS = [...NODE_IDS, "toast"];
+
+async function mountHistoryWithToast(t, api) {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const env = loadVoisr(["js/ui.js", "js/api.js", "js/views/history.js"]);
+  let live = HISTORY.map((i) => ({ ...i }));
+  env.window.pywebview = { api: {
+    get_history: async () => live.map((i) => ({ ...i })),
+    delete_history_item: async (id) => { live = live.filter((i) => i.id !== id); return { ok: true }; },
+    restore_history_item: async () => ({ ok: true }),
+    ...api,
+  } };
+
+  const nodes = {};
+  for (const id of UNDO_IDS) {
+    nodes[id] = makeNode(id === "history-search" ? "input" : "div");
+    env.register(id, nodes[id]);
+  }
+  nodes["history-search"].value = "";
+
+  await env.V.views.history.render();
+  return { V: env.V, ...nodes };
+}
+
+/* Lets every already-resolved promise in the click -> api -> render chain
+   settle: microtasks drain fully before a macrotask runs. */
+const settle = () => new Promise((r) => setImmediate(r));
+
+const toastTextOf = (host) =>
+  host.children.map((c) => (typeof c === "string" ? c : c.textContent)).join(" ");
+const toastActionOf = (host) =>
+  host.children.find((c) => c && typeof c === "object" && String(c.className).includes("toast-action"));
+
+test("undo surfaces a failed restore instead of toasting Restored", async (t) => {
+  const h = await mountHistoryWithToast(t, {
+    restore_history_item: async () => ({ error: "disk full" }),
+  });
+  const toast = h["toast"];
+
+  const row = rowsIn(h["history-groups"])[0];
+  byClass(row, "danger")[0].dispatch("click", { stopPropagation() {} });
+  await settle();
+
+  assert.match(toastTextOf(toast), /Dictation deleted/, "delete still confirms");
+  const undo = toastActionOf(toast);
+  assert.ok(undo, "the delete toast offers an Undo action");
+
+  undo.dispatch("click");
+  await settle();
+
+  const text = toastTextOf(toast);
+  assert.match(text, /Restore dictation failed: disk full/,
+    "the real reason the restore failed must reach the user");
+  assert.doesNotMatch(text, /Restored/,
+    "a failed restore must never be reported as a success");
+});
+
+test("undo still confirms Restored when the restore actually succeeds", async (t) => {
+  const h = await mountHistoryWithToast(t, {});
+  const toast = h["toast"];
+
+  const row = rowsIn(h["history-groups"])[0];
+  byClass(row, "danger")[0].dispatch("click", { stopPropagation() {} });
+  await settle();
+
+  toastActionOf(toast).dispatch("click");
+  await settle();
+
+  assert.match(toastTextOf(toast), /Restored/, "the happy path is unchanged");
+});
+
+test("a failed delete does not offer an Undo for something still present", async (t) => {
+  const h = await mountHistoryWithToast(t, {
+    delete_history_item: async () => ({ error: "read-only history" }),
+  });
+  const toast = h["toast"];
+
+  const row = rowsIn(h["history-groups"])[0];
+  byClass(row, "danger")[0].dispatch("click", { stopPropagation() {} });
+  await settle();
+
+  const text = toastTextOf(toast);
+  assert.match(text, /Delete dictation failed: read-only history/);
+  assert.doesNotMatch(text, /Dictation deleted/, "nothing was deleted, so say nothing was");
+  assert.equal(toastActionOf(toast), undefined, "no Undo for a delete that never happened");
+  assert.equal(rowsIn(h["history-groups"]).length, 3, "the row is still there");
+});
+
+test("history render surfaces a bridge failure rather than blanking the pane", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const env = loadVoisr(["js/ui.js", "js/api.js", "js/views/history.js"]);
+  env.window.pywebview = { api: { get_history: async () => ({ error: "history unreadable" }) } };
+
+  const nodes = {};
+  for (const id of UNDO_IDS) {
+    nodes[id] = makeNode(id === "history-search" ? "input" : "div");
+    env.register(id, nodes[id]);
+  }
+
+  await env.V.views.history.render();
+
+  assert.match(toastTextOf(nodes["toast"]), /Load history failed: history unreadable/);
+});
+
 test("only the last keystroke of a fast burst is applied", async (t) => {
   const h = await mountHistory(t);
   const search = h["history-search"], groups = h["history-groups"];

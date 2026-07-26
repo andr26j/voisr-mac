@@ -7,19 +7,27 @@ window.Voisr = window.Voisr || {};
   let searchDebounceTimer = null;
 
   async function onCopy(item) {
-    await V.api().copy_text(item.text);
+    if (!await V.ui.tryApi(V.api().copy_text(item.text), "Copy")) return;
     V.ui.toast("Copied to clipboard");
   }
 
   async function onDelete(item) {
-    await V.api().delete_history_item(item.id);
+    // Nothing may claim success before the bridge confirms it. A failed
+    // delete must not print "Dictation deleted" and must not offer an Undo
+    // for a row that never went anywhere.
+    if (!await V.ui.tryApi(V.api().delete_history_item(item.id), "Delete dictation")) return;
     await render();
     V.ui.toast("Dictation deleted", {
       actionLabel: "Undo",
       onAction: async () => {
-        await V.api().restore_history_item(item);
+        const restored = await V.ui.tryApi(
+          V.api().restore_history_item(item), "Restore dictation");
+        // Re-render either way: on failure the list must show what is really
+        // there, not what we hoped. Undo is the only safety net left on
+        // delete, so a restore that failed must say so rather than toast
+        // "Restored" over a dictation that is actually gone.
         await render();
-        V.ui.toast("Restored");
+        if (restored) V.ui.toast("Restored");
       },
     });
   }
@@ -155,9 +163,21 @@ window.Voisr = window.Voisr || {};
      Used on view entry, delete/undo, "Load more" and the
      voisr:new-dictation push event -- anywhere the underlying data (not
      just the filter) may have changed. */
+  /* History has exactly one data source, so there is no degraded view to
+     fall back to: on a failed load keep the last good list on screen (the
+     toast already says why it is stale) rather than replacing it with an
+     empty pane. The try/catch is the backstop for anything tryApi cannot
+     see — a DOM mistake in renderList, say — so a throw can never leave the
+     view blank and silent. */
   async function render() {
-    items = await V.api().get_history();
-    renderList();
+    try {
+      const loaded = await V.ui.tryApi(V.api().get_history(), "Load history");
+      if (!loaded) return;
+      items = loaded;
+      renderList();
+    } catch (e) {
+      V.ui.toast("History failed to load");
+    }
   }
 
   function initKeys() {
@@ -170,11 +190,13 @@ window.Voisr = window.Voisr || {};
     });
 
     document.getElementById("history-export").addEventListener("click", async () => {
-      const out = await V.api().export_history("txt");
-      if (out.error) return V.ui.toast(out.error);
-      const saved = await V.api().save_text_file(out.text, out.suggested_name);
-      if (saved.error) return V.ui.toast(saved.error);
-      if (saved.ok) V.ui.toast("History exported");
+      const out = await V.ui.tryApi(V.api().export_history("txt"), "Export history");
+      if (!out) return;
+      const saved = await V.ui.tryApi(
+        V.api().save_text_file(out.text, out.suggested_name), "Save file");
+      // `saved.ok` false is a user cancelling the save panel, not a failure:
+      // stay silent rather than claim an export that did not happen.
+      if (saved && saved.ok) V.ui.toast("History exported");
     });
 
     document.addEventListener("keydown", (e) => {

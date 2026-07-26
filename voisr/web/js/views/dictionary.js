@@ -19,9 +19,16 @@ window.Voisr = window.Voisr || {};
       // Read fresh rather than reuse a closed-over `cfg` -- another commit
       // (or a remove/undo) may have written to config.json since this row
       // was rendered, and a stale copy here would clobber it.
-      const cfg = await V.api().get_config();
+      const cfg = await V.ui.tryApi(V.api().get_config(), "Load dictionary");
+      if (!cfg) { value.textContent = written; return; }
+      cfg.dictionary = cfg.dictionary || {};
       cfg.dictionary[spoken] = next;
-      await V.api().set_config({ dictionary: cfg.dictionary });
+      // A failed write must not leave the new text sitting in the row: the
+      // user would read that as saved. Snap the cell back to what is
+      // actually stored, and let tryApi's toast say why.
+      const saved = await V.ui.tryApi(
+        V.api().set_config({ dictionary: cfg.dictionary }), "Save dictionary");
+      if (!saved) { value.textContent = written; return; }
       V.ui.toast(`Updated: ${spoken} → ${next}`);
       render();
     }
@@ -45,14 +52,21 @@ window.Voisr = window.Voisr || {};
   }
 
   async function removeEntry(spoken, written) {
-    const cfg = await V.api().get_config();
+    const cfg = await V.ui.tryApi(V.api().get_config(), "Load dictionary");
+    if (!cfg) return;
+    cfg.dictionary = cfg.dictionary || {};
     delete cfg.dictionary[spoken];
-    await V.api().set_config({ dictionary: cfg.dictionary });
+    // Same contract as history's delete: no "Entry removed", and no Undo
+    // offer, until the write is confirmed.
+    if (!await V.ui.tryApi(
+      V.api().set_config({ dictionary: cfg.dictionary }), "Save dictionary")) return;
     render();
     V.ui.toast("Entry removed", {
       actionLabel: "Undo",
       onAction: async () => {
-        const c = await V.api().get_config();
+        const c = await V.ui.tryApi(V.api().get_config(), "Load dictionary");
+        if (!c) return;
+        c.dictionary = c.dictionary || {};
         const current = c.dictionary[spoken];
         if (current !== undefined && current !== written) {
           V.ui.toast(`Kept newer edit: ${spoken} → ${current}`);
@@ -60,14 +74,26 @@ window.Voisr = window.Voisr || {};
         }
         if (current === written) return; // already restored, nothing to do
         c.dictionary[spoken] = written;
-        await V.api().set_config({ dictionary: c.dictionary });
+        if (!await V.ui.tryApi(
+          V.api().set_config({ dictionary: c.dictionary }), "Restore entry")) return;
         render();
       },
     });
   }
 
+  /* One data source, so the same rule as history's render(): on a failed
+     load keep the last good list rather than blanking the pane. */
   async function render() {
-    const cfg = await V.api().get_config();
+    try {
+      await renderInner();
+    } catch (e) {
+      V.ui.toast("Dictionary failed to load");
+    }
+  }
+
+  async function renderInner() {
+    const cfg = await V.ui.tryApi(V.api().get_config(), "Load dictionary");
+    if (!cfg) return;
     const all = Object.entries(cfg.dictionary || {});
     const search = document.getElementById("dict-search");
     search.hidden = all.length < SEARCH_AT;
@@ -84,10 +110,14 @@ window.Voisr = window.Voisr || {};
     const spoken = $("#dict-spoken").value.trim().toLowerCase();
     const written = $("#dict-written").value.trim();
     if (!spoken || !written) return;
-    const cfg = await V.api().get_config();
+    const cfg = await V.ui.tryApi(V.api().get_config(), "Load dictionary");
+    if (!cfg) return;
     const dict = cfg.dictionary || {};
     dict[spoken] = written;
-    await V.api().set_config({ dictionary: dict });
+    // Only clear the form once the entry is really stored — wiping the two
+    // fields on a failed write would throw away what the user just typed.
+    if (!await V.ui.tryApi(
+      V.api().set_config({ dictionary: dict }), "Save dictionary")) return;
     $("#dict-spoken").value = "";
     $("#dict-written").value = "";
     V.ui.toast(`Added: ${spoken} → ${written}`);

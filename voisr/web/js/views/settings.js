@@ -7,9 +7,17 @@ window.Voisr = window.Voisr || {};
     return node;
   }
 
-  async function renderThemes() {
+  /* `known` lets render() hand down the config it has already fetched, so a
+     Settings render costs one get_config rather than three — and a failed
+     config read toasts once, not three times over. Called with no argument
+     from main.js's theme-change hook, where there is nothing to hand down. */
+  async function renderThemes(known) {
     const $ = V.ui.$;
-    const [cfg, themes] = await Promise.all([V.api().get_config(), V.api().get_pill_themes()]);
+    const [cfg, themes] = await Promise.all([
+      known || V.ui.tryApi(V.api().get_config(), "Load settings"),
+      V.ui.tryApi(V.api().get_pill_themes(), "Load pill themes"),
+    ]);
+    if (!cfg || !themes) return;
     const active = cfg.pill_theme || "classic";
     $("#theme-grid").replaceChildren(...themes.map((t) =>
       V.ui.el("button", {
@@ -85,9 +93,10 @@ window.Voisr = window.Voisr || {};
     }
   }
 
-  async function renderColorWheel() {
+  async function renderColorWheel(known) {
     const $ = V.ui.$;
-    const cfg = await V.api().get_config();
+    const cfg = known || await V.ui.tryApi(V.api().get_config(), "Load settings");
+    if (!cfg) return;
     $("#color-preview").dataset.theme = cfg.pill_theme || "classic";
     setColorUi(cfg.pill_color || null);
   }
@@ -114,11 +123,19 @@ window.Voisr = window.Voisr || {};
     cv.addEventListener("pointerup", async () => {
       if (!dragging) return;
       dragging = false;
-      await V.api().set_config({ pill_color: lastHex });
+      // pick() has already painted the new colour as a live preview. If the
+      // write fails, that preview is a lie about what the pill will actually
+      // do, so re-read and repaint from what is really stored.
+      if (!await V.ui.tryApi(
+        V.api().set_config({ pill_color: lastHex }), "Save bar color")) {
+        renderColorWheel();
+        return;
+      }
       V.ui.toast(`Bar color: ${lastHex}`);
     });
     $("#color-reset").addEventListener("click", async () => {
-      await V.api().set_config({ pill_color: null });
+      if (!await V.ui.tryApi(
+        V.api().set_config({ pill_color: null }), "Reset bar color")) return;
       setColorUi(null);
       V.ui.toast("Bar color: theme default");
     });
@@ -145,31 +162,47 @@ window.Voisr = window.Voisr || {};
      theme that was never applied or persisted. */
   let appliedAppearance = "system";
 
+  /* Settings is a list of independent rows fed by four independent bridge
+     calls, so — like home.js's render() — each row is guarded on its own
+     null and a failure degrades that row only. `models.models` on a failed
+     get_models used to throw and blank every other row with it. */
   async function render() {
     const $ = V.ui.$;
-    const [cfg, status, models, hotkey] = await Promise.all([
-      V.api().get_config(), V.api().get_hotkey_status(),
-      V.api().get_models(), V.api().hotkey_display(),
-    ]);
-    $("#paste-toggle").checked = !!cfg.paste;
-    $("#widget-toggle").checked = cfg.show_widget !== false;
-    $("#hotkey-current").textContent = hotkey.display || "unset";
-    $("#hotkey-status").textContent = status.status;
-    appliedAppearance = cfg.appearance || "system";
-    $("#appearance-select").value = appliedAppearance;
-    $("#launch-toggle").checked = !!cfg.launch_at_login;
+    try {
+      const [cfg, status, models, hotkey] = await Promise.all([
+        V.ui.tryApi(V.api().get_config(), "Load settings"),
+        V.ui.tryApi(V.api().get_hotkey_status(), "Load shortcut status"),
+        V.ui.tryApi(V.api().get_models(), "Load models"),
+        V.ui.tryApi(V.api().hotkey_display(), "Load shortcut"),
+      ]);
 
-    const select = $("#model-select");
-    select.replaceChildren(...models.models.map((m) =>
-      V.ui.el("option", {
-        value: m.value,
-        text: m.installed ? m.label : `${m.label} (not installed)`,
-        disabled: !m.installed || null,
-      })));
-    select.value = models.active || (models.models.find((m) => m.installed) || {}).value || "";
+      if (cfg) {
+        $("#paste-toggle").checked = !!cfg.paste;
+        $("#widget-toggle").checked = cfg.show_widget !== false;
+        appliedAppearance = cfg.appearance || "system";
+        $("#appearance-select").value = appliedAppearance;
+        $("#launch-toggle").checked = !!cfg.launch_at_login;
+      }
+      if (hotkey) $("#hotkey-current").textContent = hotkey.display || "unset";
+      if (status) $("#hotkey-status").textContent = status.status;
 
-    renderThemes();
-    renderColorWheel();
+      if (models && models.models) {
+        const select = $("#model-select");
+        select.replaceChildren(...models.models.map((m) =>
+          V.ui.el("option", {
+            value: m.value,
+            text: m.installed ? m.label : `${m.label} (not installed)`,
+            disabled: !m.installed || null,
+          })));
+        select.value = models.active
+          || (models.models.find((m) => m.installed) || {}).value || "";
+      }
+
+      // Hand `cfg` down rather than let each re-fetch it (see renderThemes).
+      await Promise.all([renderThemes(cfg), renderColorWheel(cfg)]);
+    } catch (e) {
+      V.ui.toast("Settings failed to load");
+    }
   }
 
   /* destructive and irreversible, so it keeps a confirmation -- an in-app
@@ -202,21 +235,29 @@ window.Voisr = window.Voisr || {};
     document.getElementById("appearance-select").addEventListener("change", async (e) => {
       const prev = appliedAppearance;
       const next = e.target.value;
-      const res = await V.api().set_appearance(next);
-      if (res.error) { e.target.value = prev; return V.ui.toast(res.error); }
+      const res = await V.ui.tryApi(V.api().set_appearance(next), "Change theme");
+      if (!res) { e.target.value = prev; return; }
       appliedAppearance = next;
       V.applyAppearance(next);
       V.ui.toast(`Theme: ${next}`);
     });
 
     document.getElementById("model-select").addEventListener("change", async (e) => {
-      await V.api().set_config({ model: e.target.value });
-      V.ui.toast(`Model: ${e.target.value} — applies from your next dictation`);
+      const next = e.target.value;
+      // A failed write that leaves the dropdown showing the new model is its
+      // own bug — the user would dictate expecting a model that was never
+      // saved. Re-render puts the <select> back on what is really stored.
+      if (!await V.ui.tryApi(V.api().set_config({ model: next }), "Save model")) {
+        render();
+        return;
+      }
+      V.ui.toast(`Model: ${next} — applies from your next dictation`);
     });
 
     document.getElementById("launch-toggle").addEventListener("change", async (e) => {
-      const res = await V.api().set_launch_at_login(e.target.checked);
-      if (res.error) { e.target.checked = !e.target.checked; return V.ui.toast(res.error); }
+      const res = await V.ui.tryApi(
+        V.api().set_launch_at_login(e.target.checked), "Save launch at login");
+      if (!res) { e.target.checked = !e.target.checked; return; }
       V.ui.toast(e.target.checked ? "Voisr will start at login" : "Launch at login off");
     });
 
@@ -258,8 +299,8 @@ window.Voisr = window.Voisr || {};
       // confirm click to land at least ~600ms after arming.
       if (Date.now() - clearHistoryArmedAt < 600) return;
       disarmClearHistory(btn);
-      const res = await V.api().clear_history();
-      if (res.error) return V.ui.toast(res.error);
+      const res = await V.ui.tryApi(V.api().clear_history(), "Clear history");
+      if (!res) return;
       V.ui.toast(`History cleared — ${res.removed} removed`);
     });
   }

@@ -94,6 +94,20 @@ window.Voisr = window.Voisr || {};
     }, ms || (onAction ? 5000 : 3500));
   }
 
+  /* Single convention for bridge calls: a thrown bridge error or an {error}
+     response becomes a toast, and callers get null back. A view must never
+     blank silently because Python hiccuped. */
+  async function tryApi(promise, label) {
+    let res;
+    try { res = await promise; }
+    catch (e) { toast(`${label} failed: ${e && e.message ? e.message : e}`); return null; }
+    if (res && typeof res === "object" && res.error) {
+      toast(`${label} failed: ${res.error}`);
+      return null;
+    }
+    return res;
+  }
+
   /* Build a node without string templating. Text goes through textContent and
      attributes through setAttribute, so nothing user-supplied is ever parsed
      as markup — which retires the escapeHtml-into-attribute pattern.
@@ -144,5 +158,5 @@ window.Voisr = window.Voisr || {};
                      html: ICONS.trash, on: { click: (e) => { e.stopPropagation(); onDelete(item); } } }));
   }
 
-  V.ui = { el, $, toast, escapeHtml, timeOf, dayOf, formatDuration, ICONS, itemRow };
+  V.ui = { el, $, toast, tryApi, escapeHtml, timeOf, dayOf, formatDuration, ICONS, itemRow };
 })(window.Voisr);
