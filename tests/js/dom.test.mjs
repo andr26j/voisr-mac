@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { makeNode, installDom } from "./dom.mjs";
+import { loadVoisr } from "./load.mjs";
 
 /* Direct fidelity tests for the H6 fake-DOM extension. The app-level tests
    (settings.test.mjs's popover-dismissal test in particular) exercise
@@ -54,16 +55,90 @@ test("appendChild also links parent, and replaceChildren detaches outgoing child
   assert.equal(parent.contains(c), true);
 });
 
+test("append() and appendChild() detach a node from its previous parent before adopting it, like the real DOM", () => {
+  const oldParent = makeNode("div");
+  const newParent = makeNode("div");
+  const kid = makeNode("span");
+  oldParent.append(kid);
+  assert.equal(oldParent.contains(kid), true, "sanity: kid starts under oldParent");
+
+  newParent.append(kid);
+  assert.equal(kid.parent, newParent, "kid's parent link points at the new parent");
+  assert.equal(newParent.contains(kid), true);
+  assert.equal(oldParent.contains(kid), false,
+    "the real DOM *moves* a node -- oldParent must not still contain it");
+  assert.equal(oldParent.children.includes(kid), false,
+    "kid must be spliced out of oldParent.children, not just have a stale parent link");
+
+  // appendChild() must behave identically to append() here.
+  const kid2 = makeNode("b");
+  oldParent.appendChild(kid2);
+  newParent.appendChild(kid2);
+  assert.equal(oldParent.children.includes(kid2), false);
+  assert.equal(newParent.contains(kid2), true);
+});
+
 /* ---------- closest ---------- */
 
 test("closest() matches the starting node itself before walking up, by class or id", () => {
-  const n = makeNode("button");
-  n.classList.add("theme-opt");
+  // Fixtures built the way the app actually builds nodes, via V.ui.el() --
+  // NOT via classList.add()/direct `.id =` assignment, which is not how
+  // ui.js's el() sets either one. el()'s "class" prop sets `node.className`
+  // directly (never touches classList); its "id" prop routes through
+  // setAttribute. A fixture shaped any other way can pass while the fake
+  // still no-matches every class/id the app actually produces (main.js:95's
+  // `.closest(".theme-opt")` against a settings.js renderThemes() button).
+  const { V } = loadVoisr(["js/ui.js"]);
+  const n = V.ui.el("button", { class: "theme-opt active" });
   assert.equal(n.closest(".theme-opt"), n);
 
-  const withId = makeNode("div");
-  withId.id = "color-open";
+  const withId = V.ui.el("div", { id: "color-open" });
   assert.equal(withId.closest("#color-open"), withId);
+});
+
+/* This is the regression pin for the Critical itself: a button built by the
+   real production code (settings.js's renderThemes(), not a hand-rolled
+   fixture) run through the exact literal guard at main.js:95-96 --
+   `const btn = e.target.closest(".theme-opt"); if (!btn) return;`. Before
+   the matchesSimpleSelector fix, this failed exactly the way the review's
+   probe output showed: closest() no-matched a real app-built ".theme-opt"
+   button because renderThemes() sets classes via `node.className = v`
+   (ui.js's el()), never `classList`. The click target here is deliberately
+   a *descendant* of the button (the label span), mirroring "child.closest
+   -> null" from the report -- #theme-grid's listener fires on whatever was
+   actually clicked inside the button, not the button itself. main.js's own
+   init() can't be driven here (it binds through `V.ui.$`, i.e.
+   `document.querySelector`, which is a pre-existing `() => null` stub --
+   flagged separately, out of H6's scope), so this test patches
+   `document.querySelector` locally, for this test only, to resolve `#id`
+   the way a real browser would -- just enough to let the real renderThemes()
+   run and build a real button, without touching the shared harness or app
+   code. */
+test("closest() reaches main.js:95's guard for a real settings.js-built theme button (Critical regression pin)", async () => {
+  const { V, document, register } = loadVoisr(["js/ui.js", "js/views/settings.js"]);
+  const grid = makeNode("div");
+  register("theme-grid", grid);
+  register("toast", makeNode("div"));
+  document.querySelector = (sel) =>
+    sel.startsWith("#") ? document.getElementById(sel.slice(1)) : null;
+
+  V.api = () => ({
+    get_config: async () => ({ pill_theme: "sunset" }),
+    get_pill_themes: async () => [{ value: "sunset", label: "Sunset" }],
+  });
+
+  await V.views.settings.renderThemes();
+
+  const btn = grid.children[0];
+  assert.ok(btn, "renderThemes() must have appended a theme button to #theme-grid");
+  assert.equal(btn.className, "theme-opt active");
+
+  const labelSpan = btn.children.find((k) => k && k.className === "theme-name");
+  assert.ok(labelSpan, "expected the theme-name span renderThemes() builds inside the button");
+
+  const guardResult = labelSpan.closest(".theme-opt"); // main.js:95's literal call
+  assert.equal(guardResult, btn,
+    "main.js:95's guard must resolve to the button, not early-exit on null");
 });
 
 test("closest() walks up through parent links past several levels", () => {

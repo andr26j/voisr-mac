@@ -36,18 +36,11 @@ test("settings.js loads without touching the DOM at parse time", () => {
    (document/window listener recording + dispatch, node.contains/closest,
    parent links) specifically to unlock these. */
 
-// Captured before any test enables mock timers, so this always reaches the
-// real, unmocked setTimeout -- used only to wait out a genuine real-time
-// dwell below. App code itself keeps using the (per-test-mocked) global
-// setTimeout, so its own disarm timer stays frozen until a test ticks it.
-const realSetTimeout = globalThis.setTimeout;
-const realSleep = (ms) => new Promise((resolve) => realSetTimeout(resolve, ms));
-
 const SETTINGS_IDS = ["appearance-select", "model-select", "launch-toggle",
                        "color-open", "color-popover", "clear-history", "toast"];
 
-function mountSettings(t, api) {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
+function mountSettings(t, api, apis = ["setTimeout"]) {
+  t.mock.timers.enable({ apis });
   const env = loadVoisr(["js/ui.js", "js/api.js", "js/views/settings.js"]);
   env.window.pywebview = { api: { clear_history: async () => ({ removed: 0 }), ...api } };
 
@@ -65,9 +58,15 @@ function mountSettings(t, api) {
 
 const settle = () => new Promise((r) => setImmediate(r));
 
-test("clear-history arms on the first click, rejects a too-fast confirm, then clears after a genuine dwell", async (t) => {
+test("clear-history arms on the first click, rejects a confirm at 599ms, then clears once past the 600ms dwell boundary", async (t) => {
   const calls = [];
-  const h = mountSettings(t, { clear_history: async () => { calls.push(1); return { removed: 3 }; } });
+  // Mock Date too (not just setTimeout): the guard reads Date.now() directly
+  // (`Date.now() - clearHistoryArmedAt < 600`), so ticking the virtual clock
+  // is what actually moves that comparison -- a real 650ms sleep proved only
+  // that *some* delay past 0 confirms, not that 600 is the boundary. This
+  // also means the test no longer spends real wall-clock time waiting.
+  const h = mountSettings(t, { clear_history: async () => { calls.push(1); return { removed: 3 }; } },
+    ["setTimeout", "Date"]);
   const btn = h["clear-history"];
 
   // Wired by A4: main.js's voisr:new-dictation listener refreshes whichever
@@ -81,18 +80,18 @@ test("clear-history arms on the first click, rejects a too-fast confirm, then cl
   assert.match(btn.textContent, /Click again/);
   assert.equal(calls.length, 0, "arming alone must never clear anything");
 
-  // Lands well under the 600ms dwell -- a double-click or a stuck key.
+  t.mock.timers.tick(599);   // one tick short of the 600ms dwell -- pins the lower boundary
   btn.dispatch("click");
   await settle();
-  assert.equal(calls.length, 0, "a too-fast confirm must be rejected");
-  assert.equal(btn.dataset.armed, "1", "still armed -- the fast click neither confirmed nor disarmed");
+  assert.equal(calls.length, 0, "a confirm at 599ms must still be rejected");
+  assert.equal(btn.dataset.armed, "1", "still armed -- the too-fast click neither confirmed nor disarmed");
 
-  await realSleep(650);   // a genuine dwell, measured on the real clock like Date.now() is
+  t.mock.timers.tick(1);   // lands exactly on the 600ms boundary (not 601+) -- pins the upper side too
 
   btn.dispatch("click");
   await settle();
 
-  assert.equal(calls.length, 1, "a click after a genuine dwell must clear history");
+  assert.equal(calls.length, 1, "a click at exactly the 600ms dwell must clear history");
   assert.equal(btn.dataset.armed, "0", "disarmed once confirmed");
   assert.equal(historyChanged, 1,
     "a successful clear must tell Home/History to refresh (voisr:new-dictation)");

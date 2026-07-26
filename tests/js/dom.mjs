@@ -3,7 +3,18 @@
 // dataset, hidden, listeners, and an id registry for getElementById.
 /* Depth-first search for the only selector shape a node is ever asked for by
    the app: a single class, e.g. `row.querySelector(".txt")` in
-   views/history.js. Anything else returns null, exactly as before. */
+   views/history.js. Anything else returns null, exactly as before.
+
+   NOTE -- policy discrepancy vs. closest() below: querySelector silently
+   returns null for an unsupported selector, while matchesSimpleSelector's
+   closest() throws loudly for the same situation. Pre-existing, predates H6,
+   and left as-is here: querySelector's only real call site
+   (row.querySelector(".txt") in views/history.js) is always a plain class
+   already, so there is no live call site whose behaviour depends on picking
+   one policy over the other today. Flagging it here rather than changing it,
+   since unifying the two would mean deciding which direction is "right" for
+   a call site that doesn't yet exist -- an app-behaviour question, not a
+   harness-fidelity one, and out of scope for H6. */
 function findByClass(children, sel) {
   if (!sel.startsWith(".") || /[\s>#[:]/.test(sel.slice(1))) return null;
   const want = sel.slice(1);
@@ -34,8 +45,16 @@ function findByClass(children, sel) {
 function matchesSimpleSelector(node, sel) {
   const s = String(sel);
   if (/^\.[\w-]+$/.test(s)) {
+    // Match el()'s real output: ui.js's el() sets `node.className = v`
+    // directly for the "class" prop and never touches classList, so a
+    // class check that only reads classList silently no-matches every
+    // class the app actually builds (e.g. main.js:95's
+    // `.closest(".theme-opt")` against a button from settings.js's
+    // renderThemes()). Check both, exactly like findByClass above already
+    // does -- the real DOM has no such distinction between the two.
     const cls = s.slice(1);
-    return !!(node.classList && node.classList.contains(cls));
+    return String(node.className || "").split(/\s+/).includes(cls)
+        || !!(node.classList && node.classList.contains(cls));
   }
   if (/^#[\w-]+$/.test(s)) return node.id === s.slice(1);
   throw new Error(
@@ -62,7 +81,15 @@ export function makeNode(tag = "div") {
       },
       contains(c) { return this._set.has(c); },
     },
-    setAttribute(k, v) { node.attributes[k] = String(v); },
+    // Real DOM reflects the "id" attribute onto `.id` (and vice versa) --
+    // ui.js's el() sets id via setAttribute (never `node.id = ...` directly),
+    // so without this sync `node.id` stays "" and closest("#id") silently
+    // no-matches every id the app actually sets this way. Sync at the
+    // source rather than special-casing closest()/matchesSimpleSelector.
+    setAttribute(k, v) {
+      node.attributes[k] = String(v);
+      if (k === "id") node.id = String(v);
+    },
     getAttribute(k) { return k in node.attributes ? node.attributes[k] : null; },
     addEventListener(type, fn) { (node._listeners[type] ??= []).push(fn); },
     removeEventListener(type, fn) {
@@ -76,15 +103,25 @@ export function makeNode(tag = "div") {
     dispatch(type, ev = {}) {
       (node._listeners[type] || []).slice().forEach((f) => f({ target: node, ...ev }));
     },
-    append(...kids) {
-      kids.flat().forEach((k) => {
-        node.children.push(k);
-        if (k && typeof k === "object") k.parent = node;
-      });
-    },
-    appendChild(k) {
+    // Detach a kid from its previous parent's children array before
+    // adopting it here -- the real DOM *moves* a node on append, it doesn't
+    // duplicate it. Without this, oldParent.contains(kid) stays true (kid
+    // is still spliced into oldParent.children) even though kid.parent now
+    // points elsewhere.
+    _adopt(k) {
+      if (k && typeof k === "object" && k.parent && k.parent !== node) {
+        const siblings = k.parent.children;
+        const i = siblings.indexOf(k);
+        if (i !== -1) siblings.splice(i, 1);
+      }
       node.children.push(k);
       if (k && typeof k === "object") k.parent = node;
+    },
+    append(...kids) {
+      kids.flat().forEach((k) => node._adopt(k));
+    },
+    appendChild(k) {
+      node._adopt(k);
       return k;
     },
     // Detaches every outgoing child (parent = null) before adopting the new
