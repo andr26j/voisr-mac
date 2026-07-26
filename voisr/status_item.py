@@ -15,6 +15,33 @@ RECORDING_GLYPH = "▬▬▬"  # filled
 _MENU_TARGET_CLASS = None  # ObjC class, built once on first menu construction
 
 
+def _glyph_image(recording: bool):
+    """Three-bar waveform as a template NSImage (auto-inverts with the bar).
+
+    Drawn programmatically rather than shipped as an asset so there is no
+    file to lose in the bundle. A template image is what makes the icon
+    legible in both light and dark menu bars: AppKit recolours it to match
+    the bar instead of painting our literal black.
+    """
+    import AppKit
+    w, h = 22.0, 14.0
+    img = AppKit.NSImage.alloc().initWithSize_((w, h))
+    img.lockFocus()
+    try:
+        AppKit.NSColor.blackColor().set()
+        heights = (10.0, 6.0, 10.0) if recording else (4.0, 4.0, 4.0)
+        x = 2.0
+        for bh in heights:
+            rect = AppKit.NSMakeRect(x, (h - bh) / 2.0, 4.0, bh)
+            AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                rect, 2.0, 2.0).fill()
+            x += 7.0
+    finally:
+        img.unlockFocus()
+    img.setTemplate_(True)
+    return img
+
+
 def _on_main_thread(action) -> None:
     """Run an AppKit call on the main thread.
 
@@ -93,7 +120,20 @@ class StatusItem:
 
     def _render(self, recording: bool) -> None:
         button = self.item.button()
-        button.setTitle_(RECORDING_GLYPH if recording else IDLE_GLYPH)
+        try:
+            button.setImage_(_glyph_image(recording))
+            button.setTitle_("")
+        except Exception:
+            # The image is cosmetic; the status item is not. Anything that
+            # goes wrong drawing it (no pyobjc, no window server, an AppKit
+            # change) falls back to the text glyphs the app shipped with.
+            # Clear any image a previous successful render left behind, or
+            # the button would show a stale glyph next to the text one.
+            try:
+                button.setImage_(None)
+            except Exception:
+                pass
+            button.setTitle_(RECORDING_GLYPH if recording else IDLE_GLYPH)
         try:
             label = self._hotkey_label_fn()
         except Exception:

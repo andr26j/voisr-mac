@@ -1,13 +1,20 @@
-from voisr.status_item import StatusItem
+import pytest
+
+import voisr.status_item as status_item
+from voisr.status_item import IDLE_GLYPH, RECORDING_GLYPH, StatusItem
 
 
 class FakeButton:
     def __init__(self):
         self.title = None
         self.tooltip = None
+        self.image = None
 
     def setTitle_(self, t):
         self.title = t
+
+    def setImage_(self, img):
+        self.image = img
 
     def setToolTip_(self, t):
         self.tooltip = t
@@ -67,14 +74,104 @@ def test_create_is_idempotent():
     assert len(bar.items) == 1
 
 
+def _tiff(image):
+    return bytes(image.TIFFRepresentation())
+
+
+def _force_text_glyphs(monkeypatch):
+    """Make the image path fail the way a missing pyobjc or an absent window
+    server would, so the text fallback is what gets exercised.
+
+    The dispatch tests below also use this. They are about *whether* the
+    render ran, not about how it looks, and the image path makes the title
+    "" in both states -- so asserting on the title there would pass whether
+    or not the render happened. Pinning them to the text path restores a
+    two-valued observable, which is the only thing that gives them teeth."""
+    def boom(_recording):
+        raise RuntimeError("cannot draw")
+
+    monkeypatch.setattr(status_item, "_glyph_image", boom)
+
+
 def test_idle_and_recording_states_differ():
+    """The two states are distinguished by the drawn image now, not the
+    title. Both must be real template images -- a non-template image would
+    render as literal black and vanish against a dark menu bar -- and their
+    pixels must actually differ, or the recording state is invisible.
+
+    NSImage.lockFocus works in this headless pytest process (no
+    NSApplication, no window server) and draws deterministically: the same
+    state twice yields byte-identical TIFF, so a difference here is real
+    pixel content rather than incidental metadata.
+    """
+    pytest.importorskip("AppKit")
     si, _ = make()
     si.create()
-    idle = si.item.button().title
+
+    idle = si.item.button().image
+    assert idle is not None
+    assert idle.isTemplate()
+    assert si.item.button().title == "", "the title must yield to the image"
+
     si.set_recording(True)
-    assert si.item.button().title != idle
+    recording = si.item.button().image
+    assert recording is not None
+    assert recording.isTemplate()
+    assert _tiff(recording) != _tiff(idle)
+
     si.set_recording(False)
-    assert si.item.button().title == idle
+    assert _tiff(si.item.button().image) == _tiff(idle)
+
+
+def test_a_failed_glyph_image_falls_back_to_the_text_glyphs(monkeypatch):
+    """The image is cosmetic; the status item is not. If drawing fails the
+    item must still be usable and still tell the two states apart -- this is
+    the original text-glyph behaviour, preserved as the safety net."""
+    _force_text_glyphs(monkeypatch)
+    si, _ = make()
+
+    assert si.create() is True
+    assert si.item.button().image is None
+    assert si.item.button().title == IDLE_GLYPH
+    assert "Fn" in si.item.button().tooltip, \
+        "the tooltip must survive a failed image"
+
+    si.set_recording(True)
+    assert si.item.button().title == RECORDING_GLYPH
+    si.set_recording(False)
+    assert si.item.button().title == IDLE_GLYPH
+
+
+def test_falling_back_after_a_good_render_clears_the_stale_image(monkeypatch):
+    """A render can succeed and a later one fail. Without clearing the image
+    the button would carry the previous state's picture *and* the new text
+    glyph -- showing idle bars beside "recording"."""
+    pytest.importorskip("AppKit")
+    si, _ = make()
+    si.create()
+    assert si.item.button().image is not None  # the good render
+
+    _force_text_glyphs(monkeypatch)
+    si.set_recording(True)
+
+    assert si.item.button().image is None, "a stale image survived the fallback"
+    assert si.item.button().title == RECORDING_GLYPH
+
+
+def test_a_button_that_rejects_the_image_falls_back_to_the_text_glyphs():
+    """The other failure seam: drawing succeeds but AppKit refuses the
+    image. Same requirement -- text glyphs and a tooltip, no exception."""
+    si, bar = make()
+    si.create()
+
+    def reject(_img):
+        raise RuntimeError("button refused the image")
+
+    si.item.button().setImage_ = reject
+    si.set_recording(True)
+
+    assert si.item.button().title == RECORDING_GLYPH
+    assert "Fn" in si.item.button().tooltip
 
 
 def test_tooltip_shows_the_hotkey_label():
@@ -131,6 +228,7 @@ def test_set_recording_off_the_main_thread_defers_instead_of_touching_appkit(
     main thread is undefined behaviour, and a crash here would take down the
     process hosting the event tap that makes push-to-talk work -- so the
     render must be handed to the run loop, not run inline."""
+    _force_text_glyphs(monkeypatch)
     si, _ = make()
     si.create()
     idle = si.item.button().title
@@ -149,6 +247,7 @@ def test_set_recording_on_the_main_thread_still_applies_synchronously(
         monkeypatch):
     """Api calls set_recording synchronously and the test fakes read the glyph
     straight after, so the main-thread path must not become deferred."""
+    _force_text_glyphs(monkeypatch)
     si, _ = make()
     si.create()
     idle = si.item.button().title
@@ -169,6 +268,7 @@ def test_a_failed_dispatch_skips_the_render_instead_of_running_off_main(
     A missed glyph update is strictly the cheaper failure."""
     import PyObjCTools
 
+    _force_text_glyphs(monkeypatch)
     si, _ = make()
     si.create()
     idle = si.item.button().title
@@ -188,6 +288,11 @@ def test_a_failed_dispatch_skips_the_render_instead_of_running_off_main(
 
 
 def test_set_recording_never_raises_when_the_render_fails():
+    """A broken setTitle_ now breaks *both* render paths: the image path
+    clears the title, and the text fallback sets it. So this is the
+    everything-is-broken case -- _render raises and set_recording must still
+    swallow it. Nothing about the status item is worth crashing the process
+    that hosts the push-to-talk event tap."""
     si, _ = make()
     si.create()
 
@@ -269,6 +374,10 @@ def test_dispatch_ignores_an_unknown_action_and_swallows_handler_errors():
 
 
 def test_a_partial_create_failure_does_not_leak_a_status_item():
+    """ExplodingButton inherits a working setImage_, so the image path is
+    reached and it is the title -- primary clear and text fallback alike --
+    that blows up. _render still propagates, so create must still report
+    failure and hand the half-built item back to the status bar."""
     class ExplodingButton(FakeButton):
         def setTitle_(self, t):
             raise RuntimeError("button blew up")
