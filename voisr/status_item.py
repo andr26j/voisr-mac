@@ -15,6 +15,31 @@ RECORDING_GLYPH = "▬▬▬"  # filled
 _MENU_TARGET_CLASS = None  # ObjC class, built once on first menu construction
 
 
+def _on_main_thread(action) -> None:
+    """Run an AppKit call on the main thread.
+
+    set_recording is invoked from whatever thread drove the dictation: the
+    Quartz event-tap thread on the hotkey path, a pywebview worker on the
+    dashboard path, and the queue's completion worker when transcription
+    finishes. AppKit off the main thread is undefined behaviour, and a crash
+    here would take down the process hosting the event tap that makes
+    push-to-talk work.
+
+    Main-thread callers stay synchronous, so callers can still read the glyph
+    straight after the call. Matches the AppHelper.callAfter convention used
+    by ui._run_save_panel/native_setup and permissions.open_pane.
+    """
+    try:
+        from Foundation import NSThread
+        from PyObjCTools import AppHelper
+        if not NSThread.isMainThread():
+            AppHelper.callAfter(action)
+            return
+    except Exception:
+        pass  # no pyobjc (tests off macOS), or the dispatch itself failed
+    action()
+
+
 class StatusItem:
     def __init__(self, on_dictate, on_open, on_quit, hotkey_label_fn,
                  status_bar=None):
@@ -140,10 +165,18 @@ class StatusItem:
     def set_recording(self, is_recording: bool) -> None:
         if self.item is None:
             return
-        try:
-            self._render(recording=bool(is_recording))
-        except Exception as e:
-            print(f"Voisr status item: set_recording failed: {e}", flush=True)
+        recording = bool(is_recording)
+
+        def apply():
+            if self.item is None:
+                return  # released while the render sat in the run-loop queue
+            try:
+                self._render(recording=recording)
+            except Exception as e:
+                print(f"Voisr status item: set_recording failed: {e}",
+                      flush=True)
+
+        _on_main_thread(apply)
 
     def release(self) -> None:
         item, self.item = self.item, None

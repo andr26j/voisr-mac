@@ -97,6 +97,96 @@ def test_set_recording_before_create_does_not_raise():
     si.set_recording(True)  # must not raise
 
 
+def _fake_pyobjc(monkeypatch, *, main_thread: bool):
+    """Stand in for the two pyobjc seams set_recording uses, and record what
+    would have been handed to the run loop. Patching the modules (rather than
+    spawning a real thread) is what makes the off-main-thread branch testable
+    at all: a real background thread touching AppKit is the very thing this
+    is meant to prevent."""
+    import Foundation
+    import PyObjCTools
+    import PyObjCTools.AppHelper  # noqa: F401 -- import so the attr exists to patch
+
+    deferred = []
+
+    class FakeNSThread:
+        @staticmethod
+        def isMainThread():
+            return main_thread
+
+    class FakeAppHelper:
+        @staticmethod
+        def callAfter(fn, *args):
+            deferred.append(fn)
+
+    monkeypatch.setattr(Foundation, "NSThread", FakeNSThread)
+    monkeypatch.setattr(PyObjCTools, "AppHelper", FakeAppHelper)
+    return deferred
+
+
+def test_set_recording_off_the_main_thread_defers_instead_of_touching_appkit(
+        monkeypatch):
+    """set_recording is called from the Quartz event-tap thread on the hotkey
+    path and from a pywebview worker on the dashboard path. AppKit off the
+    main thread is undefined behaviour, and a crash here would take down the
+    process hosting the event tap that makes push-to-talk work -- so the
+    render must be handed to the run loop, not run inline."""
+    si, _ = make()
+    si.create()
+    idle = si.item.button().title
+    deferred = _fake_pyobjc(monkeypatch, main_thread=False)
+
+    si.set_recording(True)
+
+    assert si.item.button().title == idle, \
+        "AppKit was touched inline on a non-main thread"
+    assert len(deferred) == 1
+    deferred[0]()  # what the main thread would run
+    assert si.item.button().title != idle
+
+
+def test_set_recording_on_the_main_thread_still_applies_synchronously(
+        monkeypatch):
+    """Api calls set_recording synchronously and the test fakes read the glyph
+    straight after, so the main-thread path must not become deferred."""
+    si, _ = make()
+    si.create()
+    idle = si.item.button().title
+    deferred = _fake_pyobjc(monkeypatch, main_thread=True)
+
+    si.set_recording(True)
+
+    assert deferred == []
+    assert si.item.button().title != idle
+
+
+def test_set_recording_never_raises_when_the_render_fails():
+    si, _ = make()
+    si.create()
+
+    def boom(_t):
+        raise RuntimeError("button blew up")
+
+    si.item.button().setTitle_ = boom
+    si.set_recording(True)  # must not raise
+
+
+def test_a_deferred_set_recording_after_release_does_nothing(monkeypatch,
+                                                             capsys):
+    """The run loop can drain a deferred render after release() has already
+    torn the item down. That is an ordinary race, not a fault: it must be a
+    silent no-op rather than an exception logged as a failure."""
+    si, _ = make()
+    si.create()
+    deferred = _fake_pyobjc(monkeypatch, main_thread=False)
+    si.set_recording(True)
+    si.release()
+
+    deferred[0]()  # must not raise
+
+    assert "set_recording failed" not in capsys.readouterr().out
+
+
 def test_dispatch_routes_each_menu_action_to_its_handler():
     calls = []
     si, _ = make(on_dictate=lambda: calls.append("dictate"),

@@ -24,13 +24,33 @@ class FakeRecorder:
         return ""
 
 
-def make_api(tmp_path):
-    return Api(config_path=tmp_path / "config.json",
-               history=HistoryStore(tmp_path / "h.jsonl"),
-               recorder_factory=FakeRecorder,
-               transcribe_fn=lambda wav: "um, hello world",
-               clock=lambda: 10.0,
-               clipboard_fn=lambda text: None)
+def make_api(tmp_path, **overrides):
+    kwargs = dict(config_path=tmp_path / "config.json",
+                  history=HistoryStore(tmp_path / "h.jsonl"),
+                  recorder_factory=FakeRecorder,
+                  transcribe_fn=lambda wav: "um, hello world",
+                  clock=lambda: 10.0,
+                  clipboard_fn=lambda text: None)
+    kwargs.update(overrides)
+    return Api(**kwargs)
+
+
+class FakeStatus:
+    """Menu-bar stand-in. `recording` is the glyph as it looks right now;
+    `states` is every push it received, so tests can pin both the value and
+    the fact that redundant pushes are not made."""
+
+    def __init__(self):
+        self.recording = False
+        self.states = []
+        self.release_calls = 0
+
+    def set_recording(self, value):
+        self.recording = bool(value)
+        self.states.append(bool(value))
+
+    def release(self):
+        self.release_calls += 1
 
 
 def test_record_cycle_produces_cleaned_history(tmp_path):
@@ -646,8 +666,45 @@ def test_status_item_follows_the_record_cycle(tmp_path):
     assert status.states == [True, False]
 
 
+def test_the_glyph_stays_busy_for_the_whole_dictation(tmp_path):
+    """Releasing the key closes the mic, but the dictation is still in flight
+    until whisper has finished -- and transcription is the slow part. The
+    glyph used to clear the moment the mic closed, so the menu bar claimed
+    idle while the app was still working. Observe the glyph from inside the
+    transcription itself: that is the window the old code got wrong."""
+    status = FakeStatus()
+    seen = []
+
+    def transcribe(wav):
+        seen.append(status.recording)
+        return "um, hello world"
+
+    api = make_api(tmp_path, transcribe_fn=transcribe)
+    api.attach_status_item(status)
+
+    api.start_recording()
+    api.stop_recording()
+
+    assert seen == [True], "the glyph went idle while whisper was still running"
+    assert status.recording is False
+    assert status.states == [True, False]
+
+
+def test_the_mic_flag_still_clears_when_the_mic_closes(tmp_path):
+    """is_recording() is the mic, not the whole dictation: main()'s
+    menu_dictate uses it to decide start-vs-stop, so it must NOT grow the
+    glyph's longer lifetime."""
+    api = make_api(tmp_path)
+    api.start_recording()
+    assert api.is_recording() is True
+    api._release_recording(paste=False)
+    assert api.is_recording() is False
+
+
 def test_a_failed_start_does_not_mark_recording(tmp_path):
     api = make_api(tmp_path)
+    status = FakeStatus()
+    api.attach_status_item(status)
 
     def raise_rejected():
         raise RecordingQueueError("start", "already recording")
@@ -658,6 +715,52 @@ def test_a_failed_start_does_not_mark_recording(tmp_path):
 
     assert result.get("error")
     assert api.is_recording() is False
+    assert status.recording is False
+    assert status.states == [], "a rejected start must not light the glyph"
+
+
+def test_a_failed_release_does_not_strand_a_busy_glyph(tmp_path):
+    """If the release itself blows up, nothing downstream will ever retire
+    the session -- the glyph would sit lit forever."""
+    api = make_api(tmp_path)
+    status = FakeStatus()
+    api.attach_status_item(status)
+    api.start_recording()
+    assert status.recording is True
+
+    def boom(**kwargs):
+        raise RuntimeError("release blew up")
+
+    api._recordings.release = boom
+
+    with pytest.raises(RuntimeError):
+        api._release_recording(paste=False)
+
+    assert status.recording is False
+    assert api.is_recording() is False
+
+
+def test_overlapping_dictations_keep_the_glyph_lit(tmp_path):
+    """The queue admits a fresh dictation while an earlier one is still
+    transcribing (that is what max_in_flight is for). Retiring the older
+    session must not clear the glyph out from under the newer one."""
+    status = FakeStatus()
+    api = make_api(tmp_path)
+    api.attach_status_item(status)
+
+    first = api.start_recording()["session_id"]
+    api._release_recording(paste=False).result()
+    assert status.recording is False
+
+    second = api.start_recording()["session_id"]
+    assert second != first
+    assert status.recording is True
+    # The stale retire of the finished first session must be a no-op.
+    api._mark_session(first, False)
+    assert status.recording is True
+
+    api._release_recording(paste=False).result()
+    assert status.recording is False
 
 
 def test_close_releases_the_status_item(tmp_path):
