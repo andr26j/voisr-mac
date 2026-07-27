@@ -12,10 +12,13 @@
   transition: background var(--fast) var(--ease);
 }
 .perm-chip:not(:disabled):hover { background: var(--surface-2); }
+.perm-chip.perm-denied:not(:disabled):hover { background: var(--warning-soft); }
 .perm-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
-.perm-ok .perm-dot,
 .perm-chip.perm-ok .perm-dot { background: var(--success); }
-.perm-chip.perm-denied { border-color: var(--warning); color: var(--warning); }
+/* the soft fill is what makes a denied chip read as "needs attention" at a
+   glance; --warning stays on the text and the border. */
+.perm-chip.perm-denied { border-color: var(--warning); color: var(--warning);
+                         background: var(--warning-soft); }
 .perm-chip.perm-denied .perm-dot { background: var(--warning); }
 .perm-chip.perm-unknown { color: var(--muted); }
 
@@ -266,6 +269,17 @@ mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
 @media (prefers-reduced-motion: reduce) {
   .popover { animation: none; }
 }
+
+/* ---------- Export format popover ---------- */
+
+.export-control { position: relative; }
+
+/* Three stacked format buttons rather than the colour wheel's centred
+   controls -- override the generic .popover's centring so they run the
+   popover's full width. */
+#export-popover { align-items: stretch; min-width: 190px; }
+
+.export-fmt { height: 36px; text-align: left; padding: 0 12px; }
 
 .wheel-wrap { position: relative; width: 200px; height: 200px; flex-shrink: 0; }
 

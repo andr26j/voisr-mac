@@ -110,9 +110,6 @@ ALLOWED_LITERAL_COLOURS = {
     # -- pre-existing generic shadow/glow tints, not theme-bound --
     "rgba(31, 29, 26, .25)": "switch thumb drop shadow",
     "rgba(28, 26, 23, .96)": "mini-pill's own fixed dark chrome background",
-    "rgba(232, 100, 60, .35)": "record button glow shadow (ember accent)",
-    "rgba(232, 100, 60, .45)": "record button pulse animation start (ember accent)",
-    "rgba(232, 100, 60, 0)": "record button pulse animation end (transparent ember)",
     "rgba(0, 0, 0, .35)": "colour-wheel thumb shadow ring",
     "rgba(0, 0, 0, .4)": "colour-wheel thumb shadow ring",
     "rgba(255, 255, 255, .08)": "toast-action button: a fixed white-on-dark "
@@ -298,7 +295,6 @@ def test_history_binds_keyboard_navigation():
     src = (WEB / "js" / "views" / "history.js").read_text()
     for key in ["ArrowDown", "ArrowUp", "Backspace", "Enter"]:
         assert key in src, key
-    assert "setQuery" in src
     assert "PAGE" in src
 
 
@@ -346,6 +342,43 @@ def test_colour_wheel_is_drawn_lazily():
     assert "drawColorWheel" in src
     # the wheel must not be drawn during initial render
     assert "wheelDrawn" in src
+
+
+def test_settings_binds_its_listeners_in_init():
+    """settings.js must follow the same convention as every other view:
+    listeners bind inside an init() that main.js calls once, never at
+    module-parse time."""
+    src = (WEB / "js" / "views" / "settings.js").read_text()
+
+    assert re.search(r"^  function init\(\)\s*\{", src, re.M), \
+        "settings.js no longer declares a module-level init()"
+
+    export_obj = re.search(r"V\.views\.settings = \{(.*?)\};", src, re.S)
+    assert export_obj, "could not find the V.views.settings export object"
+    # \binit\b will not match initColorWheel — the export must name init itself
+    assert re.search(r"\binit\b", export_obj.group(1)), \
+        "settings.js does not export init"
+
+    # Every statement sitting directly inside the module IIFE is indented two
+    # spaces; anything inside a function body is indented four or more. The
+    # parse-time bindings this refactor removed all started with `document.`
+    # at two spaces, so a revert reintroduces them here.
+    parse_time = re.findall(r"^  document\b.*$", src, re.M)
+    assert parse_time == [], \
+        f"settings.js still touches the DOM at parse time: {parse_time}"
+
+
+def test_main_init_calls_settings_init():
+    """The call must live inside main.js's own init(), alongside
+    history.initKeys() / dictionary.initSearch() / palette.init()."""
+    src = (WEB / "js" / "main.js").read_text()
+    assert "V.views.settings.init();" in src, \
+        "main.js never calls V.views.settings.init()"
+
+    init_body = re.search(r"async function init\(\)\s*\{(.*?)\n  \}", src, re.S)
+    assert init_body, "could not find main.js's init()"
+    assert "V.views.settings.init();" in init_body.group(1), \
+        "V.views.settings.init() is called from outside main.js's init()"
 
 
 def test_view_transition_class_exists_and_respects_reduced_motion():

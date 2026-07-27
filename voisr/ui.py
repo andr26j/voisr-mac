@@ -130,7 +130,17 @@ def _run_save_panel(suggested_name: str):
             done.set()
 
     AppHelper.callAfter(go)
-    done.wait(120)
+    # Untimed on purpose. panel.runModal() blocks the AppKit main thread
+    # until the user dismisses the panel (Save or Cancel), so `go()` always
+    # reaches its `finally` and calls done.set() -- there is no path where
+    # nobody ever answers. A wait(120) used to cap this: if the user left
+    # the panel open past two minutes, this thread gave up and returned
+    # {"ok": False, "path": None} while the panel was still on screen. That
+    # desync let a later Save write a file the caller had already been told
+    # didn't happen, with no confirmation shown for it. Do not reintroduce a
+    # timeout here -- see tests/test_ui_api.py::
+    # test_run_save_panel_waits_without_a_timeout.
+    done.wait()
     return result.get("path")
 
 
@@ -736,6 +746,12 @@ class Api:
         self._window = None
         self._status_item = None
         self._is_recording = False
+        self._sessions_in_flight = set()
+        self._glyph_busy = False
+        self._active_sequence = None
+        # Reentrant: start_recording/_release_recording claim under it and
+        # _mark_session takes it again to push the glyph.
+        self._busy_lock = threading.RLock()
         self._save_panel_fn = None
         self._recordings = RecordingQueue(
             recorder_factory=recorder_factory,
@@ -773,19 +789,44 @@ class Api:
         self._status_item = status
 
     def is_recording(self) -> bool:
+        """True while the microphone is open -- the mic, not the whole
+        dictation. main()'s menu_dictate reads this to decide start-vs-stop,
+        so it must go False the moment capture ends. The menu-bar glyph
+        tracks the longer 'session in flight' state instead; see
+        _mark_session."""
         return self._is_recording
 
-    def _set_recording(self, value: bool) -> None:
-        """Single source of truth for 'a dictation is in flight', mirrored to
-        the menu-bar glyph. Never lets a status-item failure break recording."""
-        self._is_recording = bool(value)
-        status = self._status_item
-        if status is None:
-            return
-        try:
-            status.set_recording(self._is_recording)
-        except Exception:
-            pass
+    def _mark_session(self, sequence, in_flight: bool) -> None:
+        """Track dictations that are still in flight and mirror the aggregate
+        to the menu-bar glyph.
+
+        A dictation is in flight from a successful start until its
+        transcription completes -- releasing the key only closes the mic, and
+        whisper is the slow part. Sessions are tracked by sequence rather than
+        with a single flag because the queue admits a new dictation while an
+        earlier one is still transcribing: retiring the old one must not clear
+        the glyph out from under the new one, and a repeated retire (belt and
+        braces on the failure paths) must be a no-op.
+
+        Only pushes on a change, so the AppKit call is not repeated
+        needlessly. Never lets a status-item failure break recording."""
+        with self._busy_lock:
+            if in_flight:
+                self._sessions_in_flight.add(sequence)
+            else:
+                self._sessions_in_flight.discard(sequence)
+            busy = bool(self._sessions_in_flight)
+            status = self._status_item
+            # Read the status item before committing _glyph_busy: committing
+            # with nothing to push to would record a state that was never
+            # rendered, and the next push would be skipped as "no change".
+            if status is None or busy == self._glyph_busy:
+                return
+            self._glyph_busy = busy
+            try:
+                status.set_recording(busy)
+            except Exception:
+                pass
 
     def _notify_dictation(self):
         """Tell the dashboard a dictation landed (hotkey dictations must show
@@ -827,6 +868,18 @@ class Api:
                 svc.start()
 
     def _process_session(self, session: RecordingSession) -> SessionResult:
+        """Queue processor. The dictation ends here -- not when the mic
+        closed -- so this is where the session is retired from the in-flight
+        set and the glyph is allowed to go idle. Retiring in the `finally`
+        (rather than on the completion future) also keeps the ordering
+        deterministic: the glyph is already idle by the time a caller
+        blocking on stop_recording() gets its result."""
+        try:
+            return self._run_session(session)
+        finally:
+            self._mark_session(session.sequence, False)
+
+    def _run_session(self, session: RecordingSession) -> SessionResult:
         wav = session.wav_path
         cfg = session.context
         duration = max((session.released_at - session.started_at), 0.1)
@@ -918,16 +971,68 @@ class Api:
         try:
             session = self._recordings.start()
         except RecordingQueueError as error:
-            return {"error": str(error)}
-        self._set_recording(True)
+            return {"error": str(error)}  # rejected: marks neither flag
+        # Publishing the sequence and lighting the glyph is one unit, under
+        # the lock _release_recording claims through, so a release can never
+        # land between them and leave the glyph lit for a retired session.
+        # The queue call stays *outside*: start() waits on the previous
+        # capture's finalizer, and holding _busy_lock across that would let a
+        # wedged recorder.stop() block every glyph push in the process.
+        with self._busy_lock:
+            self._active_sequence = session.sequence
+            self._is_recording = True
+            self._mark_session(session.sequence, True)  # reentrant: RLock
         return {"recording": True, "session_id": session.sequence}
 
     def _release_recording(self, paste=False):
-        self._set_recording(False)
-        return self._recordings.release(
-            paste_requested=paste,
-            context=self.get_config(),
-        )
+        """Close the mic. Deliberately does NOT clear the glyph: the dictation
+        runs on until transcription finishes (see _process_session).
+
+        Two threads really can be in here at once: HotkeyService.release()
+        holds _state_lock, while Api.stop_recording() arrives on the
+        pywebview/JS bridge holding nothing. Claiming _active_sequence is a
+        read-modify-write (LOAD_ATTR ... STORE_ATTR, with a GIL switch point
+        between), and the claim only means anything if it agrees with which
+        caller RecordingQueue.release() hands the live session to -- so the
+        two happen together, under _busy_lock.
+
+        Split them and either half can disagree: both callers read the same
+        sequence, or the caller that claimed it loses the queue race. Either
+        way one of them holds a sequence but gets back the queue's
+        *already-resolved* "not recording" failure, so the callback below
+        fires immediately and retires a session that is still transcribing --
+        a dark glyph mid-dictation, the exact defect this lifecycle fixed.
+        Paired, the loser claims None and registers nothing.
+
+        Lock ordering: _busy_lock is only ever taken before RecordingQueue's
+        lock, never after -- the queue's worker calls _process_session (and so
+        _mark_session) outside its own lock, and _finalize_capture never
+        reaches back into Api. _busy_lock is an RLock because _mark_session
+        takes it too; the retire below still runs outside the claim, so a
+        status-item push is never made while the queue lock could be held."""
+        claimed = None
+        try:
+            with self._busy_lock:
+                sequence, self._active_sequence = self._active_sequence, None
+                claimed = sequence
+                self._is_recording = False
+                future = self._recordings.release(
+                    paste_requested=paste,
+                    context=self.get_config(),
+                )
+                claimed = None  # handed off; the queue will retire it
+        finally:
+            # Nothing downstream will ever retire this session now. Runs
+            # after the `with` unwinds, so the push is made outside the lock.
+            if claimed is not None:
+                self._mark_session(claimed, False)
+        if sequence is not None:
+            # Safety net for the paths that never reach _process_session --
+            # a recorder whose stop() throws is completed straight from the
+            # queue worker. Retiring twice is a no-op.
+            future.add_done_callback(
+                lambda _f, s=sequence: self._mark_session(s, False))
+        return future
 
     def stop_recording(self, paste=False):
         return self._release_recording(paste).result().to_api_dict()

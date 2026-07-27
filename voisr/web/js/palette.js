@@ -7,21 +7,34 @@ window.Voisr = window.Voisr || {};
   function register(cmd) { commands.push(cmd); }
 
   /* Subsequence match, ranked by how early the first character lands — a
-     query of "sh" reaches "Search history" before "Settings". */
+     query of "sh" reaches "Search history" before "Settings". If the query
+     is non-empty and did not match the search command, append it as a fallback
+     so arbitrary text always has somewhere to go. */
   function match(query, items) {
     const q = (query || "").trim().toLowerCase();
     if (!q) return items.slice();
     const scored = [];
+    let searchItem = null;
     for (const item of items) {
       const hay = item.title.toLowerCase();
       let qi = 0, first = -1;
       for (let i = 0; i < hay.length && qi < q.length; i++) {
         if (hay[i] === q[qi]) { if (qi === 0) first = i; qi++; }
       }
-      if (qi === q.length) scored.push({ item, first });
+      if (qi === q.length) {
+        scored.push({ item, first });
+      } else if (item.id === "search") {
+        // Store the search command to append later if it didn't match
+        searchItem = item;
+      }
     }
     scored.sort((a, b) => a.first - b.first);
-    return scored.map((s) => s.item);
+    const result = scored.map((s) => s.item);
+    // Pin the search command as a fallback if it didn't match normally
+    if (searchItem && !result.some((item) => item.id === "search")) {
+      result.push(searchItem);
+    }
+    return result;
   }
 
   function draw() {
@@ -155,5 +168,7 @@ window.Voisr = window.Voisr || {};
                } });
   }
 
-  V.palette = { open, close, register, match, init };
+  /* open/close/register stay module-private: init() is the only entry point
+     the app uses, and match() is the pure matcher the Node tests exercise. */
+  V.palette = { match, init };
 })(window.Voisr);

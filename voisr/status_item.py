@@ -15,6 +15,71 @@ RECORDING_GLYPH = "▬▬▬"  # filled
 _MENU_TARGET_CLASS = None  # ObjC class, built once on first menu construction
 
 
+def _glyph_image(recording: bool):
+    """Three-bar waveform as a template NSImage (auto-inverts with the bar).
+
+    Drawn programmatically rather than shipped as an asset so there is no
+    file to lose in the bundle. A template image is what makes the icon
+    legible in both light and dark menu bars: AppKit recolours it to match
+    the bar instead of painting our literal black.
+    """
+    import AppKit
+    w, h = 22.0, 14.0
+    img = AppKit.NSImage.alloc().initWithSize_((w, h))
+    img.lockFocus()
+    try:
+        AppKit.NSColor.blackColor().set()
+        heights = (10.0, 6.0, 10.0) if recording else (4.0, 4.0, 4.0)
+        x = 2.0
+        for bh in heights:
+            rect = AppKit.NSMakeRect(x, (h - bh) / 2.0, 4.0, bh)
+            AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                rect, 2.0, 2.0).fill()
+            x += 7.0
+    finally:
+        img.unlockFocus()
+    img.setTemplate_(True)
+    return img
+
+
+def _on_main_thread(action) -> None:
+    """Run an AppKit call on the main thread.
+
+    set_recording is invoked from whatever thread drove the dictation: the
+    Quartz event-tap thread on the hotkey path, a pywebview worker on the
+    dashboard path, and the queue's completion worker when transcription
+    finishes. AppKit off the main thread is undefined behaviour, and a crash
+    here would take down the process hosting the event tap that makes
+    push-to-talk work.
+
+    Main-thread callers stay synchronous, so callers can still read the glyph
+    straight after the call. Matches the AppHelper.callAfter convention used
+    by ui._run_save_panel/native_setup and permissions.open_pane.
+
+    The import failure and the dispatch failure are caught separately, and
+    only the first one falls back to running inline. Without pyobjc there is
+    no run loop and nothing that could be a real AppKit call, so inline is the
+    only option and is safe. A *dispatch* that fails means we are on a genuine
+    background thread with a run loop that would not take the work -- running
+    inline there is the off-main AppKit call this function exists to prevent,
+    in the process that hosts the Quartz event tap. A missed glyph update is
+    the cheaper failure, so that path renders nothing.
+    """
+    try:
+        from Foundation import NSThread
+        from PyObjCTools import AppHelper
+    except Exception:
+        action()  # no pyobjc (tests off macOS): no run loop to defer to
+        return
+    try:
+        if not NSThread.isMainThread():
+            AppHelper.callAfter(action)
+            return
+    except Exception:
+        return  # dispatch failed: skip the render rather than run off-main
+    action()
+
+
 class StatusItem:
     def __init__(self, on_dictate, on_open, on_quit, hotkey_label_fn,
                  status_bar=None):
@@ -55,12 +120,32 @@ class StatusItem:
 
     def _render(self, recording: bool) -> None:
         button = self.item.button()
-        button.setTitle_(RECORDING_GLYPH if recording else IDLE_GLYPH)
+        # Tooltip first, glyph second. The glyph block below deliberately lets
+        # a broken setTitle_ propagate -- a status item with no legible glyph
+        # is worth surfacing, and create() relies on that to report failure.
+        # But when it does propagate, everything after it is skipped, and the
+        # tooltip is the last thing left telling the user what the item is and
+        # which key drives it. Setting it first costs nothing and keeps both
+        # properties: the tooltip is always applied, and _render still raises.
         try:
             label = self._hotkey_label_fn()
         except Exception:
             label = "unset"
         button.setToolTip_(f"Voisr — hold {label} to dictate")
+        try:
+            button.setImage_(_glyph_image(recording))
+            button.setTitle_("")
+        except Exception:
+            # The image is cosmetic; the status item is not. Anything that
+            # goes wrong drawing it (no pyobjc, no window server, an AppKit
+            # change) falls back to the text glyphs the app shipped with.
+            # Clear any image a previous successful render left behind, or
+            # the button would show a stale glyph next to the text one.
+            try:
+                button.setImage_(None)
+            except Exception:
+                pass
+            button.setTitle_(RECORDING_GLYPH if recording else IDLE_GLYPH)
 
     def _dispatch(self, action: str) -> None:
         """Single entry point for every menu action. The ObjC target below is
@@ -140,10 +225,18 @@ class StatusItem:
     def set_recording(self, is_recording: bool) -> None:
         if self.item is None:
             return
-        try:
-            self._render(recording=bool(is_recording))
-        except Exception as e:
-            print(f"Voisr status item: set_recording failed: {e}", flush=True)
+        recording = bool(is_recording)
+
+        def apply():
+            if self.item is None:
+                return  # released while the render sat in the run-loop queue
+            try:
+                self._render(recording=recording)
+            except Exception as e:
+                print(f"Voisr status item: set_recording failed: {e}",
+                      flush=True)
+
+        _on_main_thread(apply)
 
     def release(self) -> None:
         item, self.item = self.item, None

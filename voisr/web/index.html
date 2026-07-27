@@ -134,7 +134,18 @@
           <div class="head-actions">
             <input id="history-search" class="search" type="search"
                    placeholder="Search dictations…  ⌘F" autocomplete="off">
-            <button id="history-export" class="btn-secondary" type="button">Export…</button>
+            <div class="export-control">
+              <button id="history-export" class="btn-secondary" type="button"
+                      aria-haspopup="true" aria-expanded="false">Export…</button>
+              <div id="export-popover" class="popover" hidden>
+                <button type="button" class="btn-secondary export-fmt"
+                        id="export-fmt-txt" data-fmt="txt">Plain text (.txt)</button>
+                <button type="button" class="btn-secondary export-fmt"
+                        id="export-fmt-md" data-fmt="md">Markdown (.md)</button>
+                <button type="button" class="btn-secondary export-fmt"
+                        id="export-fmt-json" data-fmt="json">JSON (.json)</button>
+              </div>
+            </div>
           </div>
         </div>
         <p class="sub">Every dictation, stored locally on this Mac.</p>

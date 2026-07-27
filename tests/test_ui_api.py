@@ -24,13 +24,33 @@ class FakeRecorder:
         return ""
 
 
-def make_api(tmp_path):
-    return Api(config_path=tmp_path / "config.json",
-               history=HistoryStore(tmp_path / "h.jsonl"),
-               recorder_factory=FakeRecorder,
-               transcribe_fn=lambda wav: "um, hello world",
-               clock=lambda: 10.0,
-               clipboard_fn=lambda text: None)
+def make_api(tmp_path, **overrides):
+    kwargs = dict(config_path=tmp_path / "config.json",
+                  history=HistoryStore(tmp_path / "h.jsonl"),
+                  recorder_factory=FakeRecorder,
+                  transcribe_fn=lambda wav: "um, hello world",
+                  clock=lambda: 10.0,
+                  clipboard_fn=lambda text: None)
+    kwargs.update(overrides)
+    return Api(**kwargs)
+
+
+class FakeStatus:
+    """Menu-bar stand-in. `recording` is the glyph as it looks right now;
+    `states` is every push it received, so tests can pin both the value and
+    the fact that redundant pushes are not made."""
+
+    def __init__(self):
+        self.recording = False
+        self.states = []
+        self.release_calls = 0
+
+    def set_recording(self, value):
+        self.recording = bool(value)
+        self.states.append(bool(value))
+
+    def release(self):
+        self.release_calls += 1
 
 
 def test_record_cycle_produces_cleaned_history(tmp_path):
@@ -646,8 +666,45 @@ def test_status_item_follows_the_record_cycle(tmp_path):
     assert status.states == [True, False]
 
 
+def test_the_glyph_stays_busy_for_the_whole_dictation(tmp_path):
+    """Releasing the key closes the mic, but the dictation is still in flight
+    until whisper has finished -- and transcription is the slow part. The
+    glyph used to clear the moment the mic closed, so the menu bar claimed
+    idle while the app was still working. Observe the glyph from inside the
+    transcription itself: that is the window the old code got wrong."""
+    status = FakeStatus()
+    seen = []
+
+    def transcribe(wav):
+        seen.append(status.recording)
+        return "um, hello world"
+
+    api = make_api(tmp_path, transcribe_fn=transcribe)
+    api.attach_status_item(status)
+
+    api.start_recording()
+    api.stop_recording()
+
+    assert seen == [True], "the glyph went idle while whisper was still running"
+    assert status.recording is False
+    assert status.states == [True, False]
+
+
+def test_the_mic_flag_still_clears_when_the_mic_closes(tmp_path):
+    """is_recording() is the mic, not the whole dictation: main()'s
+    menu_dictate uses it to decide start-vs-stop, so it must NOT grow the
+    glyph's longer lifetime."""
+    api = make_api(tmp_path)
+    api.start_recording()
+    assert api.is_recording() is True
+    api._release_recording(paste=False)
+    assert api.is_recording() is False
+
+
 def test_a_failed_start_does_not_mark_recording(tmp_path):
     api = make_api(tmp_path)
+    status = FakeStatus()
+    api.attach_status_item(status)
 
     def raise_rejected():
         raise RecordingQueueError("start", "already recording")
@@ -658,6 +715,262 @@ def test_a_failed_start_does_not_mark_recording(tmp_path):
 
     assert result.get("error")
     assert api.is_recording() is False
+    assert status.recording is False
+    assert status.states == [], "a rejected start must not light the glyph"
+
+
+def test_a_failed_release_does_not_strand_a_busy_glyph(tmp_path):
+    """If the release itself blows up, nothing downstream will ever retire
+    the session -- the glyph would sit lit forever."""
+    api = make_api(tmp_path)
+    status = FakeStatus()
+    api.attach_status_item(status)
+    api.start_recording()
+    assert status.recording is True
+
+    def boom(**kwargs):
+        raise RuntimeError("release blew up")
+
+    api._recordings.release = boom
+
+    with pytest.raises(RuntimeError):
+        api._release_recording(paste=False)
+
+    assert status.recording is False
+    assert api.is_recording() is False
+
+
+def test_a_recorder_whose_stop_throws_still_retires_the_glyph(tmp_path):
+    """The other half of the same hole, and the one nothing covered.
+
+    _release_recording's release() succeeds here, so the `claimed is not None`
+    finally above does NOT fire -- the session is handed to the queue and the
+    glyph is retired by whatever finishes it. Normally that is
+    _process_session's own finally. But when recorder.stop() raises,
+    RecordingQueue._finalize_capture sets session.capture_error, and the
+    worker loop (recording_queue.py, `if result is None:`) skips the
+    processor entirely. _process_session never runs, so its finally never
+    runs, and the only thing left that retires the session is the
+    add_done_callback safety net at the end of _release_recording. Without
+    it the menu-bar glyph stays lit forever, with the mic already closed and
+    nothing in flight to turn it off.
+
+    Mutation check: replace the `future.add_done_callback(...)` call in
+    voisr/ui.py with `pass` and this test fails on `status.recording`.
+    """
+    class ExplodingStopRecorder(FakeRecorder):
+        def stop(self):
+            raise RuntimeError("mic went away")
+
+    api = make_api(tmp_path, recorder_factory=ExplodingStopRecorder)
+    status = FakeStatus()
+    api.attach_status_item(status)
+
+    api.start_recording()
+    assert status.recording is True, "the glyph lights for the dictation"
+
+    future = api._release_recording(paste=False)
+
+    # Callbacks fire in the order they were added, and _release_recording
+    # added its retire first -- so once this one has run, the retire has too.
+    # No polling, no sleep: if the safety net is gone, `done` still fires and
+    # the glyph assertion below is what catches it.
+    done = threading.Event()
+    future.add_done_callback(lambda _f: done.set())
+    assert done.wait(5), "the session never completed"
+
+    assert future.result(5).to_api_dict().get("error"), \
+        "a recorder that cannot stop must surface as a failed session"
+    assert api.is_recording() is False, "the mic is closed either way"
+    assert status.recording is False, \
+        "nothing downstream retires this session -- the glyph would stay lit"
+    assert status.states == [True, False]
+
+
+def test_overlapping_dictations_keep_the_glyph_lit(tmp_path):
+    """The queue admits a fresh dictation while an earlier one is still
+    transcribing (that is what max_in_flight is for). Retiring the older
+    session must not clear the glyph out from under the newer one.
+
+    The two dictations genuinely overlap here: transcription parks on a gate,
+    so session 2 starts and is released while session 1 is still inside
+    whisper. Each transcription samples the glyph as it runs -- session 2's
+    sample is taken *after* session 1 has been retired, which is the moment a
+    single boolean (or a `clear()` instead of a `discard()`) goes dark on a
+    live dictation."""
+    status = FakeStatus()
+    entered = [threading.Event(), threading.Event()]
+    gates = [threading.Event(), threading.Event()]
+    seen = []
+
+    def transcribe(wav):
+        n = len(seen)
+        seen.append(status.recording)
+        entered[n].set()
+        assert gates[n].wait(5), "transcription gate was never released"
+        return "um, hello world"
+
+    api = make_api(tmp_path, transcribe_fn=transcribe)
+    api.attach_status_item(status)
+
+    first = api.start_recording()["session_id"]
+    first_future = api._release_recording(paste=False)
+    assert entered[0].wait(5), "session 1 never reached transcription"
+    assert api.is_recording() is False, "session 1's mic should be closed"
+    assert status.recording is True, "the glyph went idle mid-transcription"
+
+    # Session 2 starts while session 1 is still in whisper -- the real overlap.
+    second = api.start_recording()["session_id"]
+    assert second != first
+    second_future = api._release_recording(paste=False)
+    assert status.recording is True
+
+    gates[0].set()  # session 1 finishes and is retired
+    assert entered[1].wait(5), "session 2 never reached transcription"
+    assert status.recording is True, \
+        "retiring session 1 cleared the glyph out from under session 2"
+    # A stale retire of the already-finished first session is a no-op.
+    api._mark_session(first, False)
+    assert status.recording is True
+
+    gates[1].set()
+    assert first_future.result(5).to_api_dict().get("error") is None
+    assert second_future.result(5).to_api_dict().get("error") is None
+
+    assert seen == [True, True], "the glyph was dark during a live dictation"
+    assert status.recording is False
+    assert status.states == [True, False], "the glyph flickered mid-overlap"
+
+
+def test_a_session_marked_before_the_status_item_is_attached_stays_in_sync(
+        tmp_path):
+    """_glyph_busy is a mirror of what the status item was last told. If it
+    were committed with no status item to push to, the later attach would
+    inherit a state it never rendered and the next push would be skipped as
+    "no change" -- a glyph stuck idle for a live dictation."""
+    api = make_api(tmp_path)
+    status = FakeStatus()
+
+    api._mark_session(1, True)  # no status item yet
+    api.attach_status_item(status)
+    api._mark_session(2, True)
+
+    assert status.states == [True], "the busy state was swallowed"
+    assert status.recording is True
+
+
+class WatchedLock:
+    """Reentrant stand-in for _busy_lock that fires `contended` when a
+    *different* thread tries to enter while someone is inside. Reentry by the
+    holder does not count, so this stays honest even though _mark_session
+    re-enters _busy_lock."""
+
+    def __init__(self, contended=None):
+        self._inner = threading.RLock()
+        self._count_lock = threading.Lock()
+        self._holders = []
+        self.contended = contended or threading.Event()
+
+    def __enter__(self):
+        me = threading.get_ident()
+        with self._count_lock:
+            if any(h != me for h in self._holders):
+                self.contended.set()
+            self._holders.append(me)
+        return self._inner.__enter__()
+
+    def __exit__(self, *exc):
+        try:
+            return self._inner.__exit__(*exc)
+        finally:
+            with self._count_lock:
+                self._holders.remove(threading.get_ident())
+
+
+def test_two_concurrent_releases_do_not_both_claim_the_session(tmp_path):
+    """HotkeyService.release() holds _state_lock; Api.stop_recording() comes
+    off the pywebview/JS bridge and holds nothing, so both can be inside
+    _release_recording at once.
+
+    What has to hold is that the caller which claims _active_sequence is the
+    same one RecordingQueue.release() hands the live session to. Break that
+    -- by leaving the read-modify-write unlocked, or by locking the claim but
+    not the hand-off -- and one caller ends up holding a sequence while
+    getting back the queue's *already-resolved* "not recording" failure. Its
+    done-callback fires immediately and retires a session that is still
+    transcribing: the glyph goes dark mid-dictation.
+
+    Driven deterministically, with no sleeps: the queue's release() parks its
+    first caller, and the second thread is only let through once it is
+    provably in position -- blocked on the lock if the two are paired, or
+    already at the queue itself if they are not.
+    """
+    status = FakeStatus()
+    transcribing = threading.Event()
+    finish = threading.Event()
+
+    def transcribe(wav):
+        transcribing.set()
+        assert finish.wait(5), "transcription gate was never released"
+        return "um, hello world"
+
+    api = make_api(tmp_path, transcribe_fn=transcribe)
+    in_position = threading.Event()
+    api._busy_lock = WatchedLock(contended=in_position)
+    api.attach_status_item(status)
+
+    api.start_recording()
+    assert status.recording is True
+
+    real_release = api._recordings.release
+    at_the_queue = threading.Event()
+    resume = threading.Event()
+    arrivals = []
+
+    def gated_release(**kwargs):
+        """Park the first caller inside the hand-off, so the second one can
+        be let in while the first has claimed but not yet handed off."""
+        arrivals.append(threading.current_thread().name)
+        if len(arrivals) == 1:
+            at_the_queue.set()
+            assert resume.wait(5), "the parked caller was never released"
+        else:
+            in_position.set()  # a second caller reached the queue unblocked
+        return real_release(**kwargs)
+
+    api._recordings.release = gated_release
+
+    futures = {}
+
+    def release(name):
+        futures[name] = api._release_recording(paste=False)
+
+    first = threading.Thread(target=release, args=("a",), daemon=True)
+    first.start()
+    assert at_the_queue.wait(5), "the first caller never reached the queue"
+
+    second = threading.Thread(target=release, args=("b",), daemon=True)
+    second.start()
+    assert in_position.wait(5), "the second caller never got into position"
+
+    resume.set()
+    first.join(5)
+    second.join(5)
+    assert not first.is_alive() and not second.is_alive()
+
+    assert transcribing.wait(5), "the claimed session never reached whisper"
+    assert status.recording is True, \
+        "a release that lost the claim retired a live, transcribing session"
+    assert status.states == [True]
+
+    finish.set()
+    errors = [futures[name].result(5).to_api_dict().get("error")
+              for name in ("a", "b")]
+    assert sum(1 for e in errors if e and "not recording" in e) == 1, \
+        f"exactly one release should have claimed the session, got {errors}"
+    assert len(arrivals) == 2, "both callers must reach the queue"
+    assert status.recording is False
+    assert status.states == [True, False]
 
 
 def test_close_releases_the_status_item(tmp_path):
@@ -693,3 +1006,64 @@ def test_save_text_file_reports_cancellation(tmp_path):
     api = make_api(tmp_path)
     api._save_panel_fn = lambda name: None
     assert api.save_text_file("x", "a.txt") == {"ok": False, "path": None}
+
+
+def test_run_save_panel_waits_without_a_timeout(monkeypatch):
+    """_run_save_panel used to cap done.wait(120): if the user left the real
+    NSSavePanel open past that, the calling thread gave up and reported a
+    cancel while the panel was still on screen. runModal() blocks the AppKit
+    main thread until the user acts, so the callback set()s `done` sooner or
+    later regardless -- there is no reason for the caller to time out on it.
+    This asserts the wait is untimed (called with no args), driving the
+    fake AppKit/AppHelper below through the real function body rather than
+    trusting a comment."""
+    import AppKit
+    import PyObjCTools.AppHelper  # noqa: F401 -- import so the attr exists to patch
+    import PyObjCTools
+
+    from voisr import ui as ui_module
+
+    wait_calls = []
+    real_wait = threading.Event.wait
+
+    def spy_wait(self, *args, **kwargs):
+        wait_calls.append((args, kwargs))
+        return real_wait(self, *args, **kwargs)
+
+    monkeypatch.setattr(threading.Event, "wait", spy_wait)
+
+    class FakeURL:
+        def path(self):
+            return "/tmp/voisr-save-panel-test.txt"
+
+    class FakePanel:
+        def setNameFieldStringValue_(self, name):
+            pass
+
+        def runModal(self):
+            return AppKit.NSModalResponseOK
+
+        def URL(self):
+            return FakeURL()
+
+    class FakeNSSavePanel:
+        @staticmethod
+        def savePanel():
+            return FakePanel()
+
+    monkeypatch.setattr(AppKit, "NSSavePanel", FakeNSSavePanel)
+
+    class FakeAppHelper:
+        @staticmethod
+        def callAfter(fn):
+            # Stand-in for the real run loop dispatch: invokes synchronously,
+            # which is fine here since we only care about the done.wait() call.
+            fn()
+
+    monkeypatch.setattr(PyObjCTools, "AppHelper", FakeAppHelper)
+
+    path = ui_module._run_save_panel("out.txt")
+
+    assert path == "/tmp/voisr-save-panel-test.txt"
+    assert wait_calls == [((), {})], \
+        f"done.wait() must be called with no timeout, got {wait_calls}"

@@ -7,9 +7,17 @@ window.Voisr = window.Voisr || {};
     return node;
   }
 
-  async function renderThemes() {
+  /* `known` lets render() hand down the config it has already fetched, so a
+     Settings render costs one get_config rather than three — and a failed
+     config read toasts once, not three times over. Called with no argument
+     from main.js's theme-change hook, where there is nothing to hand down. */
+  async function renderThemes(known) {
     const $ = V.ui.$;
-    const [cfg, themes] = await Promise.all([V.api().get_config(), V.api().get_pill_themes()]);
+    const [cfg, themes] = await Promise.all([
+      known || V.ui.tryApi(V.api().get_config(), "Load settings"),
+      V.ui.tryApi(V.api().get_pill_themes(), "Load pill themes"),
+    ]);
+    if (!cfg || !themes) return;
     const active = cfg.pill_theme || "classic";
     $("#theme-grid").replaceChildren(...themes.map((t) =>
       V.ui.el("button", {
@@ -85,9 +93,10 @@ window.Voisr = window.Voisr || {};
     }
   }
 
-  async function renderColorWheel() {
+  async function renderColorWheel(known) {
     const $ = V.ui.$;
-    const cfg = await V.api().get_config();
+    const cfg = known || await V.ui.tryApi(V.api().get_config(), "Load settings");
+    if (!cfg) return;
     $("#color-preview").dataset.theme = cfg.pill_theme || "classic";
     setColorUi(cfg.pill_color || null);
   }
@@ -111,14 +120,39 @@ window.Voisr = window.Voisr || {};
       try { cv.setPointerCapture(e.pointerId); } catch (_) {}
     });
     cv.addEventListener("pointermove", (e) => dragging && pick(e));
+    cv.addEventListener("pointercancel", async () => {
+      if (!dragging) return;
+      dragging = false;
+      // The gesture was interrupted (capture lost, system gesture took over,
+      // etc.) before it ever reached pointerup, so unlike that handler there
+      // is nothing to save here -- pointerup's own failure branch already
+      // establishes the rule this follows: pick()'s live preview is only
+      // trustworthy once it is confirmed written to config. A cancelled drag
+      // never got that confirmation, so revert the preview to what is
+      // actually stored rather than strand the interrupted colour on
+      // screen -- otherwise hovering the wheel afterwards would look like it
+      // is still dragging, since `dragging` would be the only state left
+      // unrepaired.
+      await renderColorWheel();
+    });
     cv.addEventListener("pointerup", async () => {
       if (!dragging) return;
       dragging = false;
-      await V.api().set_config({ pill_color: lastHex });
+      // pick() has already painted the new colour as a live preview. If the
+      // write fails, that preview is a lie about what the pill will actually
+      // do, so re-read and repaint from what is really stored.
+      if (!await V.ui.tryApi(
+        V.api().set_config({ pill_color: lastHex }), "Save bar color")) {
+        // Awaited so a DOM throw inside renderColorWheel (it has no try/catch
+        // of its own) can't become an unhandled rejection nobody sees.
+        await renderColorWheel();
+        return;
+      }
       V.ui.toast(`Bar color: ${lastHex}`);
     });
     $("#color-reset").addEventListener("click", async () => {
-      await V.api().set_config({ pill_color: null });
+      if (!await V.ui.tryApi(
+        V.api().set_config({ pill_color: null }), "Reset bar color")) return;
       setColorUi(null);
       V.ui.toast("Bar color: theme default");
     });
@@ -145,76 +179,52 @@ window.Voisr = window.Voisr || {};
      theme that was never applied or persisted. */
   let appliedAppearance = "system";
 
+  /* Settings is a list of independent rows fed by four independent bridge
+     calls, so — like home.js's render() — each row is guarded on its own
+     null and a failure degrades that row only. `models.models` on a failed
+     get_models used to throw and blank every other row with it. */
   async function render() {
     const $ = V.ui.$;
-    const [cfg, status, models, hotkey] = await Promise.all([
-      V.api().get_config(), V.api().get_hotkey_status(),
-      V.api().get_models(), V.api().hotkey_display(),
-    ]);
-    $("#paste-toggle").checked = !!cfg.paste;
-    $("#widget-toggle").checked = cfg.show_widget !== false;
-    $("#hotkey-current").textContent = hotkey.display || "unset";
-    $("#hotkey-status").textContent = status.status;
-    appliedAppearance = cfg.appearance || "system";
-    $("#appearance-select").value = appliedAppearance;
-    $("#launch-toggle").checked = !!cfg.launch_at_login;
+    try {
+      const [cfg, status, models, hotkey] = await Promise.all([
+        V.ui.tryApi(V.api().get_config(), "Load settings"),
+        V.ui.tryApi(V.api().get_hotkey_status(), "Load shortcut status"),
+        V.ui.tryApi(V.api().get_models(), "Load models"),
+        V.ui.tryApi(V.api().hotkey_display(), "Load shortcut"),
+      ]);
 
-    const select = $("#model-select");
-    select.replaceChildren(...models.models.map((m) =>
-      V.ui.el("option", {
-        value: m.value,
-        text: m.installed ? m.label : `${m.label} (not installed)`,
-        disabled: !m.installed || null,
-      })));
-    select.value = models.active || (models.models.find((m) => m.installed) || {}).value || "";
+      if (cfg) {
+        $("#paste-toggle").checked = !!cfg.paste;
+        $("#widget-toggle").checked = cfg.show_widget !== false;
+        appliedAppearance = cfg.appearance || "system";
+        $("#appearance-select").value = appliedAppearance;
+        $("#launch-toggle").checked = !!cfg.launch_at_login;
+      }
+      if (hotkey) $("#hotkey-current").textContent = hotkey.display || "unset";
+      if (status) $("#hotkey-status").textContent = status.status;
 
-    renderThemes();
-    renderColorWheel();
+      if (models && models.models) {
+        const select = $("#model-select");
+        select.replaceChildren(...models.models.map((m) =>
+          V.ui.el("option", {
+            value: m.value,
+            text: m.installed ? m.label : `${m.label} (not installed)`,
+            disabled: !m.installed || null,
+          })));
+        select.value = models.active
+          || (models.models.find((m) => m.installed) || {}).value || "";
+      }
+
+      // Hand `cfg` down rather than let each re-fetch it (see renderThemes).
+      // A null cfg here already means get_config failed and toasted once
+      // above -- calling these with nothing to hand down would each re-fetch,
+      // each fail the same way, and each toast the same failure a second and
+      // third time, which is exactly what `known` exists to prevent.
+      if (cfg) await Promise.all([renderThemes(cfg), renderColorWheel(cfg)]);
+    } catch (e) {
+      V.ui.toast("Settings failed to load");
+    }
   }
-
-  /* ---------- bind, once (elements exist as soon as this script parses,
-     since it loads after index.html's body) ---------- */
-
-  document.getElementById("appearance-select").addEventListener("change", async (e) => {
-    const prev = appliedAppearance;
-    const next = e.target.value;
-    const res = await V.api().set_appearance(next);
-    if (res.error) { e.target.value = prev; return V.ui.toast(res.error); }
-    appliedAppearance = next;
-    V.applyAppearance(next);
-    V.ui.toast(`Theme: ${next}`);
-  });
-
-  document.getElementById("model-select").addEventListener("change", async (e) => {
-    await V.api().set_config({ model: e.target.value });
-    V.ui.toast(`Model: ${e.target.value} — applies from your next dictation`);
-  });
-
-  document.getElementById("launch-toggle").addEventListener("change", async (e) => {
-    const res = await V.api().set_launch_at_login(e.target.checked);
-    if (res.error) { e.target.checked = !e.target.checked; return V.ui.toast(res.error); }
-    V.ui.toast(e.target.checked ? "Voisr will start at login" : "Launch at login off");
-  });
-
-  document.getElementById("color-open").addEventListener("click", openColorPopover);
-
-  /* click-outside / Escape dismissal for the colour popover -- registered
-     once here (module load), not inside openColorPopover, so repeated opens
-     never stack extra listeners. The click listener bails out early on any
-     click still inside the popover or on the swatch button that opened it,
-     so the very click that opens the popover (which bubbles to document
-     right after) can never immediately close it again. Mirrors the
-     scrim/Escape pattern in palette.js. */
-  document.addEventListener("click", (e) => {
-    const pop = document.getElementById("color-popover");
-    if (pop.hidden) return;
-    if (pop.contains(e.target) || e.target.closest("#color-open")) return;
-    closeColorPopover();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape") return;
-    if (!document.getElementById("color-popover").hidden) closeColorPopover();
-  });
 
   /* destructive and irreversible, so it keeps a confirmation -- an in-app
      arm/disarm one, never the browser's native dialog. The disarm timer id
@@ -232,29 +242,96 @@ window.Voisr = window.Voisr || {};
     btn.textContent = "Clear…";
   }
 
-  document.getElementById("clear-history").addEventListener("click", async () => {
-    const btn = document.getElementById("clear-history");
-    if (btn.dataset.armed !== "1") {
-      clearTimeout(clearHistoryDisarmTimer);
-      btn.dataset.armed = "1";
-      btn.classList.add("armed");
-      btn.textContent = "Click again to erase everything";
-      clearHistoryArmedAt = Date.now();
-      clearHistoryDisarmTimer = setTimeout(() => disarmClearHistory(btn), 4000);
-      return;
-    }
-    // two click events landing in quick succession -- an accidental
-    // double-click, or a stuck key/trackpad -- both arrive before any async
-    // gap, so without a minimum dwell the second one reads as deliberate
-    // confirmation. This is the app's only irreversible action; require the
-    // confirm click to land at least ~600ms after arming.
-    if (Date.now() - clearHistoryArmedAt < 600) return;
-    disarmClearHistory(btn);
-    const res = await V.api().clear_history();
-    if (res.error) return V.ui.toast(res.error);
-    V.ui.toast(`History cleared — ${res.removed} removed`);
-  });
+  /* ---------- bind, once ----------
+
+     Called by main.js's init(), exactly like home/history/dictionary's
+     init helpers and palette.init(). Everything below used to run at
+     module-parse time; that worked (the script loads after index.html's
+     body, so the elements exist) but made this the one view a reader had
+     to learn a second convention for -- and made the module impossible to
+     load outside a browser. Nothing here may be called twice: the
+     document-level listeners in particular would stack. */
+
+  function init() {
+    document.getElementById("appearance-select").addEventListener("change", async (e) => {
+      const prev = appliedAppearance;
+      const next = e.target.value;
+      const res = await V.ui.tryApi(V.api().set_appearance(next), "Change theme");
+      if (!res) { e.target.value = prev; return; }
+      appliedAppearance = next;
+      V.applyAppearance(next);
+      V.ui.toast(`Theme: ${next}`);
+    });
+
+    document.getElementById("model-select").addEventListener("change", async (e) => {
+      const next = e.target.value;
+      // A failed write that leaves the dropdown showing the new model is its
+      // own bug — the user would dictate expecting a model that was never
+      // saved. Re-render puts the <select> back on what is really stored.
+      if (!await V.ui.tryApi(V.api().set_config({ model: next }), "Save model")) {
+        render();
+        return;
+      }
+      V.ui.toast(`Model: ${next} — applies from your next dictation`);
+    });
+
+    document.getElementById("launch-toggle").addEventListener("change", async (e) => {
+      const res = await V.ui.tryApi(
+        V.api().set_launch_at_login(e.target.checked), "Save launch at login");
+      if (!res) { e.target.checked = !e.target.checked; return; }
+      V.ui.toast(e.target.checked ? "Voisr will start at login" : "Launch at login off");
+    });
+
+    document.getElementById("color-open").addEventListener("click", openColorPopover);
+
+    /* click-outside / Escape dismissal for the colour popover -- registered
+       once here (init, called once), not inside openColorPopover, so repeated
+       opens never stack extra listeners. The click listener bails out early
+       on any click still inside the popover or on the swatch button that
+       opened it, so the very click that opens the popover (which bubbles to
+       document right after) can never immediately close it again. Mirrors the
+       scrim/Escape pattern in palette.js. */
+    document.addEventListener("click", (e) => {
+      const pop = document.getElementById("color-popover");
+      if (pop.hidden) return;
+      if (pop.contains(e.target) || e.target.closest("#color-open")) return;
+      closeColorPopover();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      if (!document.getElementById("color-popover").hidden) closeColorPopover();
+    });
+
+    document.getElementById("clear-history").addEventListener("click", async () => {
+      const btn = document.getElementById("clear-history");
+      if (btn.dataset.armed !== "1") {
+        clearTimeout(clearHistoryDisarmTimer);
+        btn.dataset.armed = "1";
+        btn.classList.add("armed");
+        btn.textContent = "Click again to erase everything";
+        clearHistoryArmedAt = Date.now();
+        clearHistoryDisarmTimer = setTimeout(() => disarmClearHistory(btn), 4000);
+        return;
+      }
+      // two click events landing in quick succession -- an accidental
+      // double-click, or a stuck key/trackpad -- both arrive before any async
+      // gap, so without a minimum dwell the second one reads as deliberate
+      // confirmation. This is the app's only irreversible action; require the
+      // confirm click to land at least ~600ms after arming.
+      if (Date.now() - clearHistoryArmedAt < 600) return;
+      disarmClearHistory(btn);
+      const res = await V.ui.tryApi(V.api().clear_history(), "Clear history");
+      if (!res) return;
+      V.ui.toast(`History cleared — ${res.removed} removed`);
+      // Reuses main.js's voisr:new-dictation listener, which refreshes
+      // whichever of Home/History is on screen. From here on the event means
+      // "history changed", not strictly "a dictation was added" -- a clear
+      // is exactly the kind of change those views need to hear about too, or
+      // their stats/rows stay stale until the user switches views.
+      window.dispatchEvent(new Event("voisr:new-dictation"));
+    });
+  }
 
   V.views = V.views || {};
-  V.views.settings = { render, renderThemes, renderColorWheel, initColorWheel, openColorPopover };
+  V.views.settings = { init, render, renderThemes, renderColorWheel, initColorWheel, openColorPopover };
 })(window.Voisr);
