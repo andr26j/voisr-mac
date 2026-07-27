@@ -22,10 +22,29 @@ function findDescendant(children, sel) {
   return null;
 }
 
+/* The all-matches counterpart, shared by node.querySelectorAll and
+   document.querySelectorAll's class branch, exactly as findDescendant is
+   shared by the singular pair. Same walk, same matcher, same validated
+   subset -- so `querySelectorAll(sel)[0]` and `querySelector(sel)` can never
+   disagree about what matches or in what order.
+
+   Document order: a node is pushed before its own descendants are walked,
+   which is what a real NodeList gives you. history.js indexes the result by
+   cursor position (`rows[cursor]`), so the order is load-bearing, not
+   cosmetic. */
+function collectDescendants(children, sel, out) {
+  for (const kid of children) {
+    if (!kid || typeof kid !== "object") continue;   // text children are strings
+    if (matchesSimpleSelector(kid, sel)) out.push(kid);
+    collectDescendants(kid.children || [], sel, out);
+  }
+  return out;
+}
+
 /* The supported selector subset, shared by every selector-taking method here
-   -- closest(), node.querySelector and document.querySelector -- so none of
-   them can drift apart from the others. Exactly the two shapes the app's real
-   call sites use --
+   -- closest(), node.querySelector, document.querySelector and both
+   querySelectorAll's -- so none of them can drift apart from the others.
+   Exactly the two shapes the app's real call sites use --
 
      main.js:95            e.target.closest(".theme-opt")
      settings.js:282        e.target.closest("#color-open")
@@ -34,12 +53,17 @@ function findDescendant(children, sel) {
      ui.js:6               document.querySelector(sel), i.e. V.ui.$ -- always
                            a single "#id" at every call site across home.js,
                            settings.js, history.js and dictionary.js
+     main.js:13,14         document.querySelectorAll(".view") / (".nav-item")
 
    i.e. a single class or a single id, nothing compound, no combinators, no
-   attribute selectors. A fake that silently matched (or silently returned
-   null for) some *other* selector shape would let a future call site pass
-   its own tests while doing nothing in the real DOM -- a fake that lies is
-   worse than no fake. So anything outside this subset throws instead of
+   attribute selectors. The app does have three querySelectorAll call sites
+   outside this subset -- history.js:87,98,251 ("#history-groups .item-row")
+   and main.js:76 ("[data-view]") -- and they throw here rather than being
+   guessed at, for exactly the reason that follows.
+
+   A fake that silently matched (or silently returned null for) some *other*
+   selector shape would let a future call site pass its own tests while doing
+   nothing in the real DOM -- a fake that lies is worse than no fake. So anything outside this subset throws instead of
    returning null, exactly the way an unsupported selector would surface as
    a loud, obvious test failure rather than a quietly-wrong dismissal. */
 const CLASS_SEL = /^\.[\w-]+$/;
@@ -178,7 +202,20 @@ export function makeNode(tag = "div") {
     querySelector(sel) {
       return findDescendant(node.children, checkSelector("node.querySelector()", sel));
     },
-    querySelectorAll() { return []; },
+    /* Was `() => []` for every selector, supported or not -- the last place
+       this fake still lied. `[]` is a perfectly plausible "nothing matched",
+       so a future test of history.js's arrow-key navigation or Backspace-to-
+       delete would have passed while selectedItem() returned null every time
+       and moveCursor() toggled nothing. Same subset and the same loud throw
+       as querySelector/closest, for the reason spelled out at CLASS_SEL.
+
+       Returns a real Array, which covers everything the app asks of a
+       NodeList: forEach (main.js:13,14,76), indexing (history.js:251) and
+       .length. */
+    querySelectorAll(sel) {
+      return collectDescendants(
+        node.children, checkSelector("node.querySelectorAll()", sel), []);
+    },
     focus() {}, blur() {}, click() { node.dispatch("click"); },
     scrollIntoView() {},
     /* An all-zero rect is not a placeholder -- it is what a real browser
@@ -293,7 +330,35 @@ export function installDom() {
       }
       return null;
     },
-    querySelectorAll: () => [],
+    /* Mirrors document.querySelector above, all-matches: an "#id" resolves
+       through the same byId registry (so it answers 0 or 1 element, exactly
+       as a real document does with unique ids), and a ".class" walks both
+       roots with the roots themselves as candidates.
+
+       NOTE for whoever tests the remaining call sites. Three of the six live
+       ones use shapes outside the supported subset and so throw here rather
+       than answer: history.js:87,98,251 ("#history-groups .item-row", a
+       descendant combinator) and main.js:76 ("[data-view]", an attribute
+       selector). That is deliberate and is the whole policy of this file --
+       a loud throw is the honest answer for a selector the fake cannot
+       really evaluate, and it is what a test of Backspace-to-delete or the
+       nav binding should hit. Widening the grammar is the fix if and when
+       one of those is written; quietly answering [] is not. main.js's
+       show() (".view", ".nav-item") is inside the subset and works today. */
+    querySelectorAll(sel) {
+      const s = checkSelector("document.querySelectorAll()", sel);
+      if (ID_SEL.test(s)) {
+        const hit = byId.get(s.slice(1));
+        return hit ? [hit] : [];
+      }
+      const out = [];
+      for (const root of [doc.documentElement, doc.body]) {
+        if (!root) continue;
+        if (matchesSimpleSelector(root, s)) out.push(root);
+        collectDescendants(root.children, s, out);
+      }
+      return out;
+    },
     documentElement: makeNode("html"), body: makeNode("body"),
     activeElement: null,
   };

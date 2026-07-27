@@ -61,8 +61,23 @@ test("match is a subsequence matcher, not a substring matcher", () => {
 });
 
 test("match requires the query's characters in order", () => {
+  /* THE NEGATIVE CASE MUST NOT USE THE SEARCH COMMAND. `match` pins search as
+     a fallback for any non-empty query, so `ids("yhs", [{id:"search"}])`
+     answers ["search"] whether the matcher respects order or not -- replacing
+     the ordered-subsequence walk with a plain "the title contains every
+     character of q" test left the whole suite green. `hotkey` is an ordinary
+     command with nothing to pin it, so an out-of-order query really does have
+     to come back empty. */
+  const hotkey = [{ id: "hotkey", title: "Change push-to-talk key" }];
+  // "kep" is "Change push-to-talk key" backwards-ish: every one of those
+  // characters is in the title, but not in this order.
+  assert.deepEqual(ids("yek", hotkey), [],
+    "reversed order must not match, and there is nothing to pin here");
+  assert.deepEqual(ids("cpk", hotkey), ["hotkey"], "the same characters in order do match");
+
+  // The search command still answers for its own out-of-order query, but only
+  // because it is pinned -- not because "yhs" matched anything.
   const items = [{ id: "search", title: "Search history" }];
-  // "yhs" does not match "Search history" in order, but the search command is pinned as a fallback.
   assert.deepEqual(ids("yhs", items), ["search"], "reversed order doesn't match, search pinned as fallback");
   assert.deepEqual(ids("sh", items), ["search"]);
 });

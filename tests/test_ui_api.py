@@ -740,6 +740,53 @@ def test_a_failed_release_does_not_strand_a_busy_glyph(tmp_path):
     assert api.is_recording() is False
 
 
+def test_a_recorder_whose_stop_throws_still_retires_the_glyph(tmp_path):
+    """The other half of the same hole, and the one nothing covered.
+
+    _release_recording's release() succeeds here, so the `claimed is not None`
+    finally above does NOT fire -- the session is handed to the queue and the
+    glyph is retired by whatever finishes it. Normally that is
+    _process_session's own finally. But when recorder.stop() raises,
+    RecordingQueue._finalize_capture sets session.capture_error, and the
+    worker loop (recording_queue.py, `if result is None:`) skips the
+    processor entirely. _process_session never runs, so its finally never
+    runs, and the only thing left that retires the session is the
+    add_done_callback safety net at the end of _release_recording. Without
+    it the menu-bar glyph stays lit forever, with the mic already closed and
+    nothing in flight to turn it off.
+
+    Mutation check: replace the `future.add_done_callback(...)` call in
+    voisr/ui.py with `pass` and this test fails on `status.recording`.
+    """
+    class ExplodingStopRecorder(FakeRecorder):
+        def stop(self):
+            raise RuntimeError("mic went away")
+
+    api = make_api(tmp_path, recorder_factory=ExplodingStopRecorder)
+    status = FakeStatus()
+    api.attach_status_item(status)
+
+    api.start_recording()
+    assert status.recording is True, "the glyph lights for the dictation"
+
+    future = api._release_recording(paste=False)
+
+    # Callbacks fire in the order they were added, and _release_recording
+    # added its retire first -- so once this one has run, the retire has too.
+    # No polling, no sleep: if the safety net is gone, `done` still fires and
+    # the glyph assertion below is what catches it.
+    done = threading.Event()
+    future.add_done_callback(lambda _f: done.set())
+    assert done.wait(5), "the session never completed"
+
+    assert future.result(5).to_api_dict().get("error"), \
+        "a recorder that cannot stop must surface as a failed session"
+    assert api.is_recording() is False, "the mic is closed either way"
+    assert status.recording is False, \
+        "nothing downstream retires this session -- the glyph would stay lit"
+    assert status.states == [True, False]
+
+
 def test_overlapping_dictations_keep_the_glyph_lit(tmp_path):
     """The queue admits a fresh dictation while an earlier one is still
     transcribing (that is what max_in_flight is for). Retiring the older

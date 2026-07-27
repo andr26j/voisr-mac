@@ -246,13 +246,63 @@ test("a plain toast is replaced immediately by a newer plain toast", (t) => {
 
   ui.toast("Copied to clipboard");
   assert.equal(toastMsg(), "Copied to clipboard");
+  /* SEPARATED IN TIME ON PURPOSE. Raising both at virtual t=0 gives them the
+     same 3500ms deadline, so no tick can tell a cancelled timer from a live
+     one and the assertions below could never fail -- which is exactly how
+     `clearTimeout(toastTimer)` came to be deletable with the whole suite
+     still green. One second apart, the dead toast's deadline lands a second
+     before its replacement's, in a window this test can actually observe. */
+  t.mock.timers.tick(1000);
   ui.toast("Theme: dark");
 
   assert.equal(toastMsg(), "Theme: dark", "nothing is queued behind a toast with no action");
-  // and the replaced toast's timer went with it: the survivor gets a full
-  // window rather than being cut short by its predecessor's expiry.
-  t.mock.timers.tick(3499);
-  assert.equal(toastHost.hidden, false);
+
+  // ...and the replaced toast's dismissal timer went with it.
+  t.mock.timers.tick(2500);          // t=3500: the FIRST toast's deadline
+  assert.equal(toastHost.classList.contains("in"), true,
+    "a dead toast's timer must not start a fade on the toast that replaced it");
+  t.mock.timers.tick(200);           // t=3700: where its fade would have landed
+  assert.equal(toastHost.hidden, false, "and must not hide it either");
+  assert.equal(toastMsg(), "Theme: dark");
+
+  // The survivor gets a full window of its own, measured from when it showed.
+  t.mock.timers.tick(800);           // t=4500: the SECOND toast's deadline
+  t.mock.timers.tick(200);
+  assert.equal(toastHost.hidden, true);
+});
+
+test("an older toast's fade timer cannot hide the toast that replaced it", (t) => {
+  /* The fade-out is a SECOND timer, and it is the one that shipped untracked:
+     toast A's display window ends, its 200ms fade is scheduled, toast B
+     replaces A inside those 200ms, and A's fade then hides B -- Undo button
+     and all. That is the defect this project already fixed once; nothing
+     covered it, so `clearTimeout(toastFadeTimer)` was deletable with the
+     suite green.
+
+     Deliberately disjoint from the test above: there the first toast's
+     display timer is what must be cancelled, here it has already fired and
+     only the fade is outstanding. So deleting either clearTimeout on its own
+     fails exactly one of the two. */
+  const ui = freshUi(t);
+
+  ui.toast("Copied to clipboard");
+  t.mock.timers.tick(3500);          // A's window ends; its fade is now pending
+  assert.equal(toastHost.hidden, false, "A is fading, not yet hidden");
+
+  ui.toast("Dictation deleted", { actionLabel: "Undo", onAction: () => {} });
+  t.mock.timers.tick(200);           // t=3700: where A's fade lands
+
+  assert.equal(toastHost.hidden, false,
+    "the replaced toast's fade must not hide its replacement");
+  assert.equal(toastMsg(), "Dictation deleted");
+  assert.ok(toastBtn(),
+    "and must not take a live Undo off screen -- delete is a hard delete");
+
+  // The new toast still owns a full action window of its own, measured from
+  // t=3500 when it showed -- so its own deadline is t=8500, fade at t=8700.
+  t.mock.timers.tick(4800);
+  t.mock.timers.tick(200);
+  assert.equal(toastHost.hidden, true);
 });
 
 test("clicking the action drains the queue immediately", (t) => {
@@ -580,6 +630,50 @@ test("chatter cannot evict a QUEUED undo either (permanent-data-loss regression)
   assert.equal(toastMsg(), "Copied to clipboard 3");
   endOfPlainToast(t);
   assert.equal(toastHost.hidden, true);
+});
+
+test("a second delete behind someone else's live undo updates the QUEUED undo in place", async (t) => {
+  /* offerUndo has two coalescing branches and only one of them was covered.
+     The live branch ("a second delete upgrades the live undo in place") is
+     reached when this batch owns the host. This is the other one: a
+     *different* batch owns the host, so this batch's undo is sitting in the
+     queue, and a second delete must rewrite that queued entry rather than
+     add a second one.
+
+     That branch is what makes "at most one undo is ever queued" true -- and
+     that claim is the entire justification for the cap's skip-actions
+     exemption (see the comment at ui.js's queueToast). Without it, two
+     deletes behind a live entry undo queue TWO undos for one batch: the
+     first click empties batch.entries, and the second then drains in as a
+     live-looking Undo button that restores nothing. This project has already
+     shipped a Critical from asserting the wrong invariant here, so the real
+     one gets a real test.
+
+     Mutation check: delete the `const queued = ... if (queued) {...}` block
+     from offerUndo and this test fails on the first assertion below. */
+  const ui = freshUi(t);
+  const log = [];
+
+  // A dictionary removal owns the host, so the dictation undo has to queue.
+  ui.offerEntryUndo({ restore: async () => { log.push("e1"); return true; }, refresh: async () => {} });
+  ui.offerDictationUndo({ restore: async () => { log.push("d1"); return true; }, refresh: async () => {} });
+  ui.offerDictationUndo({ restore: async () => { log.push("d2"); return true; }, refresh: async () => {} });
+  assert.equal(toastMsg(), "Entry removed", "the live entry undo is untouched");
+
+  endOfActionToast(t);               // the entry undo's window ends, queue drains
+
+  assert.equal(toastMsg(), "2 dictations deleted",
+    "the second delete rewrote the queued undo instead of lining up behind it");
+
+  toastBtn().dispatch("click");
+  await settle();
+  assert.deepEqual(log, ["d1", "d2"],
+    "and the one Undo restores the whole batch, not just the first row");
+  assert.equal(toastMsg(), "Restored 2 dictations");
+
+  endOfPlainToast(t);
+  assert.equal(toastHost.hidden, true,
+    "no second dictation undo was queued -- a dead Undo button never drains in");
 });
 
 test("the cap still drops plain toasts when an undo is queued among them", (t) => {

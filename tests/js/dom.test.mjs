@@ -307,6 +307,100 @@ test("document.querySelector throws loudly on a selector shape the app never use
   }
 });
 
+/* ---------- querySelectorAll ----------
+
+   The last place this fake still lied. Both the node and the document version
+   answered `[]` for every selector, supported or not -- and `[]` is a
+   perfectly plausible "nothing matched", so a Node test of history.js's
+   arrow-key navigation, Enter-to-expand or Backspace-to-delete would have
+   passed vacuously: selectedItem() returns null every time because
+   `rows[cursor]` is always undefined, and main.js's show() hides nothing and
+   activates nothing.
+
+   Mutation check for the pair below: put `querySelectorAll() { return []; }`
+   back on either makeNode or the document and these fail. */
+
+test("node.querySelectorAll returns every match in document order, not just the first", () => {
+  const list = makeNode("ul");
+  const a = makeNode("li"), b = makeNode("li"), c = makeNode("li");
+  a.className = "item-row";
+  b.className = "item-row selected";
+  c.classList.add("item-row");            // set the other way, same as findDescendant
+  const group = makeNode("div");
+  group.append(c);                        // nested a level deeper
+  list.append(a, b, group);
+
+  const rows = list.querySelectorAll(".item-row");
+  assert.deepEqual(rows, [a, b, c], "document order, parents before descendants");
+  assert.equal(rows.length, 3);
+  assert.equal(rows[0], list.querySelector(".item-row"),
+    "the singular and plural forms must never disagree about the first match");
+  assert.deepEqual(list.querySelectorAll(".absent"), [], "a real miss is still an empty list");
+});
+
+test("node.querySelectorAll searches descendants only, like its singular twin", () => {
+  const n = makeNode("div");
+  n.className = "item-row";
+  n.id = "self";
+  assert.deepEqual(n.querySelectorAll(".item-row"), []);
+  assert.deepEqual(n.querySelectorAll("#self"), []);
+});
+
+test("node.querySelectorAll throws on an unsupported selector instead of answering an empty list", () => {
+  const n = makeNode("div");
+  n.append(makeNode("span"));
+  const childless = makeNode("div");
+  /* "#history-groups .item-row" is history.js's real selector: a fake that
+     answered [] for it would let a Backspace-to-delete test pass while
+     selectedItem() could never return anything. "[data-view]" is main.js's
+     nav binding. Both must be loud. */
+  for (const sel of ["#history-groups .item-row", "[data-view]", "div.foo", ".a.b", "li", ""]) {
+    assert.throws(() => n.querySelectorAll(sel), /unsupported selector/,
+      `node.querySelectorAll("${sel}") must throw, not silently return []`);
+    assert.throws(() => childless.querySelectorAll(sel), /unsupported selector/,
+      `node.querySelectorAll("${sel}") must throw even with nothing to search`);
+  }
+});
+
+test("document.querySelectorAll matches the roots and their descendants, and resolves #id through the registry", () => {
+  const { document: doc, register } = installDom();
+  doc.body.className = "view";
+  const a = makeNode("section"), b = makeNode("section");
+  a.className = "view";
+  b.classList.add("view");
+  const wrap = makeNode("div");
+  wrap.append(b);
+  doc.body.append(a, wrap);
+
+  // main.js's show() walks exactly this: every .view, so it can hide the
+  // ones that are not the target.
+  assert.deepEqual(doc.querySelectorAll(".view"), [doc.body, a, b],
+    "the roots are candidates too, and descendants follow in document order");
+
+  const strip = makeNode("div");
+  register("perm-strip", strip);
+  assert.deepEqual(doc.querySelectorAll("#perm-strip"), [strip],
+    "an id answers through the same registry as getElementById");
+  assert.deepEqual(doc.querySelectorAll("#never-registered"), []);
+  assert.deepEqual(doc.querySelectorAll(".absent"), []);
+});
+
+test("document.querySelectorAll does not find a node that was never attached to the document", () => {
+  const { document: doc, register } = installDom();
+  const orphan = makeNode("div");
+  orphan.className = "floating";
+  register("floating-thing", orphan);
+  assert.deepEqual(doc.querySelectorAll(".floating"), []);
+});
+
+test("document.querySelectorAll throws on an unsupported selector, exactly like document.querySelector", () => {
+  const { document: doc } = installDom();
+  for (const sel of ["#history-groups .item-row", "[data-view]", "div.foo", "#a, #b", "canvas", ""]) {
+    assert.throws(() => doc.querySelectorAll(sel), /unsupported selector/,
+      `document.querySelectorAll("${sel}") must throw, not silently return []`);
+  }
+});
+
 /* ---------- style and geometry, as the colour wheel uses them ---------- */
 
 test("style carries plain properties and custom properties in one object, and removeProperty really removes", () => {

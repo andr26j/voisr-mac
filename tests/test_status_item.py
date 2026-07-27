@@ -192,6 +192,37 @@ def test_tooltip_shows_the_hotkey_label():
     assert "Right Option" in si.item.button().tooltip
 
 
+def test_the_tooltip_is_set_even_when_the_glyph_render_blows_up():
+    """_render deliberately lets a broken setTitle_ propagate -- see
+    test_set_recording_never_raises_when_the_render_fails and
+    test_a_partial_create_failure_does_not_leak_a_status_item, which both
+    depend on it. But a raise skips everything after it, and while the
+    tooltip was written last that meant the one failure took the glyph *and*
+    the only remaining hint of what the menu-bar item is. Ordering is the
+    whole fix: set the tooltip first and both properties hold.
+
+    Mutation check: move the tooltip block back below the glyph block in
+    status_item._render and this test fails on the tooltip assertion."""
+    label = ["Fn"]
+    si, _ = make(hotkey_label_fn=lambda: label[0])
+    si.create()
+    button = si.item.button()
+
+    # Breaks BOTH glyph paths: the image path's setTitle_("") and the text
+    # fallback's setTitle_(GLYPH) alike, so _render really does raise.
+    def boom(_t):
+        raise RuntimeError("button blew up")
+
+    button.setTitle_ = boom
+    label[0] = "Right Option"
+
+    with pytest.raises(RuntimeError):
+        si._render(recording=True)
+
+    assert "Right Option" in button.tooltip, \
+        "a glyph that blows up must not take the tooltip down with it"
+
+
 def test_release_removes_the_item_and_is_idempotent():
     si, bar = make()
     si.create()
