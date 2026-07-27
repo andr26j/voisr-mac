@@ -120,6 +120,18 @@ class StatusItem:
 
     def _render(self, recording: bool) -> None:
         button = self.item.button()
+        # Tooltip first, glyph second. The glyph block below deliberately lets
+        # a broken setTitle_ propagate -- a status item with no legible glyph
+        # is worth surfacing, and create() relies on that to report failure.
+        # But when it does propagate, everything after it is skipped, and the
+        # tooltip is the last thing left telling the user what the item is and
+        # which key drives it. Setting it first costs nothing and keeps both
+        # properties: the tooltip is always applied, and _render still raises.
+        try:
+            label = self._hotkey_label_fn()
+        except Exception:
+            label = "unset"
+        button.setToolTip_(f"Voisr — hold {label} to dictate")
         try:
             button.setImage_(_glyph_image(recording))
             button.setTitle_("")
@@ -134,11 +146,6 @@ class StatusItem:
             except Exception:
                 pass
             button.setTitle_(RECORDING_GLYPH if recording else IDLE_GLYPH)
-        try:
-            label = self._hotkey_label_fn()
-        except Exception:
-            label = "unset"
-        button.setToolTip_(f"Voisr — hold {label} to dictate")
 
     def _dispatch(self, action: str) -> None:
         """Single entry point for every menu action. The ObjC target below is
