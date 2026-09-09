@@ -16,8 +16,8 @@
   --ink: #1F1D1A;
   --muted: #6E6A63;
   --border: #E8E3DA;
-  --accent: #E8643C;
-  --accent-hover: #D6572F;
+  --accent: #C94A25;
+  --accent-hover: #B8401E;
   --accent-soft: #FBEAE3;
   --on-accent: #FFFFFF;
   --success: #3E7C4F;
@@ -26,7 +26,7 @@
   --warning-soft: #FBF0DE;
   --destructive: #C93A2E;
   --destructive-soft: #FBEBE9;
-  --ring: #E8643C;
+  --ring: #C94A25;
   --scrim: rgba(31, 29, 26, .28);
   --sidebar-bg: rgba(246, 243, 238, .55);
   --shadow: 0 1px 3px rgba(31, 29, 26, .06), 0 8px 24px rgba(31, 29, 26, .05);
