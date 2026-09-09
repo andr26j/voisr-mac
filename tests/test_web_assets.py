@@ -450,3 +450,11 @@ def test_primary_button_text_meets_aa_contrast_in_both_themes():
         block = _theme_block(css, selector)
         ratio = contrast_ratio(_token(block, "--on-accent"), _token(block, "--accent"))
         assert ratio >= 4.5, f"{selector}: on-accent/accent is {ratio:.2f}:1"
+
+
+def test_settings_explains_smart_join_spacing():
+    """L8: consecutive dictations are joined with a space unless a key was
+    pressed in between; a mouse click does not count. Say so."""
+    html = INDEX.read_text()
+    assert "joined with a space" in html
+    assert "mouse" in html

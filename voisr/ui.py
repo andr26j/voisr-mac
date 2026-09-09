@@ -300,6 +300,29 @@ def capture_next_key(timeout: float = 8.0):
     return vk, key_label(vk)
 
 
+# whisper.cpp truncates --prompt at ~224 tokens with no warning, so a large
+# dictionary would silently lose its newest terms. Keep the most recently
+# added ones (dict insertion order) and bound the text.
+GLOSSARY_MAX_TERMS = 40
+GLOSSARY_MAX_CHARS = 600
+
+
+def glossary_prompt(dictionary) -> str | None:
+    """Bias whisper toward the user's spellings: 'Glossary: A, B, C.'"""
+    if not dictionary:
+        return None
+    seen = []
+    for written in reversed(list(dictionary.values())):
+        if written not in seen:
+            seen.append(written)
+        if len(seen) >= GLOSSARY_MAX_TERMS:
+            break
+    seen.reverse()
+    while seen and len("Glossary: " + ", ".join(seen) + ".") > GLOSSARY_MAX_CHARS:
+        seen.pop(0)
+    return ("Glossary: " + ", ".join(seen) + ".") if seen else None
+
+
 class RecordingWidget:
     """Floating Wispr-style pill shown while dictating.
 
@@ -507,6 +530,7 @@ class HotkeyService:
         self._listener_factory = listener_factory or _quartz_listener_factory
         self._listener = None
         self._watcher = None
+        self._wake = threading.Event()  # set by stop() to end a sleeping poll
         self._stopped = False
         self._pressed = False
         self._key_name = None
@@ -728,8 +752,7 @@ class HotkeyService:
     def _watch(self) -> None:
         if self._watcher is not None:
             return
-        import threading
-        import time
+        self._wake.clear()
 
         def poll():
             was_granted = self._permissions_check()
@@ -743,8 +766,8 @@ class HotkeyService:
                 was_granted = granted
                 if granted:
                     break
-                time.sleep(self._poll_interval)
-            self._watcher = None
+                # wait, not sleep: stop() wakes this immediately
+                self._wake.wait(self._poll_interval)
 
         self._watcher = threading.Thread(target=poll, daemon=True)
         self._watcher.start()
@@ -752,6 +775,13 @@ class HotkeyService:
     def stop(self) -> None:
         self._stopped = True
         self._stop_worker()
+        # Wake and join the poll so a following start() never races a
+        # watcher that is still winding down (it would see _watcher set and
+        # spawn nothing, leaving a later permission grant unnoticed).
+        watcher, self._watcher = self._watcher, None
+        if watcher is not None and watcher is not threading.current_thread():
+            self._wake.set()
+            watcher.join(timeout=2.0)
         listener, self._listener = self._listener, None
         if listener is None:
             return
@@ -804,6 +834,7 @@ class Api:
         # Serialises every read-modify-write of config.json in this process
         # (set_config from pywebview workers, capture_hotkey, launch-at-login).
         self._config_lock = threading.RLock()
+        self._config_cache = None  # (stat key, parsed config) or None
         self._recordings = RecordingQueue(
             recorder_factory=recorder_factory,
             fallback_recorder_factory=fallback_recorder_factory,
@@ -814,10 +845,8 @@ class Api:
     def _default_transcribe(self, wav, cfg):
         """Transcribe with the release-time model and dictionary prompt."""
         from voisr.transcriber import resolve_model, transcribe as _transcribe
-        vocab = sorted({v for v in (cfg.get("dictionary") or {}).values()})
-        prompt = ("Glossary: " + ", ".join(vocab) + ".") if vocab else None
         return _transcribe(wav, model_path=resolve_model(cfg.get("model")),
-                           prompt=prompt)
+                           prompt=glossary_prompt(cfg.get("dictionary")))
 
     def _transcribe_audio(self, wav, cfg):
         if self._transcribe_fn is not None:
@@ -1100,8 +1129,29 @@ class Api:
     def get_stats(self):
         return self._history.stats()
 
+    def _config_stat_key(self):
+        try:
+            st = self._config_path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size, st.st_ino)
+
     def get_config(self):
-        return load_config(self._config_path)
+        """Parsed config.json, served from memory while the file is unchanged
+        (this runs on the tap thread for every press and release). The
+        launch-at-login flag is read from the LaunchAgent plist itself, so a
+        plist removed by hand cannot leave Settings claiming it is on."""
+        import copy
+        key = self._config_stat_key()
+        with self._config_lock:
+            cached = self._config_cache
+            if cached is not None and cached[0] == key:
+                cfg = copy.deepcopy(cached[1])
+            else:
+                cfg = load_config(self._config_path)
+                self._config_cache = (key, copy.deepcopy(cfg))
+        cfg["launch_at_login"] = launch_agent.is_enabled(path=launch_agent.PLIST_PATH)
+        return cfg
 
     def _write_config_atomic(self, cfg: dict) -> None:
         """Temp file + fsync + os.replace, so a crash mid-write can never
@@ -1131,6 +1181,11 @@ class Api:
         """Locked read-modify-write; returns the merged config."""
         with self._config_lock:
             cfg = self.get_config()
+            if "hotkey" in updates and updates["hotkey"] != cfg.get("hotkey"):
+                # the legacy name is now the source of truth; a stale captured
+                # vk would otherwise keep winning in HotkeyService._resolve_target
+                cfg.pop("hotkey_vk", None)
+                cfg.pop("hotkey_label", None)
             cfg.update(updates)
             self._write_config_atomic(cfg)
             return cfg

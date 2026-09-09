@@ -104,3 +104,19 @@ def test_hotkey_display_unset_when_no_hotkey_configured(tmp_path):
     api = make_api(tmp_path)
     api.set_config({"hotkey": ""})
     assert api.hotkey_display() == {"display": "unset"}
+
+
+def test_set_config_hotkey_name_clears_a_captured_vk(tmp_path):
+    """L2: a legacy-name change restarts the listener with that name, so a
+    stale captured hotkey_vk must not keep winning in _resolve_target."""
+    import json
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"hotkey": "alt_r", "hotkey_vk": 63, "hotkey_label": "Fn / Globe"}))
+    svc = FakeHotkeyService()
+    api = make_api(tmp_path, service=svc)
+    api.set_config({"hotkey": "f13"})
+    cfg = api.get_config()
+    assert cfg["hotkey"] == "f13"
+    assert "hotkey_vk" not in cfg
+    assert "hotkey_label" not in cfg
+    assert svc.restarted_with == "f13"
