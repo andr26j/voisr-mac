@@ -754,3 +754,30 @@ def test_press_passes_none_color_by_default_and_for_invalid(tmp_path):
     svc2 = HotkeyService(api2, widget=widget2, hide_delay=0)
     svc2.press()
     assert widget2.colors == [None]
+
+
+def test_stop_wakes_and_joins_the_permission_watcher(tmp_path):
+    """L1: stop() used to just flag the poll thread and leave it sleeping
+    (up to poll_interval); a start() racing its exit could find _watcher
+    still set and spawn no new one. stop() now wakes the thread and joins
+    it, so start() always begins with a clean slate."""
+    import time
+    granted = {"ok": False}
+    factory = _counting_factory()
+    svc = HotkeyService(make_api(tmp_path), widget=FakeWidget(), hide_delay=0,
+                        permissions_check=lambda: granted["ok"],
+                        poll_interval=999, listener_factory=factory)
+    svc.start("alt_r")
+    t0 = time.monotonic()
+    svc.stop()
+    assert time.monotonic() - t0 < 1.0, "stop() waited on a sleeping poll"
+    assert svc._watcher is None
+    svc._poll_interval = 0.05
+    svc.start("alt_r")
+    assert svc._watcher is not None
+    granted["ok"] = True
+    deadline = time.monotonic() + 2
+    while "waiting" in svc.status and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert svc.status.startswith("active on"), svc.status
+    svc.stop()

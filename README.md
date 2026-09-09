@@ -7,7 +7,7 @@ A local-only macOS clone of [Wispr Flow](https://wisprflow.ai)'s core loop: **ho
 1. **Capture** — records your mic while you hold the hotkey (or between Enter presses in toggle mode)
 2. **Transcribe** — on-device speech-to-text via whisper.cpp (`ggml-base.en`)
 3. **Clean up** — strips filler words (um, uh, hmm…), normalizes spacing/punctuation, capitalizes, and applies your custom dictionary (e.g. `"trademake" → "TradeMate"` for names the ASR mishears)
-4. **Insert** — pastes the result at the cursor of the frontmost app (Cmd-V via System Events), restoring your clipboard afterwards. If a default paste is blocked, your original clipboard is preserved. In the desktop app, the dictation remains in history; CLI toggle mode has no history store. Use `paste: false` or `--no-paste` for clipboard-only/manual paste.
+4. **Insert** — pastes the result at the cursor of the frontmost app (Cmd-V via System Events), restoring your clipboard afterwards. If a default paste is blocked, your original clipboard is preserved. The desktop app and `--mode hotkey` both write to history; CLI toggle mode does not. Use `paste: false` or `--no-paste` for clipboard-only/manual paste.
 
 ## Setup
 
@@ -77,15 +77,25 @@ and pastes it in the order recorded.
 
 ```json
 {
-  "hotkey": "alt_r",          // pynput key name for push-to-talk
+  "hotkey": "alt_r",          // legacy push-to-talk key name (used when no hotkey_vk)
+  "hotkey_vk": 63,             // macOS virtual keycode captured via Settings → Change…
+  "hotkey_label": "Fn / Globe",// display label for that key
   "paste": true,               // false = clipboard only
   "device": ":0",              // avfoundation audio device (ffmpeg -f avfoundation -list_devices true -i "")
+  "model": "small.en",         // whisper model: small.en (accuracy) or base.en (speed)
+  "show_widget": true,         // floating recording pill
+  "pill_theme": "classic",     // classic | ember | aurora | ocean | neon | breathe | scanner
+  "pill_color": null,          // "#RRGGBB" to recolour the bars, null = theme default
+  "appearance": "system",      // system | light | dark
+  "launch_at_login": false,    // mirrors ~/Library/LaunchAgents/com.local.voisr.plist
   "dictionary": {              // spoken/misheard variant -> written form
     "trade mate": "TradeMate",
     "trademake": "TradeMate"
   }
 }
 ```
+
+The launch-at-login setting is read from the LaunchAgent plist itself, so removing the plist by hand is reflected in Settings. The dictionary's written forms are also passed to whisper as a glossary prompt (most recent 40 terms) to bias spelling.
 
 Add a dictionary entry for **every variant the ASR produces** for a term — dictate the word once, see what comes out, and map it.
 
@@ -113,4 +123,10 @@ Toggle mode with `--no-paste` works with Microphone permission only.
 ./venv/bin/pytest -v
 ```
 
-Tests synthesize speech with macOS `say`, so the full audio → text pipeline is verified without a live microphone.
+Tests synthesize speech with macOS `say`, so the full audio → text pipeline is verified without a live microphone. Tests that need `say`, `whisper-cli`, or a real input device are tagged `audio`; CI (`.github/workflows/ci.yml`, macOS runner) runs the rest:
+
+```bash
+./venv/bin/pytest -q -m "not audio"
+```
+
+Dependencies are pinned in `requirements.txt`; bump them deliberately and re-run the full suite.

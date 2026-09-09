@@ -399,3 +399,62 @@ def test_view_transition_class_exists_and_respects_reduced_motion():
 
 def test_show_applies_the_entering_class():
     assert "entering" in (WEB / "js" / "main.js").read_text()
+
+
+# ---- M2: copy must not claim the clipboard holds every dictation ----
+# In hotkey mode with auto-paste on, a successful paste RESTORES the previous
+# clipboard (voisr/inject.py), so the dictation is not left on it. The old
+# Settings row ("Always on", "placed on your clipboard") and the pill's done
+# label ("Dictation copied") both said otherwise.
+
+def test_settings_does_not_claim_clipboard_is_always_on():
+    html = INDEX.read_text()
+    assert "Always on" not in html
+    assert "placed on your clipboard" not in html
+    assert "Copied when auto-paste is off or blocked" in html
+
+
+def test_pill_done_label_does_not_say_copied():
+    widget = (WEB / "widget.html").read_text()
+    assert 'aria-label="Dictation copied"' not in widget
+    assert 'aria-label="Dictation ready"' in widget
+
+
+# ---- M3: on-accent text must meet WCAG AA (4.5:1) in both themes ----
+
+def _theme_block(css, selector):
+    start = css.index(selector)
+    return css[start:css.index("}", start)]
+
+
+def _token(block, name):
+    return re.search(rf"{name}:\s*(#[0-9A-Fa-f]{{6}})", block).group(1)
+
+
+def _luminance(hex_colour):
+    def channel(c):
+        c /= 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (int(hex_colour[i:i + 2], 16) for i in (1, 3, 5))
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+
+
+def contrast_ratio(a, b):
+    la, lb = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def test_primary_button_text_meets_aa_contrast_in_both_themes():
+    css = TOKENS.read_text()
+    for selector in (':root[data-appearance="light"]', ':root[data-appearance="dark"]'):
+        block = _theme_block(css, selector)
+        ratio = contrast_ratio(_token(block, "--on-accent"), _token(block, "--accent"))
+        assert ratio >= 4.5, f"{selector}: on-accent/accent is {ratio:.2f}:1"
+
+
+def test_settings_explains_smart_join_spacing():
+    """L8: consecutive dictations are joined with a space unless a key was
+    pressed in between; a mouse click does not count. Say so."""
+    html = INDEX.read_text()
+    assert "joined with a space" in html
+    assert "mouse" in html

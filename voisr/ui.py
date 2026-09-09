@@ -300,6 +300,29 @@ def capture_next_key(timeout: float = 8.0):
     return vk, key_label(vk)
 
 
+# whisper.cpp truncates --prompt at ~224 tokens with no warning, so a large
+# dictionary would silently lose its newest terms. Keep the most recently
+# added ones (dict insertion order) and bound the text.
+GLOSSARY_MAX_TERMS = 40
+GLOSSARY_MAX_CHARS = 600
+
+
+def glossary_prompt(dictionary) -> str | None:
+    """Bias whisper toward the user's spellings: 'Glossary: A, B, C.'"""
+    if not dictionary:
+        return None
+    seen = []
+    for written in reversed(list(dictionary.values())):
+        if written not in seen:
+            seen.append(written)
+        if len(seen) >= GLOSSARY_MAX_TERMS:
+            break
+    seen.reverse()
+    while seen and len("Glossary: " + ", ".join(seen) + ".") > GLOSSARY_MAX_CHARS:
+        seen.pop(0)
+    return ("Glossary: " + ", ".join(seen) + ".") if seen else None
+
+
 class RecordingWidget:
     """Floating Wispr-style pill shown while dictating.
 
@@ -507,13 +530,59 @@ class HotkeyService:
         self._listener_factory = listener_factory or _quartz_listener_factory
         self._listener = None
         self._watcher = None
+        self._wake = threading.Event()  # set by stop() to end a sleeping poll
         self._stopped = False
         self._pressed = False
         self._key_name = None
         self._target_vk = None
         self._state_lock = threading.RLock()
         self._epoch = 0  # bumped per recording; stale _finish threads must not touch the widget
+        # Key events are handed to this serial worker instead of being acted
+        # on inside the Quartz tap callback: press() can wait on the previous
+        # recorder's stop() (up to 5 s on the ffmpeg fallback), and a tap
+        # whose callback stalls is disabled by macOS with every event in the
+        # gap lost -- including the release that ends the dictation. One
+        # worker keeps press/release ordering exactly as the keyboard sent it.
+        self._ops = None
+        self._ops_thread = None
         self.status = "not started"
+
+    _OPS_STOP = object()
+
+    def _submit(self, fn) -> None:
+        """Run fn on the serial worker; inline if the worker is not running
+        (direct callers such as tests and the CLI)."""
+        ops = self._ops
+        if ops is None:
+            fn()
+            return
+        ops.put(fn)
+
+    def _start_worker(self) -> None:
+        import queue as queue_module
+        if self._ops is not None:
+            return
+        ops = queue_module.Queue()
+
+        def run():
+            while True:
+                fn = ops.get()
+                if fn is self._OPS_STOP:
+                    return
+                try:
+                    fn()
+                except Exception:
+                    pass  # a failed op must never kill the worker
+
+        self._ops = ops
+        self._ops_thread = threading.Thread(target=run, name="voisr-hotkey-ops",
+                                            daemon=True)
+        self._ops_thread.start()
+
+    def _stop_worker(self) -> None:
+        ops, self._ops = self._ops, None
+        if ops is not None:
+            ops.put(self._OPS_STOP)
 
     def _widget_enabled(self) -> bool:
         return self._widget is not None and bool(self._api.get_config().get("show_widget", True))
@@ -617,6 +686,7 @@ class HotkeyService:
         # does not crash — so this is safe. request_permissions() also fires
         # the Accessibility prompt so Voisr appears in that pane too.
         request_permissions()
+        self._start_worker()
         self._spawn_listener()
         self._refresh_status()
         self._watch()
@@ -640,21 +710,22 @@ class HotkeyService:
                         # next dictation onto the previous one
                         self._api.note_user_typing()
                     return
+                # Everything below is queued, never run here (see _submit).
                 if kind == "down":       # auto-repeats; press() guards
-                    self.press()
+                    self._submit(self.press)
                 elif kind == "up":
-                    self.release()
+                    self._submit(self.release)
                 else:                    # "flags": modifier edges (Fn, ⌥, ⌘...)
                     mask = _VK_FLAG_MASKS.get(vk)
                     if mask is not None:
                         # the flag bit carries the key's true state — immune
                         # to the desync a missed edge causes with toggling
                         if flags & mask:
-                            self.press()
+                            self._submit(self.press)
                         else:
-                            self.release()
+                            self._submit(self.release)
                     else:                # e.g. Caps Lock: flag ≠ key state
-                        self._toggle()   # modifiers never auto-repeat
+                        self._submit(self._toggle)   # modifiers never auto-repeat
             except Exception:
                 pass
 
@@ -681,8 +752,7 @@ class HotkeyService:
     def _watch(self) -> None:
         if self._watcher is not None:
             return
-        import threading
-        import time
+        self._wake.clear()
 
         def poll():
             was_granted = self._permissions_check()
@@ -696,14 +766,22 @@ class HotkeyService:
                 was_granted = granted
                 if granted:
                     break
-                time.sleep(self._poll_interval)
-            self._watcher = None
+                # wait, not sleep: stop() wakes this immediately
+                self._wake.wait(self._poll_interval)
 
         self._watcher = threading.Thread(target=poll, daemon=True)
         self._watcher.start()
 
     def stop(self) -> None:
         self._stopped = True
+        self._stop_worker()
+        # Wake and join the poll so a following start() never races a
+        # watcher that is still winding down (it would see _watcher set and
+        # spawn nothing, leaving a later permission grant unnoticed).
+        watcher, self._watcher = self._watcher, None
+        if watcher is not None and watcher is not threading.current_thread():
+            self._wake.set()
+            watcher.join(timeout=2.0)
         listener, self._listener = self._listener, None
         if listener is None:
             return
@@ -753,6 +831,10 @@ class Api:
         # _mark_session takes it again to push the glyph.
         self._busy_lock = threading.RLock()
         self._save_panel_fn = None
+        # Serialises every read-modify-write of config.json in this process
+        # (set_config from pywebview workers, capture_hotkey, launch-at-login).
+        self._config_lock = threading.RLock()
+        self._config_cache = None  # (stat key, parsed config) or None
         self._recordings = RecordingQueue(
             recorder_factory=recorder_factory,
             fallback_recorder_factory=fallback_recorder_factory,
@@ -763,10 +845,8 @@ class Api:
     def _default_transcribe(self, wav, cfg):
         """Transcribe with the release-time model and dictionary prompt."""
         from voisr.transcriber import resolve_model, transcribe as _transcribe
-        vocab = sorted({v for v in (cfg.get("dictionary") or {}).values()})
-        prompt = ("Glossary: " + ", ".join(vocab) + ".") if vocab else None
         return _transcribe(wav, model_path=resolve_model(cfg.get("model")),
-                           prompt=prompt)
+                           prompt=glossary_prompt(cfg.get("dictionary")))
 
     def _transcribe_audio(self, wav, cfg):
         if self._transcribe_fn is not None:
@@ -858,10 +938,7 @@ class Api:
             if not got:
                 return {"error": "no key detected — click Change and press a key"}
             vk, label = got
-            cfg = self.get_config()
-            cfg["hotkey_vk"] = vk
-            cfg["hotkey_label"] = label
-            self._config_path.write_text(json.dumps(cfg, indent=2))
+            self._update_config({"hotkey_vk": vk, "hotkey_label": label})
             return {"vk": vk, "label": label}
         finally:
             if svc is not None:
@@ -1052,14 +1129,71 @@ class Api:
     def get_stats(self):
         return self._history.stats()
 
+    def _config_stat_key(self):
+        try:
+            st = self._config_path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size, st.st_ino)
+
     def get_config(self):
-        return load_config(self._config_path)
+        """Parsed config.json, served from memory while the file is unchanged
+        (this runs on the tap thread for every press and release). The
+        launch-at-login flag is read from the LaunchAgent plist itself, so a
+        plist removed by hand cannot leave Settings claiming it is on."""
+        import copy
+        key = self._config_stat_key()
+        with self._config_lock:
+            cached = self._config_cache
+            if cached is not None and cached[0] == key:
+                cfg = copy.deepcopy(cached[1])
+            else:
+                cfg = load_config(self._config_path)
+                self._config_cache = (key, copy.deepcopy(cfg))
+        cfg["launch_at_login"] = launch_agent.is_enabled(path=launch_agent.PLIST_PATH)
+        return cfg
+
+    def _write_config_atomic(self, cfg: dict) -> None:
+        """Temp file + fsync + os.replace, so a crash mid-write can never
+        leave a truncated config.json (which load_config would silently
+        replace with defaults, wiping the user's dictionary)."""
+        import os
+        import tempfile
+        path = self._config_path
+        payload = json.dumps(cfg, indent=2)
+        fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp",
+                                   dir=str(path.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(payload)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+            tmp = None
+        finally:
+            if tmp is not None:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+
+    def _update_config(self, updates: dict) -> dict:
+        """Locked read-modify-write; returns the merged config."""
+        with self._config_lock:
+            cfg = self.get_config()
+            if "hotkey" in updates and updates["hotkey"] != cfg.get("hotkey"):
+                # the legacy name is now the source of truth; a stale captured
+                # vk would otherwise keep winning in HotkeyService._resolve_target
+                cfg.pop("hotkey_vk", None)
+                cfg.pop("hotkey_label", None)
+            cfg.update(updates)
+            self._write_config_atomic(cfg)
+            return cfg
 
     def set_config(self, updates):
-        old_hotkey = self.get_config().get("hotkey")
-        cfg = self.get_config()
-        cfg.update(updates)
-        self._config_path.write_text(json.dumps(cfg, indent=2))
+        with self._config_lock:
+            old_hotkey = self.get_config().get("hotkey")
+            cfg = self._update_config(updates)
         new_hotkey = cfg.get("hotkey")
         if self._hotkey_service and new_hotkey != old_hotkey:
             self._hotkey_service.restart(new_hotkey)
@@ -1242,8 +1376,9 @@ def main():
             # spec requires the two to never disagree. service._toggle() is
             # the same press()/release() pair used for the Fn/Globe-style
             # toggle keys, which is exactly this click-to-start,
-            # click-to-stop shape.
-            service._toggle()
+            # click-to-stop shape. Submitted to the service's worker so the
+            # AppKit main thread never waits on queue admission either.
+            service._submit(service._toggle)
 
         def menu_open():
             try:

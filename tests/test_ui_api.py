@@ -1067,3 +1067,130 @@ def test_run_save_panel_waits_without_a_timeout(monkeypatch):
     assert path == "/tmp/voisr-save-panel-test.txt"
     assert wait_calls == [((), {})], \
         f"done.wait() must be called with no timeout, got {wait_calls}"
+
+
+def test_set_config_failed_write_leaves_config_intact_and_no_temp_file(tmp_path, monkeypatch):
+    """H1: a config write that dies mid-way must not leave a truncated file
+    (which load_config would replace with defaults, wiping the dictionary)."""
+    import os
+    api = make_api(tmp_path)
+    api.set_config({"dictionary": {"trademake": "TradeMate"}})
+    before = (tmp_path / "config.json").read_bytes()
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", boom)
+    with pytest.raises(OSError):
+        api.set_config({"paste": False})
+
+    assert (tmp_path / "config.json").read_bytes() == before
+    assert [p.name for p in tmp_path.iterdir() if p.name != "config.json"
+            and not p.name.startswith("h.jsonl")] == []
+
+
+def test_concurrent_set_config_calls_keep_every_update(tmp_path, monkeypatch):
+    """H1: two bridge calls updating different keys at once must not clobber
+    each other's write."""
+    import time
+    from voisr import ui as ui_mod
+    real_load = ui_mod.load_config
+
+    def slow_load(path):
+        cfg = real_load(path)
+        time.sleep(0.02)   # widen the read-modify-write window
+        return cfg
+
+    monkeypatch.setattr(ui_mod, "load_config", slow_load)
+    api = make_api(tmp_path)
+    n = 8
+    barrier = threading.Barrier(n)
+
+    def worker(i):
+        barrier.wait()
+        api.set_config({f"k{i}": i})
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    cfg = api.get_config()
+    assert all(cfg.get(f"k{i}") == i for i in range(n)), cfg
+
+
+def test_capture_hotkey_write_is_atomic(tmp_path, monkeypatch):
+    import os
+    api = make_api(tmp_path, capture_fn=lambda timeout: (63, "Fn / Globe"))
+    api.set_config({"dictionary": {"a": "b"}})
+    before = (tmp_path / "config.json").read_bytes()
+    monkeypatch.setattr(os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("x")))
+    with pytest.raises(OSError):
+        api.capture_hotkey()
+    assert (tmp_path / "config.json").read_bytes() == before
+
+
+def test_launch_at_login_reflects_the_plist_not_the_stale_flag(tmp_path, monkeypatch):
+    """L3: the config flag drifts if the user removes the LaunchAgent by
+    hand; get_config must report what the system will actually do."""
+    plist = tmp_path / "agent.plist"
+    monkeypatch.setattr(launch_agent, "PLIST_PATH", plist)
+    api = make_api(tmp_path)
+    api.set_launch_at_login(True)
+    assert api.get_config()["launch_at_login"] is True
+    plist.unlink()
+    assert api.get_config()["launch_at_login"] is False
+
+
+def test_glossary_prompt_is_capped_to_the_most_recent_terms(tmp_path):
+    """L4: whisper.cpp truncates --prompt at ~224 tokens with no warning, so
+    a big dictionary silently loses its newest (most useful) terms."""
+    from voisr.ui import glossary_prompt
+    dictionary = {f"spoken{i}": f"Written{i}" for i in range(200)}
+    prompt = glossary_prompt(dictionary)
+    assert prompt.startswith("Glossary: ")
+    assert "Written199" in prompt          # newest kept
+    assert "Written0" not in prompt        # oldest dropped
+    assert len(prompt) <= 600
+
+
+def test_glossary_prompt_is_none_for_an_empty_dictionary():
+    from voisr.ui import glossary_prompt
+    assert glossary_prompt({}) is None
+    assert glossary_prompt(None) is None
+
+
+def test_get_config_does_not_reread_an_unchanged_file(tmp_path, monkeypatch):
+    """L5: get_config runs on the tap thread on every press/release; an
+    unchanged file must be served from memory."""
+    from voisr import ui as ui_mod
+    calls = []
+    real = ui_mod.load_config
+
+    def counting(path):
+        calls.append(1)
+        return real(path)
+
+    monkeypatch.setattr(ui_mod, "load_config", counting)
+    api = make_api(tmp_path)
+    api.set_config({"paste": False})
+    calls.clear()
+    assert api.get_config()["paste"] is False
+    assert api.get_config()["paste"] is False
+    assert len(calls) == 1
+
+
+def test_get_config_sees_an_external_edit(tmp_path):
+    api = make_api(tmp_path)
+    api.set_config({"paste": False})
+    assert api.get_config()["paste"] is False
+    (tmp_path / "config.json").write_text(json.dumps({"paste": True}))
+    assert api.get_config()["paste"] is True
+
+
+def test_get_config_returns_a_private_copy(tmp_path):
+    api = make_api(tmp_path)
+    api.set_config({"dictionary": {"a": "b"}})
+    cfg = api.get_config()
+    cfg["dictionary"]["zzz"] = "mutated"
+    assert "zzz" not in api.get_config()["dictionary"]

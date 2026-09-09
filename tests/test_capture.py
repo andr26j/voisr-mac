@@ -48,11 +48,13 @@ def cb_factory():
 
 
 def make_api(tmp_path, **kw):
-    return Api(config_path=tmp_path / "config.json",
-               history=HistoryStore(tmp_path / "h.jsonl"),
-               recorder_factory=FakeRecorder,
-               transcribe_fn=lambda wav: "hello",
-               clock=lambda: 1.0, clipboard_fn=lambda text: None, **kw)
+    kwargs = dict(config_path=tmp_path / "config.json",
+                  history=HistoryStore(tmp_path / "h.jsonl"),
+                  recorder_factory=FakeRecorder,
+                  transcribe_fn=lambda wav: "hello",
+                  clock=lambda: 1.0, clipboard_fn=lambda text: None)
+    kwargs.update(kw)
+    return Api(**kwargs)
 
 
 def wait_for_hide(widget, timeout=3.0):
@@ -93,7 +95,7 @@ def test_fn_toggle_semantics_drive_full_cycle(tmp_path):
     listener = factory.made[-1]
     assert 63 in TOGGLE_VKS
     listener.handler(63, "flags", 0x800000)   # hardware Fn press edge
-    assert widget.calls == ["recording"]
+    wait_for(lambda: widget.calls == ["recording"])
     listener.handler(63, "flags", 0)           # hardware Fn release edge
     wait_for_hide(widget)
     assert widget.calls == ["recording", "processing", "done", "hide"]
@@ -111,7 +113,7 @@ def test_normal_key_ignores_autorepeat(tmp_path):
     listener.handler(105, "down", 0)
     listener.handler(105, "down", 0)    # auto-repeat while held
     listener.handler(105, "down", 0)
-    assert widget.calls == ["recording"]
+    wait_for(lambda: widget.calls == ["recording"])
     listener.handler(105, "up", 0)
     wait_for_hide(widget)
     assert widget.calls == ["recording", "processing", "done", "hide"]
@@ -128,7 +130,7 @@ def test_legacy_config_name_still_works(tmp_path):
     svc.start()
     listener = factory.made[-1]
     listener.handler(61, "flags", 0x80140)   # hardware right-option press edge
-    assert widget.calls == ["recording"]
+    wait_for(lambda: widget.calls == ["recording"])
     svc.stop()
 
 
@@ -144,7 +146,7 @@ def test_missed_release_edge_does_not_invert_state(tmp_path):
     listener = factory.made[-1]
     listener.handler(63, "flags", 0x800000)   # press
     listener.handler(63, "flags", 0x800000)   # press again (release was missed)
-    assert widget.calls == ["recording"]      # still recording, not inverted
+    wait_for(lambda: widget.calls == ["recording"])   # not inverted
     listener.handler(63, "flags", 0)          # release
     wait_for_hide(widget)
     assert widget.calls == ["recording", "processing", "done", "hide"]
@@ -202,3 +204,66 @@ def test_capture_hotkey_timeout_restores_service(tmp_path):
     res = api.capture_hotkey()
     assert "error" in res
     assert svc.events == ["stop", "start"]
+
+
+def test_tap_handler_returns_fast_while_previous_capture_is_finalizing(tmp_path):
+    """H2: a press that lands while the previous recorder is still in stop()
+    must not block the event-tap callback. macOS disables a tap whose
+    callback stalls, and every key event in the gap (including the release
+    that ends the dictation) is lost."""
+    import threading
+    import time
+
+    (tmp_path / "config.json").write_text(json.dumps({"hotkey_vk": 105, "paste": False}))
+    allow_stop = threading.Event()
+    stop_entered = threading.Event()
+    made = []
+
+    class BlockingStopRecorder(FakeRecorder):
+        def stop(self):
+            stop_entered.set()
+            assert allow_stop.wait(5)
+            return super().stop()
+
+    def recorder_factory():
+        rec = BlockingStopRecorder() if not made else FakeRecorder()
+        made.append(rec)
+        return rec
+
+    widget = FakeWidget()
+    factory = cb_factory()
+    api = make_api(tmp_path, recorder_factory=recorder_factory)
+    svc = HotkeyService(api, widget=widget, hide_delay=0, listener_factory=factory)
+    svc.start()
+    listener = factory.made[-1]
+    try:
+        listener.handler(105, "down", 0)
+        wait_for(lambda: widget.calls == ["recording"])
+        listener.handler(105, "up", 0)
+        assert stop_entered.wait(2)
+
+        t0 = time.monotonic()
+        listener.handler(105, "down", 0)       # second press while stop() is stuck
+        elapsed = time.monotonic() - t0
+        assert elapsed < 0.2, f"tap handler blocked for {elapsed:.2f}s"
+
+        listener.handler(105, "up", 0)         # release must not be lost either
+        allow_stop.set()
+        wait_for(lambda: widget.calls.count("recording") == 2)
+        # the first session's done/hide are suppressed by design (a newer
+        # press bumped the epoch); the second runs to completion
+        wait_for(lambda: widget.calls[-2:] == ["done", "hide"])
+        assert len(made) == 2
+        assert len(api.get_history()) == 2
+    finally:
+        allow_stop.set()
+        svc.stop()
+        api.close()
+
+
+def wait_for(cond, timeout=3.0):
+    import time
+    deadline = time.monotonic() + timeout
+    while not cond() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert cond(), "condition not met before timeout"

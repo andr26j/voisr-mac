@@ -354,9 +354,14 @@ class HistoryStore:
                     chunks.append(chunk)
             finally:
                 _close_tracked(fd)
-        contents = b"".join(chunks).decode("utf-8")
         items = []
-        for line in contents.splitlines():
+        # Decode per line: one undecodable byte (a torn write from an older
+        # build, a disk error) must cost that line only, not the whole store.
+        for raw_line in b"".join(chunks).splitlines():
+            try:
+                line = raw_line.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
             if not line.strip():
                 continue
             try:
