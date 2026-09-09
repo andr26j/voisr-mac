@@ -1327,3 +1327,15 @@ def test_clear_removes_everything_in_one_write_and_reports_the_count(tmp_path):
 
 def test_clear_on_empty_history_returns_zero(tmp_path):
     assert HistoryStore(tmp_path / "h.jsonl").clear() == 0
+
+
+def test_undecodable_line_is_skipped_and_history_stays_usable(tmp_path):
+    """M1: one bad byte must not make the whole history unreadable forever."""
+    h = HistoryStore(tmp_path / "h.jsonl")
+    h.add("good", 1.0)
+    with open(h.path, "ab") as f:
+        f.write(b'{"id": "x", "ts": 1, "text": "\xff\xfe", "words": 1, "duration_s": 1}\n')
+    assert [i["text"] for i in h.list()] == ["good"]
+    h.add("after", 1.0)
+    assert [i["text"] for i in h.list()] == ["after", "good"]
+    assert h.stats()["dictations"] == 2

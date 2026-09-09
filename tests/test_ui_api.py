@@ -1067,3 +1067,64 @@ def test_run_save_panel_waits_without_a_timeout(monkeypatch):
     assert path == "/tmp/voisr-save-panel-test.txt"
     assert wait_calls == [((), {})], \
         f"done.wait() must be called with no timeout, got {wait_calls}"
+
+
+def test_set_config_failed_write_leaves_config_intact_and_no_temp_file(tmp_path, monkeypatch):
+    """H1: a config write that dies mid-way must not leave a truncated file
+    (which load_config would replace with defaults, wiping the dictionary)."""
+    import os
+    api = make_api(tmp_path)
+    api.set_config({"dictionary": {"trademake": "TradeMate"}})
+    before = (tmp_path / "config.json").read_bytes()
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", boom)
+    with pytest.raises(OSError):
+        api.set_config({"paste": False})
+
+    assert (tmp_path / "config.json").read_bytes() == before
+    assert [p.name for p in tmp_path.iterdir() if p.name != "config.json"
+            and not p.name.startswith("h.jsonl")] == []
+
+
+def test_concurrent_set_config_calls_keep_every_update(tmp_path, monkeypatch):
+    """H1: two bridge calls updating different keys at once must not clobber
+    each other's write."""
+    import time
+    from voisr import ui as ui_mod
+    real_load = ui_mod.load_config
+
+    def slow_load(path):
+        cfg = real_load(path)
+        time.sleep(0.02)   # widen the read-modify-write window
+        return cfg
+
+    monkeypatch.setattr(ui_mod, "load_config", slow_load)
+    api = make_api(tmp_path)
+    n = 8
+    barrier = threading.Barrier(n)
+
+    def worker(i):
+        barrier.wait()
+        api.set_config({f"k{i}": i})
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    cfg = api.get_config()
+    assert all(cfg.get(f"k{i}") == i for i in range(n)), cfg
+
+
+def test_capture_hotkey_write_is_atomic(tmp_path, monkeypatch):
+    import os
+    api = make_api(tmp_path, capture_fn=lambda timeout: (63, "Fn / Globe"))
+    api.set_config({"dictionary": {"a": "b"}})
+    before = (tmp_path / "config.json").read_bytes()
+    monkeypatch.setattr(os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("x")))
+    with pytest.raises(OSError):
+        api.capture_hotkey()
+    assert (tmp_path / "config.json").read_bytes() == before
