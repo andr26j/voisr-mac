@@ -31,12 +31,3 @@ def test_audio_marker_excludes_every_microphone_and_speech_test():
                    "test_transcribe_works_with_launchd_path"):
         assert needle not in collected, f"{needle} still collected under -m 'not audio'"
     assert "test_infra.py" in collected
-
-
-def test_ci_workflow_runs_the_non_audio_suite_on_macos():
-    wf = ROOT / ".github" / "workflows" / "ci.yml"
-    assert wf.exists()
-    text = wf.read_text()
-    assert "macos" in text
-    assert '-m "not audio"' in text
-    assert "requirements.txt" in text

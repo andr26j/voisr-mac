@@ -123,7 +123,7 @@ Toggle mode with `--no-paste` works with Microphone permission only.
 ./venv/bin/pytest -v
 ```
 
-Tests synthesize speech with macOS `say`, so the full audio → text pipeline is verified without a live microphone. Tests that need `say`, `whisper-cli`, or a real input device are tagged `audio`; CI (`.github/workflows/ci.yml`, macOS runner) runs the rest:
+Tests synthesize speech with macOS `say`, so the full audio → text pipeline is verified without a live microphone. Tests that need `say`, `whisper-cli`, or a real input device are tagged `audio`; run the rest on a machine without them with:
 
 ```bash
 ./venv/bin/pytest -q -m "not audio"
