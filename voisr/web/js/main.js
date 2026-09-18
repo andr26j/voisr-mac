@@ -14,6 +14,12 @@ window.Voisr = window.Voisr || {};
     document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     const target = document.getElementById(`view-${view}`);
 
+    // .main is the one scroll container for every view, so its offset
+    // carries across a switch: leave Home scrolled to the bottom, open
+    // Settings, and it opens scrolled past its own content — a blank pane.
+    const main = document.querySelector(".main");
+    if (main) main.scrollTop = 0;
+
     if (enteringController) {
       enteringController.abort();
       if (enteringTarget) enteringTarget.classList.remove("entering");

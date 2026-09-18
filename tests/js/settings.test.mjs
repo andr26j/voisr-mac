@@ -36,7 +36,7 @@ test("settings.js loads without touching the DOM at parse time", () => {
    (document/window listener recording + dispatch, node.contains/closest,
    parent links) specifically to unlock these. */
 
-const SETTINGS_IDS = ["appearance-select", "model-select", "launch-toggle",
+const SETTINGS_IDS = ["appearance-grid", "model-select", "launch-toggle",
                        "color-open", "color-popover", "clear-history", "toast"];
 
 function mountSettings(t, api, apis = ["setTimeout"]) {
@@ -47,7 +47,7 @@ function mountSettings(t, api, apis = ["setTimeout"]) {
   const nodes = {};
   for (const id of SETTINGS_IDS) {
     nodes[id] = makeNode(id === "launch-toggle" ? "input"
-      : id === "appearance-select" || id === "model-select" ? "select" : "div");
+      : id === "model-select" ? "select" : "div");
     env.register(id, nodes[id]);
   }
   nodes["color-popover"].hidden = true;
@@ -318,4 +318,93 @@ test("outside click and Escape dismiss the colour popover; a click inside it or 
 
   h.document.dispatch("keydown", { key: "Escape" });
   assert.equal(pop.hidden, true, "Escape closes the open popover");
+});
+
+/* ---------- appearance thumbnails ----------
+
+   The grid replaces its own buttons on every render, so the click listener
+   is delegated onto the grid; a per-button listener would be thrown away
+   with the buttons. These drive it the way dom.mjs intends -- dispatching
+   on the grid with the button as the event target. */
+
+function mountAppearance(t, api) {
+  const env = mountSettings(t, {
+    get_config: async () => ({ appearance: "system", pill_theme: "classic" }),
+    set_appearance: async (mode) => ({ ok: true, appearance: mode }),
+    ...api,
+  });
+  // main.js owns applyAppearance; settings.js only calls it
+  const applied = [];
+  env.V.applyAppearance = (mode) => applied.push(mode);
+  env.V.views.settings.renderAppearance();
+  return { ...env, applied };
+}
+
+const labelsOf = (grid) => grid.children.map((b) => b.dataset.value);
+const activeOf = (grid) =>
+  (grid.children.find((b) => b.className.includes("active")) || {}).dataset?.value;
+
+test("the appearance grid offers all three modes as pictures, with the stored one marked", async (t) => {
+  const s = mountAppearance(t, {});
+
+  assert.deepEqual(labelsOf(s["appearance-grid"]), ["system", "light", "dark"]);
+  // each is a picture of the theme, not a text row
+  assert.ok(s["appearance-grid"].children.every((b) =>
+    b.children.some((c) => c.className === "thumb-art")));
+  assert.equal(activeOf(s["appearance-grid"]), "system");
+  assert.equal(s["appearance-grid"].children[0].getAttribute("aria-pressed"), "true");
+  assert.equal(s["appearance-grid"].children[2].getAttribute("aria-pressed"), "false");
+});
+
+test("picking a theme saves it, applies it, and moves the highlight", async (t) => {
+  const saved = [];
+  const s = mountAppearance(t, {
+    set_appearance: async (mode) => { saved.push(mode); return { ok: true }; },
+  });
+
+  const dark = s["appearance-grid"].children[2];
+  s["appearance-grid"].dispatch("click", { target: dark });
+  await settle();
+
+  assert.deepEqual(saved, ["dark"]);
+  assert.deepEqual(s.applied, ["dark"]);
+  assert.equal(activeOf(s["appearance-grid"]), "dark");
+});
+
+test("a failed save leaves the grid on the theme that is actually applied", async (t) => {
+  // The <select> this replaced had the same contract: a write that fails
+  // must never leave the control showing a theme that was neither applied
+  // nor persisted.
+  const s = mountAppearance(t, { set_appearance: async () => ({ error: "read-only config" }) });
+
+  s["appearance-grid"].dispatch("click", { target: s["appearance-grid"].children[1] });
+  await settle();
+
+  assert.equal(activeOf(s["appearance-grid"]), "system",
+    "the highlight snaps back to what is really stored");
+  assert.deepEqual(s.applied, [], "nothing was applied");
+});
+
+test("clicking the already-active theme is a no-op, not a redundant write", async (t) => {
+  const saved = [];
+  const s = mountAppearance(t, {
+    set_appearance: async (mode) => { saved.push(mode); return { ok: true }; },
+  });
+
+  s["appearance-grid"].dispatch("click", { target: s["appearance-grid"].children[0] });
+  await settle();
+
+  assert.deepEqual(saved, []);
+});
+
+test("a click on the grid's own padding does nothing", async (t) => {
+  const saved = [];
+  const s = mountAppearance(t, {
+    set_appearance: async (mode) => { saved.push(mode); return { ok: true }; },
+  });
+
+  s["appearance-grid"].dispatch("click", { target: s["appearance-grid"] });
+  await settle();
+
+  assert.deepEqual(saved, []);
 });

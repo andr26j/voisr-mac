@@ -62,56 +62,50 @@
 
     <!-- HOME -->
     <section class="view" id="view-home">
-      <div id="perm-strip" class="perm-strip" aria-live="polite"></div>
       <header class="page-head">
         <h1 id="greeting">Welcome back</h1>
         <p class="sub">Hold a key to dictate, transcribed entirely on this Mac and never sent to the cloud.</p>
       </header>
 
       <div class="home-main">
-        <div class="record-card card">
-          <p class="hero-line">
-            Hold <kbd id="hero-keycap" class="keycap">…</kbd> to dictate
-          </p>
-          <div id="hero-wave" class="hero-wave" aria-hidden="true">
-            <span class="hb"></span><span class="hb"></span><span class="hb"></span>
-            <span class="hb"></span><span class="hb"></span><span class="hb"></span>
-            <span class="hb"></span>
-          </div>
-          <p class="hero-sub">Anywhere on your Mac. Release and the text lands where you were typing.</p>
-
-          <button id="record-btn" class="btn-secondary" aria-label="Start recording">
-            or click to record
-          </button>
-          <p id="record-status" class="record-status">Ready</p>
-          <p id="record-error" class="record-error" role="alert"></p>
-          <div id="record-result" class="record-result" hidden>
-            <p id="result-text"></p>
-            <span class="result-badge">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
-              Copied to clipboard
-            </span>
-          </div>
+        <!-- Dictation happens outside this window, so the window states the
+             contract in one line rather than pretending to be the recorder.
+             Hidden entirely while a permission blocks push-to-talk: a cheerful
+             "hold this key" beside a dead key is worse than nothing. -->
+        <div class="ptt-bar" id="ptt-bar">
+          <span class="ptt-key"><kbd id="ptt-keycap" class="keycap">…</kbd></span>
+          <span class="ptt-copy">
+            <strong>Hold <span id="ptt-key-name">your push-to-talk key</span> to dictate</strong>
+            <span class="ptt-sub">Anywhere on your Mac — release and the text lands where you were typing.</span>
+          </span>
+          <span class="ptt-state"><span class="ptt-dot" aria-hidden="true"></span>Listening for the key</span>
         </div>
 
-        <div class="stats-strip">
-          <div class="stat stat-lead">
+        <!-- Renders either the quiet all-granted line or the blocking
+             explanation; see renderPermissions() in js/views/home.js. -->
+        <div id="perm-strip" class="perm-strip" aria-live="polite"></div>
+
+        <div class="tiles">
+          <div class="tile tile-lead">
             <span class="stat-label">Time saved</span>
             <span class="stat-num" id="stat-saved">—</span>
+            <span class="stat-delta" id="delta-saved"></span>
+            <div class="trend" id="trend-saved" aria-hidden="true"></div>
             <span class="stat-note">vs typing at 40 words per minute</span>
           </div>
-          <div class="spark-wrap">
-            <svg class="spark" id="spark" viewBox="0 0 240 40" preserveAspectRatio="none" aria-hidden="true">
-              <path id="spark-path" d="" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-            </svg>
-          </div>
-          <div class="stat">
+          <div class="tile">
             <span class="stat-label">Words dictated</span>
             <span class="stat-num stat-sm" id="stat-words">0</span>
+            <span class="stat-delta" id="delta-words"></span>
+            <div class="trend" id="trend-words" aria-hidden="true"></div>
+            <span class="stat-note">last 14 days</span>
           </div>
-          <div class="stat">
+          <div class="tile">
             <span class="stat-label">Day streak</span>
             <span class="stat-num stat-sm" id="stat-streak">0</span>
+            <span class="stat-delta" id="delta-streak"></span>
+            <div class="trend trend-dots" id="trend-streak" aria-hidden="true"></div>
+            <span class="stat-note">a dot for every day you dictated</span>
           </div>
         </div>
 
@@ -123,6 +117,23 @@
           <ul id="recent-list" class="item-list"></ul>
           <p id="recent-empty" class="empty" hidden>No dictations yet — your recent transcripts will appear here.</p>
         </div>
+      </div>
+
+      <!-- Click-to-record survives as the fallback for when the key can't be
+           used (screen sharing, a captured modifier, testing the mic), docked
+           rather than dominant. -->
+      <div class="dock" id="dock">
+        <button id="record-btn" class="dock-mic" aria-label="Start recording">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+        </button>
+        <div id="dock-wave" class="dock-wave" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+          <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+          <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <span id="dock-time" class="dock-time">0:00</span>
+        <p id="record-status" class="dock-hint">Click to record here instead</p>
+        <p id="record-error" class="dock-error" role="alert"></p>
       </div>
     </section>
 
@@ -189,7 +200,7 @@
         <p class="sub">Stored in <code>config.json</code>, shared with the command-line modes.</p>
       </header>
 
-      <div class="settings-section card">
+      <div class="settings-section">
         <h2 class="section-title">Dictation</h2>
         <div class="setting-row">
           <div>
@@ -201,7 +212,11 @@
         <div class="setting-row">
           <div>
             <h3>Auto-paste in hotkey mode</h3>
-            <p class="setting-desc">After a push-to-talk dictation, paste the text straight into the app you're in (Cmd-V). Needs Accessibility permission. Dictations within five minutes of each other are joined with a space unless you typed in between; a mouse click alone does not count, so you may see a leading space after clicking into a new field.</p>
+            <p class="setting-desc">After a push-to-talk dictation, paste the text straight into the app you're in (Cmd-V). Needs Accessibility permission.</p>
+            <details class="more">
+              <summary>How consecutive dictations join</summary>
+              <p class="setting-desc">Dictations within five minutes of each other are joined with a space unless you typed in between; a mouse click alone does not count, so you may see a leading space after clicking into a new field.</p>
+            </details>
           </div>
           <label class="switch">
             <input type="checkbox" id="paste-toggle">
@@ -217,7 +232,7 @@
         </div>
       </div>
 
-      <div class="settings-section card">
+      <div class="settings-section">
         <h2 class="section-title">Push-to-talk</h2>
         <div class="setting-row">
           <div>
@@ -252,19 +267,15 @@
         </div>
       </div>
 
-      <div class="settings-section card">
+      <div class="settings-section">
         <h2 class="section-title">Appearance</h2>
-        <div class="setting-row">
+        <div class="setting-row setting-row-stack">
           <div>
             <h3>Theme</h3>
-            <p class="setting-desc">Follow macOS, or pin Voisr to light or dark.</p>
+            <p class="setting-desc">Follow macOS, or pin Voisr to light or dark. An appearance choice is the one control that should show its own result, so it is picked by picture — like the pill themes below.</p>
           </div>
-          <select id="appearance-select" class="select">
-            <option value="system">Match system</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
         </div>
+        <div id="appearance-grid" class="thumb-grid" role="group" aria-label="Theme"></div>
         <div class="setting-row">
           <div>
             <h3>Pill theme</h3>
@@ -296,7 +307,7 @@
         </div>
       </div>
 
-      <div class="settings-section card">
+      <div class="settings-section">
         <h2 class="section-title">Privacy & data</h2>
         <div class="setting-row">
           <div>
