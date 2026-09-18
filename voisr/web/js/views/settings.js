@@ -28,6 +28,34 @@ window.Voisr = window.Voisr || {};
       }, miniPillNode(t.value), V.ui.el("span", { class: "theme-name", text: t.label }))));
   }
 
+  /* ----- appearance thumbnails -----
+
+     An appearance choice is the one control that should show its own result,
+     so it is picked by picture rather than from a <select>. Built here (not
+     in index.html) so the active state has a single source of truth, exactly
+     like the pill grid above. */
+
+  const APPEARANCES = [
+    { value: "system", label: "Match system" },
+    { value: "light", label: "Light" },
+    { value: "dark", label: "Dark" },
+  ];
+
+  function thumbNode(mode) {
+    return V.ui.el("span", { class: "thumb-art", data: { mode }, "aria-hidden": "true" },
+      V.ui.el("i"), V.ui.el("b"));
+  }
+
+  function renderAppearance() {
+    V.ui.$("#appearance-grid").replaceChildren(...APPEARANCES.map((a) =>
+      V.ui.el("button", {
+        type: "button",
+        class: `thumb${a.value === appliedAppearance ? " active" : ""}`,
+        data: { value: a.value },
+        "aria-pressed": String(a.value === appliedAppearance),
+      }, thumbNode(a.value), V.ui.el("span", { class: "thumb-name", text: a.label }))));
+  }
+
   /* ----- custom color wheel (HSV, V=1; standard f(5),f(3),f(1) mapping) ----- */
 
   const WHEEL_R = 100;
@@ -197,7 +225,7 @@ window.Voisr = window.Voisr || {};
         $("#paste-toggle").checked = !!cfg.paste;
         $("#widget-toggle").checked = cfg.show_widget !== false;
         appliedAppearance = cfg.appearance || "system";
-        $("#appearance-select").value = appliedAppearance;
+        renderAppearance();
         $("#launch-toggle").checked = !!cfg.launch_at_login;
       }
       if (hotkey) $("#hotkey-current").textContent = hotkey.display || "unset";
@@ -253,12 +281,19 @@ window.Voisr = window.Voisr || {};
      document-level listeners in particular would stack. */
 
   function init() {
-    document.getElementById("appearance-select").addEventListener("change", async (e) => {
-      const prev = appliedAppearance;
-      const next = e.target.value;
+    /* Delegated, because renderAppearance() replaces the buttons on every
+       render — a listener bound to each button would be lost with it. A
+       failed write re-renders from appliedAppearance, so the grid can never
+       be left highlighting a theme that was neither applied nor persisted. */
+    document.getElementById("appearance-grid").addEventListener("click", async (e) => {
+      const btn = e.target.closest(".thumb");
+      if (!btn) return;
+      const next = btn.dataset.value;
+      if (next === appliedAppearance) return;
       const res = await V.ui.tryApi(V.api().set_appearance(next), "Change theme");
-      if (!res) { e.target.value = prev; return; }
+      if (!res) { renderAppearance(); return; }
       appliedAppearance = next;
+      renderAppearance();
       V.applyAppearance(next);
       V.ui.toast(`Theme: ${next}`);
     });
@@ -333,5 +368,5 @@ window.Voisr = window.Voisr || {};
   }
 
   V.views = V.views || {};
-  V.views.settings = { init, render, renderThemes, renderColorWheel, initColorWheel, openColorPopover };
+  V.views.settings = { renderAppearance, init, render, renderThemes, renderColorWheel, initColorWheel, openColorPopover };
 })(window.Voisr);

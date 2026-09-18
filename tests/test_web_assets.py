@@ -112,6 +112,15 @@ ALLOWED_LITERAL_COLOURS = {
     "rgba(28, 26, 23, .96)": "mini-pill's own fixed dark chrome background",
     "rgba(0, 0, 0, .35)": "colour-wheel thumb shadow ring",
     "rgba(0, 0, 0, .4)": "colour-wheel thumb shadow ring",
+    # -- appearance thumbnails: fixed light/dark preview swatches (views.css).
+    #    Like the pill colours these must NOT follow the active appearance --
+    #    a Light thumbnail has to still look light while the app is in dark
+    #    mode, which is the whole point of showing the choice as a picture.
+    "rgb(246, 243, 238)": "theme thumbnail: light --bg",
+    "rgb(232, 227, 218)": "theme thumbnail: light --border",
+    "rgb(35, 32, 25)": "theme thumbnail: dark --surface",
+    "rgb(26, 24, 21)": "theme thumbnail: dark --bg",
+    "rgb(51, 47, 39)": "theme thumbnail: dark --border",
     "rgba(255, 255, 255, .08)": "toast-action button: a fixed white-on-dark "
         "hover surface for the undo button. The toast chip itself uses "
         "var(--ink), which flips light/dark with the theme (light chip in "
@@ -199,16 +208,27 @@ def test_permission_strip_refreshes_on_window_focus():
     assert '"focus"' in src or "'focus'" in src
 
 
-def test_home_hero_is_keycap_led():
+def test_home_leads_with_a_status_line_not_a_record_card():
+    """Dictation happens outside this window — the old hero record card
+    implied otherwise, and gave the fallback recorder the whole fold."""
     html = INDEX.read_text()
-    assert 'id="hero-keycap"' in html
-    assert 'id="hero-wave"' in html
+    assert 'id="ptt-bar"' in html
+    assert 'id="ptt-keycap"' in html
+    # the keycap and the sentence must both be able to name the key
+    assert 'id="ptt-key-name"' in html
+    assert 'class="record-card' not in html
+    assert 'id="hero-wave"' not in html
 
 
-def test_record_button_is_demoted_to_secondary():
+def test_record_button_is_docked_not_the_headline():
+    """Click-to-record survives as the fallback for when the key can't be
+    used, so it lives in the dock: never a primary button, never the hero."""
     html = INDEX.read_text()
-    assert 'class="btn-secondary"' in html
-    assert "or click to record" in html
+    assert 'class="dock"' in html
+    assert 'id="record-btn" class="dock-mic"' in html
+    assert 'id="dock-time"' in html, "the dock reports elapsed time while listening"
+    dock = html[html.index('class="dock"'):html.index("</section>", html.index('class="dock"'))]
+    assert "btn-primary" not in dock
 
 
 def test_hero_renders_the_configured_hotkey_label():
@@ -220,11 +240,19 @@ def test_hero_renders_the_configured_hotkey_label():
     assert "cfg.hotkey" not in src
 
 
-def test_stats_strip_replaces_the_stacked_column():
+def test_stats_are_three_tiles_each_carrying_its_own_trend():
+    """One lead stat, a sparkline floating between unrelated numbers, and two
+    shrunken also-rans became three equal tiles: every chart now belongs to
+    the number above it."""
     html = INDEX.read_text()
-    assert 'class="stats-strip"' in html
-    assert 'id="stat-saved"' in html
-    assert 'id="spark"' in html
+    assert 'class="tiles"' in html
+    # `class="tile"` or `class="tile tile-lead"`, but not the `tiles` grid
+    assert len(re.findall(r'class="tile(?:"| )', html)) == 3
+    for el_id in ["stat-saved", "stat-words", "stat-streak",
+                  "trend-saved", "trend-words", "trend-streak"]:
+        assert f'id="{el_id}"' in html, el_id
+    assert 'class="stats-strip"' not in html
+    assert 'id="spark"' not in html
     assert 'class="home-side"' not in html
 
 
@@ -232,7 +260,17 @@ def test_home_uses_time_saved_and_daily():
     src = (WEB / "js" / "views" / "home.js").read_text()
     assert "time_saved_seconds" in src
     assert "daily" in src
-    assert "sparklinePath" in src
+    assert "trendBars" in src
+    assert "weekDelta" in src
+
+
+def test_a_blocked_permission_takes_the_canvas_from_the_status_line():
+    """Without Input Monitoring, holding the key does nothing — a chip above
+    a line still promising it works was the app lying to the user."""
+    src = (WEB / "js" / "views" / "home.js").read_text()
+    assert "perm-block" in src
+    assert "#ptt-bar" in src, "the status line has to be hideable"
+    assert "perm-chip" not in src, "the chip strip is what the block replaced"
 
 
 def test_ui_exposes_format_duration():
@@ -328,11 +366,25 @@ def test_settings_is_split_into_four_sections():
     for section in ["Dictation", "Push-to-talk", "Appearance", "Privacy & data"]:
         assert section in html, section
     assert html.count('class="settings-section') >= 4
+    # four stacked cards read as four objects; this is one list of
+    # preferences, so the sections are headings over hairline rows
+    assert 'class="settings-section card"' not in html
+
+
+def test_appearance_is_chosen_by_picture():
+    """An appearance choice is the one control that should show its own
+    result — and it sits beside the pill-theme grid, which already did."""
+    html = INDEX.read_text()
+    assert 'id="appearance-grid"' in html
+    assert 'id="appearance-select"' not in html
+    src = (WEB / "js" / "views" / "settings.js").read_text()
+    assert "renderAppearance" in src
+    assert "thumb-art" in src
 
 
 def test_settings_has_the_new_controls():
     html = INDEX.read_text()
-    for el_id in ["appearance-select", "model-select", "launch-toggle",
+    for el_id in ["appearance-grid", "model-select", "launch-toggle",
                   "color-popover", "clear-history"]:
         assert f'id="{el_id}"' in html, el_id
 
@@ -399,6 +451,16 @@ def test_view_transition_class_exists_and_respects_reduced_motion():
 
 def test_show_applies_the_entering_class():
     assert "entering" in (WEB / "js" / "main.js").read_text()
+
+
+def test_switching_views_returns_to_the_top():
+    """.main is the single scroll container, so its offset survives a view
+    switch — scrolled to the bottom of Home, Settings would otherwise open
+    scrolled past its own content, showing a blank pane."""
+    src = (WEB / "js" / "main.js").read_text()
+    show = re.search(r"function show\(view\)\s*\{(.*?)\n  \}", src, re.S)
+    assert show, "could not find main.js's show()"
+    assert "scrollTop = 0" in show.group(1)
 
 
 # ---- M2: copy must not claim the clipboard holds every dictation ----

@@ -6,52 +6,57 @@ import { makeNode } from "./dom.mjs";
 /* ui.js first: both views call V.ui.el / V.ui.$ at module scope. */
 const { V } = loadVoisr(["js/ui.js", "js/views/home.js", "js/views/history.js"]);
 
-/* ---------- home: sparklinePath ---------- */
+/* ---------- home: trendBars + weekDelta ---------- */
 
-const sparklinePath = V.views.home.sparklinePath;
+const trendBars = V.views.home.trendBars;
+const weekDelta = V.views.home.weekDelta;
 
-const daily = (...words) => words.map((w, i) => ({ day: `d${i}`, words: w }));
+const daily = (...words) => words.map((w, i) => ({ date: `d${i}`, words: w }));
 
-test("sparklinePath draws a NaN-free polyline for a mixed 14-day series", () => {
-  const series = daily(0, 120, 45, 900, 30, 0, 610, 210, 75, 1000, 5, 480, 260, 90);
-  const path = sparklinePath(series);
-
-  assert.ok(path.startsWith("M"), `path should start with a moveto, got: ${path}`);
-  assert.ok(!/NaN|Infinity|undefined/.test(path), `path has bad numbers: ${path}`);
-
-  const segs = path.split(" L").length;   // "M.. .. L.. .. L.. .."
-  assert.equal(segs, 14, "one point per day");
-  assert.equal((path.match(/M/g) || []).length, 1, "exactly one moveto");
-
-  // x spans the full 240-wide viewBox, left to right.
-  const xs = path.split(/[ML]/).filter(Boolean).map((p) => parseFloat(p.trim()));
-  assert.equal(xs[0], 0);
-  assert.equal(parseFloat(path.split("L").pop().trim().split(" ")[0]), 240);
-
-  // The tallest day (1000 words) sits at the top of the band: 38 - 34 = 4.
-  const ys = path.split(/[ML]/).filter(Boolean)
-    .map((p) => parseFloat(p.trim().split(" ")[1]));
-  assert.equal(Math.min(...ys), 4);
-  assert.equal(ys[0], 38, "a zero day rests on the baseline");
+test("trendBars scales every day against the tallest one in the series", () => {
+  const bars = trendBars(daily(0, 50, 100, 25, 0, 75, 100, 10, 0, 40, 100, 60, 30, 20));
+  assert.equal(bars.length, 14);
+  assert.ok(bars.every((b) => b >= 0 && b <= 1), `out of range: ${bars.join()}`);
+  assert.ok(bars.every((b) => Number.isFinite(b)), `non-finite: ${bars.join()}`);
+  assert.equal(bars[2], 1, "the tallest day is the full height");
+  assert.equal(bars[1], 0.5);
+  assert.equal(bars[0], 0);
 });
 
-test("sparklinePath keeps an all-zero series flat on the baseline (no divide-by-zero)", () => {
-  const path = sparklinePath(daily(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
-  assert.ok(!/NaN/.test(path), `all-zero series produced NaN: ${path}`);
-  const ys = path.split(/[ML]/).filter(Boolean)
-    .map((p) => parseFloat(p.trim().split(" ")[1]));
-  assert.deepEqual([...new Set(ys)], [38], "every point on the baseline");
+test("trendBars keeps an all-zero series flat instead of dividing by zero", () => {
+  const bars = trendBars(daily(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
+  assert.equal(bars.length, 14);
+  assert.ok(bars.every((b) => b === 0), `expected a flat floor, got ${bars.join()}`);
 });
 
-test("sparklinePath returns an empty path for fewer than two points", () => {
-  assert.equal(sparklinePath([]), "");
-  assert.equal(sparklinePath(daily(42)), "");
-  assert.equal(sparklinePath(null), "");
-  assert.equal(sparklinePath(undefined), "");
+test("trendBars treats a missing word count as zero rather than NaN", () => {
+  const bars = trendBars([{ date: "d0" }, { date: "d1", words: 10 }]);
+  assert.deepEqual(bars, [0, 1]);
+});
+
+test("trendBars returns nothing for an empty or absent series", () => {
+  assert.deepEqual(trendBars([]), []);
+  assert.deepEqual(trendBars(null), []);
+  assert.deepEqual(trendBars(undefined), []);
+});
+
+test("weekDelta compares the last seven days against the seven before them", () => {
+  // 70 in the first week, 140 in the second
+  assert.equal(weekDelta(daily(10, 10, 10, 10, 10, 10, 10, 20, 20, 20, 20, 20, 20, 20)), 100);
+  assert.equal(weekDelta(daily(20, 20, 20, 20, 20, 20, 20, 10, 10, 10, 10, 10, 10, 10)), -50);
+});
+
+test("weekDelta answers null rather than a fabricated percentage", () => {
+  // nothing last week is not a 0% or an infinite change -- there is no
+  // comparison to draw, and the tile shows no delta at all
+  assert.equal(weekDelta(daily(0, 0, 0, 0, 0, 0, 0, 10, 10, 10, 10, 10, 10, 10)), null);
+  // a fresh install has no fortnight of history yet
+  assert.equal(weekDelta(daily(10, 20, 30)), null);
+  assert.equal(weekDelta([]), null);
+  assert.equal(weekDelta(null), null);
 });
 
 /* ---------- history: matchesQuery ---------- */
-
 const { matchesQuery, highlighted } = V.views.history;
 
 test("matchesQuery matches a multi-word query with its spaces intact", () => {

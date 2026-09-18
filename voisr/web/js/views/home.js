@@ -7,8 +7,77 @@ window.Voisr = window.Voisr || {};
     accessibility: "Without this, text is copied but not pasted for you.",
   };
 
+  /* What each grant costs you when it is missing — the block leads with the
+     consequence, not the name of the setting. */
+  const PERM_BREAKS = {
+    microphone: "Voisr can't hear you at all until macOS grants Microphone.",
+    input_monitoring: "Voisr can't see the key until macOS grants Input Monitoring. " +
+                      "Until then, holding it does nothing — everything else still works.",
+    accessibility: "Voisr can't paste for you until macOS grants Accessibility. " +
+                   "Dictations are copied to your clipboard instead.",
+  };
+
+  const PERM_WHY = {
+    microphone: "needed to hear you",
+    input_monitoring: "needed for push-to-talk",
+    accessibility: "needed to paste for you",
+  };
+
+  function openPane(key) {
+    return async () => {
+      // open_settings_pane answers {"ok": bool} — a false is macOS refusing
+      // to open the pane, which used to vanish silently and leave the user
+      // clicking a control that appeared to do nothing.
+      const res = await V.ui.tryApi(
+        V.api().open_settings_pane(key), "Open System Settings");
+      if (res && res.ok === false) V.ui.toast("Couldn't open System Settings");
+    };
+  }
+
+  /* The blocking state. A missing grant is not a footnote: without Input
+     Monitoring the entire product does nothing when you hold the key, and a
+     chip above a hero still saying "hold this key to dictate" was a lie. */
+  function permBlock(panes) {
+    const bad = panes.filter((p) => p.granted !== true);
+    // worst first: a false is a known denial, a null is merely unverified
+    const lead = bad.find((p) => p.granted === false) || bad[0];
+
+    const actions = V.ui.el("div", { class: "perm-actions" },
+      V.ui.el("button", {
+        type: "button", class: "btn-primary", text: `Open ${lead.label}`,
+        on: { click: openPane(lead.key) },
+      }));
+    // Recording from the dock still works without Input Monitoring or
+    // Accessibility; without the microphone nothing does, so no second path.
+    if (lead.key !== "microphone") {
+      actions.append(V.ui.el("button", {
+        type: "button", class: "btn-secondary", text: "Record from here instead",
+        on: { click: () => V.ui.$("#record-btn").focus() },
+      }));
+    }
+
+    const checks = V.ui.el("ul", { class: "perm-checks" },
+      ...panes.map((p) => {
+        const state = p.granted === true ? "ok" : p.granted === false ? "denied" : "unknown";
+        const mark = state === "ok" ? "\u2713" : state === "denied" ? "!" : "?";
+        return V.ui.el("li", { class: `perm-${state}-row` },
+          V.ui.el("span", { class: "perm-mark", "aria-hidden": "true", text: mark }),
+          V.ui.el("span", { text: p.label }),
+          V.ui.el("span", { class: "perm-why",
+                            text: state === "ok" ? "granted" : PERM_WHY[p.key] || "" }));
+      }));
+
+    return V.ui.el("div", { class: "perm-block" },
+      V.ui.el("div", { class: "perm-glyph", html: V.ui.ICONS.keyboard }),
+      V.ui.el("h2", { text: lead.key === "input_monitoring"
+                        ? "Push-to-talk isn't working" : `${lead.label} is switched off` }),
+      V.ui.el("p", { text: PERM_BREAKS[lead.key] || "" }),
+      actions, checks);
+  }
+
   async function renderPermissions() {
     const strip = V.ui.$("#perm-strip");
+    const ptt = V.ui.$("#ptt-bar");
     const res = await V.ui.tryApi(V.api().get_permissions(), "Load permissions");
     // Leave whatever the strip last showed rather than wiping it: a stale
     // strip beside a toast explaining the staleness beats an empty one.
@@ -23,31 +92,14 @@ window.Voisr = window.Voisr || {};
         text: "Microphone, Input Monitoring and Accessibility all granted.",
       }));
       strip.dataset.state = "ok";
+      if (ptt) ptt.hidden = false;
       return;
     }
 
     strip.dataset.state = "attention";
-    strip.replaceChildren(...panes.map((p) => {
-      const state = p.granted === true ? "ok"
-                  : p.granted === false ? "denied" : "unknown";
-      const chip = V.ui.el("button", {
-        class: `perm-chip perm-${state}`,
-        type: "button",
-        title: PERM_HELP[p.key] || "",
-        data: { key: p.key },
-        // open_settings_pane answers {"ok": bool} — a false is macOS
-        // refusing to open the pane, which used to vanish silently and
-        // leave the user clicking a chip that appeared to do nothing.
-        on: { click: async () => {
-          const res = await V.ui.tryApi(
-            V.api().open_settings_pane(p.key), "Open System Settings");
-          if (res && res.ok === false) V.ui.toast("Couldn't open System Settings");
-        } },
-      }, V.ui.el("span", { class: "perm-dot", "aria-hidden": "true" }),
-         V.ui.el("span", { text: p.label }));
-      if (state === "ok") chip.disabled = true;
-      return chip;
-    }));
+    strip.replaceChildren(permBlock(panes));
+    // the status line promises a key that does not currently work
+    if (ptt) ptt.hidden = bad.some((p) => p.key !== "accessibility");
   }
 
   // granting a permission happens in System Settings, outside the app;
@@ -85,23 +137,62 @@ window.Voisr = window.Voisr || {};
     return "Good evening";
   }
 
-  async function renderHero() {
+  /* The keycap and the sentence name the same key, so both are written from
+     hotkey_display() — the raw config value (e.g. "alt_r") must never reach
+     either one. */
+  async function renderPtt() {
     const res = await V.ui.tryApi(V.api().hotkey_display(), "Load shortcut");
     if (!res) return;
-    V.ui.$("#hero-keycap").textContent = res.display || "unset";
+    const display = res.display || "unset";
+    V.ui.$("#ptt-keycap").textContent = display;
+    V.ui.$("#ptt-key-name").textContent = display;
   }
 
-  /* 14 daily word counts -> a polyline across a 240x40 viewBox. A flat run
-     (including all-zero) draws along the baseline rather than dividing by 0. */
-  function sparklinePath(daily) {
-    if (!daily || daily.length < 2) return "";
-    const max = Math.max(...daily.map((d) => d.words), 0);
-    const stepX = 240 / (daily.length - 1);
-    return daily.map((d, i) => {
-      const x = (i * stepX).toFixed(1);
-      const y = (max === 0 ? 38 : 38 - (d.words / max) * 34).toFixed(1);
-      return `${i === 0 ? "M" : "L"}${x} ${y}`;
-    }).join(" ");
+  /* Each tile owns its own 14-day trend, so a chart always belongs to the
+     number above it rather than floating between two unrelated ones.
+     Returns bar heights as 0..1 fractions of the series maximum; an all-zero
+     series stays flat on the floor rather than dividing by zero. */
+  function trendBars(daily) {
+    if (!daily || !daily.length) return [];
+    const max = Math.max(...daily.map((d) => d.words || 0), 0);
+    return daily.map((d) => (max === 0 ? 0 : (d.words || 0) / max));
+  }
+
+  /* Week-over-week change across the same 14 days the bars draw. Answers
+     null rather than a fake 0% when there is no prior week to compare
+     against (a fresh install, or a week with nothing in it). */
+  function weekDelta(daily) {
+    if (!daily || daily.length < 14) return null;
+    const sum = (xs) => xs.reduce((t, d) => t + (d.words || 0), 0);
+    const prev = sum(daily.slice(-14, -7));
+    const curr = sum(daily.slice(-7));
+    if (prev === 0) return null;
+    return Math.round(((curr - prev) / prev) * 100);
+  }
+
+  function renderTrend(sel, daily) {
+    const node = V.ui.$(sel);
+    const bars = trendBars(daily);
+    const last = bars.length - 1;
+    node.replaceChildren(...bars.map((h, i) => {
+      const bar = V.ui.el("span", {
+        class: `bar${h === 0 ? " zero" : ""}${i === last ? " today" : ""}`,
+      });
+      bar.style.setProperty("--h", h.toFixed(3));
+      return bar;
+    }));
+  }
+
+  function renderStreakDots(sel, daily) {
+    V.ui.$(sel).replaceChildren(...(daily || []).map((d) =>
+      V.ui.el("span", { class: `dot${(d.words || 0) > 0 ? " on" : ""}` })));
+  }
+
+  function renderDelta(sel, pct) {
+    const node = V.ui.$(sel);
+    if (pct === null) { node.textContent = ""; delete node.dataset.dir; return; }
+    node.textContent = `${pct >= 0 ? "+" : ""}${pct}% vs last week`;
+    node.dataset.dir = pct >= 0 ? "up" : "down";
   }
 
   /* Home is four independent panels (greeting, permissions, hero shortcut,
@@ -116,21 +207,27 @@ window.Voisr = window.Voisr || {};
       $("#greeting").textContent = greeting();
       // All four run concurrently, and all four are awaited together so a
       // throw in any of them lands in the catch below. renderPermissions and
-      // renderHero used to be fired bare, which both hid their failures and
+      // renderPtt used to be fired bare, which both hid their failures and
       // left a rejection nobody was listening for; joining them to this
       // Promise.all attaches the handler in the same tick they start.
       const [stats, history] = await Promise.all([
         V.ui.tryApi(V.api().get_stats(), "Load stats"),
         V.ui.tryApi(V.api().get_history(), "Load history"),
         renderPermissions(),
-        renderHero(),
+        renderPtt(),
       ]);
 
       if (stats) {
         $("#stat-saved").textContent = V.ui.formatDuration(stats.time_saved_seconds);
         $("#stat-words").textContent = (stats.total_words || 0).toLocaleString();
         $("#stat-streak").textContent = (stats.streak_days || 0).toLocaleString();
-        $("#spark-path").setAttribute("d", sparklinePath(stats.daily));
+
+        const pct = weekDelta(stats.daily);
+        renderDelta("#delta-saved", pct);
+        renderDelta("#delta-words", pct);
+        renderTrend("#trend-saved", stats.daily);
+        renderTrend("#trend-words", stats.daily);
+        renderStreakDots("#trend-streak", stats.daily);
       }
 
       if (history) {
@@ -144,53 +241,92 @@ window.Voisr = window.Voisr || {};
     }
   }
 
-  /* ---------- record flow ---------- */
+  /* ---------- record flow ----------
+
+     Capture is the fallback path, not the headline: the key works anywhere
+     on the Mac, and this dock exists for when it can't be used (screen
+     sharing, a captured modifier, testing the mic). The dock carries the
+     whole state machine — elapsed time while listening, then transcribing,
+     then a done state — so nothing else on Home has to move. */
 
   let recState = "idle"; // idle | recording | processing
+  let tickTimer = null;
+  let doneTimer = null;
+  let elapsed = 0;
+
+  function stopTick() {
+    clearInterval(tickTimer);
+    tickTimer = null;
+  }
+
+  function showElapsed() {
+    V.ui.$("#dock-time").textContent =
+      `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
+  }
+
+  /* Both timers are tracked so they can always be cleared: a stale tick or a
+     stale reset must never fire against a dock that has since moved on. */
+  function setDockState(state, hint) {
+    const dock = V.ui.$("#dock");
+    if (state) dock.dataset.state = state;
+    else delete dock.dataset.state;
+    V.ui.$("#record-status").textContent = hint;
+  }
 
   async function toggleRecord() {
     const $ = V.ui.$;
     const btn = $("#record-btn");
-    const status = $("#record-status");
     const errEl = $("#record-error");
-    const wave = $("#hero-wave");
 
     if (recState === "processing") return;
 
     if (recState === "idle") {
       errEl.textContent = "";
-      $("#record-result").hidden = true;
+      clearTimeout(doneTimer);
       const res = await V.ui.tryApi(V.api().start_recording(), "Start recording");
       // tryApi owns the detail (and the throw path, which used to be able to
       // strand recState). #record-error keeps its job as the persistent
       // marker beside the button, since a 3.5s toast is easy to miss.
-      if (!res) { errEl.textContent = "Couldn't start recording."; return; }
+      if (!res) { errEl.textContent = "Couldn't start."; return; }
       recState = "recording";
-      wave.dataset.state = "recording";
+      elapsed = 0;
+      showElapsed();
+      setDockState("recording", "Listening — click again to finish");
       btn.setAttribute("aria-label", "Stop recording");
-      status.textContent = "Listening… click again to finish";
+      stopTick();
+      tickTimer = setInterval(() => { elapsed += 1; showElapsed(); }, 1000);
       return;
     }
 
     // recording -> stop
     recState = "processing";
-    wave.dataset.state = "processing";
-    status.textContent = "Transcribing on this Mac…";
+    stopTick();
+    setDockState("processing", "Transcribing on this Mac…");
     // Reset the button state before anything can return: a bridge throw here
     // used to leave recState stuck on "processing", which killed the record
     // button for the rest of the session.
     const res = await V.ui.tryApi(V.api().stop_recording(), "Transcribe");
-    delete wave.dataset.state;
     btn.setAttribute("aria-label", "Start recording");
     recState = "idle";
-    status.textContent = "Ready";
 
-    if (!res) { errEl.textContent = "Transcription failed."; return; }
-    $("#result-text").textContent = res.text;
-    $("#record-result").hidden = false;
+    if (!res) {
+      setDockState(null, "Click to record here instead");
+      errEl.textContent = "Transcription failed.";
+      return;
+    }
+
+    // The transcript itself lands at the top of Recent activity a line below,
+    // so the dock reports the outcome rather than repeating the text.
+    setDockState("done", "Copied to clipboard");
+    doneTimer = setTimeout(() => {
+      if (recState !== "idle") return;
+      setDockState(null, "Click to record here instead");
+      elapsed = 0;
+      showElapsed();
+    }, 2600);
     render();
   }
 
   V.views = V.views || {};
-  V.views.home = { render, toggleRecord, renderPermissions, sparklinePath };
+  V.views.home = { render, toggleRecord, renderPermissions, trendBars, weekDelta };
 })(window.Voisr);
