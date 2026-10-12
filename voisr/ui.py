@@ -642,6 +642,7 @@ class HotkeyService:
                 return
             self._pressed = True
             self._latched = latched
+            self._rejected = False
             self._epoch += 1
             epoch = self._epoch
             cfg = self._api.get_config()
@@ -748,6 +749,9 @@ class HotkeyService:
         if self._pressed:
             self.release()
         else:
+            # every toggle is a press of its own, and a refused one gets no
+            # release() to clear the once-per-press guard
+            self._rejected = False
             self.press(latched=True)
 
     def cancel_chord(self) -> None:

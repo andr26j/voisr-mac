@@ -178,10 +178,10 @@
      you scroll a long Home, without being given the fold the way the old
      hero card was */
   position: sticky;
-  /* a sticky edge is inset by the scroller's padding: .main's 60px bottom
+  /* a sticky edge is inset by the scroller's padding: .main's bottom
      padding left the dock floating 60px up with rows showing beneath it.
      This lands it 16px above the window edge. */
-  bottom: -44px;
+  bottom: calc(16px - var(--main-pad-b));
   z-index: 10;
   margin-top: 18px;
   padding: 10px 16px 10px 10px;

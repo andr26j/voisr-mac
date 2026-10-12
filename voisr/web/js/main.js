@@ -101,7 +101,7 @@ window.Voisr = window.Voisr || {};
       if (!res) { e.target.checked = !e.target.checked; return; }
       V.ui.toast(e.target.checked ? "Recording widget on" : "Recording widget off");
     });
-    async function pickPillTheme(btn) {
+    const pickPillTheme = V.ui.serial(async (btn) => {
       const res = await V.ui.tryApi(
         V.api().set_config({ pill_theme: btn.dataset.value }), "Save pill theme");
       // Re-render regardless: on success this reflects the newly active
@@ -111,7 +111,7 @@ window.Voisr = window.Voisr || {};
       V.views.settings.renderColorWheel();
       if (!res) return;
       V.ui.toast(`Pill theme: ${btn.querySelector(".theme-name").textContent}`);
-    }
+    });
     $("#theme-grid").addEventListener("click", (e) => {
       const btn = e.target.closest(".theme-opt");
       if (btn) pickPillTheme(btn);

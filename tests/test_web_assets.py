@@ -597,3 +597,11 @@ def test_dock_sits_near_the_window_edge_not_a_padding_above_it():
 def test_dead_home_code_is_gone():
     assert "PERM_HELP" not in (WEB / "js" / "views" / "home.js").read_text()
     assert 'id="delta-streak"' not in INDEX.read_text()
+
+
+def test_dock_offset_derives_from_the_main_padding():
+    # review: -44px silently encoded .main's 60px padding
+    views = (WEB / "css" / "views.css").read_text()
+    base = (WEB / "css" / "base.css").read_text()
+    assert "var(--main-pad-b)" in views and "-44px" not in views
+    assert "--main-pad-b:" in base

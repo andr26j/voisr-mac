@@ -178,3 +178,36 @@ def test_cli_file_mode_removes_its_converted_wav(tmp_path, monkeypatch, capsys):
     app.main()
     assert "transcribed" in capsys.readouterr().out
     assert not (tmp_path / "memo.m4a.16k.wav").exists()
+
+
+# ---- review fixes ----
+
+def test_every_refused_toggle_press_flashes(tmp_path):
+    # a latched toggle (Caps Lock, menu-bar Dictate) never calls release()
+    # on a refused press, so the once-per-press guard must not stick
+    api = Api(config_path=tmp_path / "config.json",
+              history=HistoryStore(tmp_path / "h.jsonl"),
+              recorder_factory=FakeRecorder, transcribe_fn=lambda w: "x",
+              clock=lambda: 1.0, clipboard_fn=lambda t: None)
+    widget = FakeWidget()
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    api.start_recording()          # the dock owns the mic
+    for _ in range(2):
+        svc._toggle()
+        deadline = time.monotonic() + 2
+        while widget.calls[-1:] != ["hide"] and time.monotonic() < deadline:
+            time.sleep(0.02)
+    assert widget.calls.count("error") == 2
+    api.stop_recording()
+
+
+def test_a_successful_press_clears_the_refusal(tmp_path):
+    api = Api(config_path=tmp_path / "config.json",
+              history=HistoryStore(tmp_path / "h.jsonl"),
+              recorder_factory=FakeRecorder, transcribe_fn=lambda w: "x",
+              clock=lambda: 1.0, clipboard_fn=lambda t: None)
+    svc = HotkeyService(api, widget=FakeWidget(), hide_delay=0)
+    svc._rejected = True
+    svc.press()
+    assert svc._rejected is False
+    svc.release()

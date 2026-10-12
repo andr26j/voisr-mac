@@ -465,3 +465,34 @@ test("the push-to-talk status is only green while the key is listening", async (
   assert.equal(node.dataset.state, "off");
   assert.equal(node.textContent, "push-to-talk not running");
 });
+
+test("fast theme picks are saved in the order they were made", async (t) => {
+  // overlapping set_appearance calls let the slower one win
+  const saved = [];
+  const pending = [];
+  const s = mountAppearance(t, {
+    set_appearance: (mode) => new Promise((r) => pending.push(() => { saved.push(mode); r({ ok: true }); })),
+  });
+  const [system, light] = s["appearance-grid"].children;
+  s["appearance-grid"].dispatch("keydown", { key: "ArrowRight", target: system, preventDefault() {} });
+  s["appearance-grid"].dispatch("keydown", { key: "ArrowRight", target: light, preventDefault() {} });
+  await settle();
+  assert.equal(pending.length, 1, "the second pick waits for the first");
+  pending.shift()();
+  await settle(); await settle();
+  assert.equal(pending.length, 1);
+  pending.shift()();
+  await settle(); await settle();
+  assert.deepEqual(saved, ["light", "dark"]);
+  assert.deepEqual(s.applied, ["light", "dark"]);
+  assert.equal(activeOf(s["appearance-grid"]), "dark");
+});
+
+test("the appearance event doesn't re-render a picker that already shows it", async (t) => {
+  const s = mountAppearance(t, {});
+  const btn = s["appearance-grid"].children[0];
+  btn.setAttribute("tabindex", "sentinel");
+  s.V.appearancePref = () => "system";
+  globalThis.window.dispatch("voisr:appearance");
+  assert.equal(btn.getAttribute("tabindex"), "sentinel");
+});

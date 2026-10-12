@@ -447,6 +447,14 @@ window.Voisr = window.Voisr || {};
     });
   }
 
+  /* Queue calls to an async fn so each starts after the last settles. Fast
+     arrow-key picks otherwise overlap their saves, and whichever resolves
+     last wins on disk while the picker shows the other. */
+  function serial(fn) {
+    let chain = Promise.resolve();
+    return (...args) => (chain = chain.then(() => fn(...args)).catch(() => {}));
+  }
+
   V.ui = { el, $, toast, tryApi, timeOf, dayOf, formatDuration, ICONS, itemRow,
-           offerDictationUndo, offerEntryUndo, syncRadios, radioKeys };
+           offerDictationUndo, offerEntryUndo, syncRadios, radioKeys, serial };
 })(window.Voisr);

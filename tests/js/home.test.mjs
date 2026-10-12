@@ -441,3 +441,24 @@ test("a dock dictation whose History write failed says so instead of a bare 'Cop
   await h.V.views.home.toggleRecord();
   assert.match(h["record-error"].textContent, /History/);
 });
+
+test("'Record from here instead' never stops a dock recording already running", async () => {
+  const { api, calls } = recordingApi();
+  const h = mountHome({ ...api, get_permissions: async () => ({ panes: [
+    { key: "microphone", label: "Microphone", granted: true },
+    { key: "input_monitoring", label: "Input Monitoring", granted: false },
+    { key: "accessibility", label: "Accessibility", granted: true },
+  ]}) });
+  await h.V.views.home.renderPermissions();
+  await h.V.views.home.toggleRecord();          // recording from the dock
+  const actions = h["perm-strip"].children[0].children.find((c) => c.className === "perm-actions");
+  const fallback = actions.children.find((b) => b.textContent === "Record from here instead");
+  try {
+    fallback.dispatch("click", { target: fallback });
+    await settle();
+    assert.equal(calls.stop, 0);
+    assert.equal(h.dock.dataset.state, "recording");
+  } finally {
+    await stopDock(h);
+  }
+});

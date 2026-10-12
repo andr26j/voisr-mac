@@ -286,7 +286,7 @@ window.Voisr = window.Voisr || {};
        render — a listener bound to each button would be lost with it. A
        failed write re-renders from appliedAppearance, so the grid can never
        be left highlighting a theme that was neither applied nor persisted. */
-    async function pickAppearance(btn) {
+    const pickAppearance = V.ui.serial(async (btn) => {
       const next = btn.dataset.value;
       if (next === appliedAppearance) return;
       const res = await V.ui.tryApi(V.api().set_appearance(next), "Change theme");
@@ -295,7 +295,7 @@ window.Voisr = window.Voisr || {};
       renderAppearance();
       V.applyAppearance(next);
       V.ui.toast(`Theme: ${next}`);
-    }
+    });
     const appearanceGrid = document.getElementById("appearance-grid");
     appearanceGrid.addEventListener("click", (e) => {
       const btn = e.target.closest(".thumb");
@@ -306,7 +306,9 @@ window.Voisr = window.Voisr || {};
     // follow it, or the grid highlights a theme that is no longer applied.
     window.addEventListener("voisr:appearance", () => {
       if (!V.appearancePref) return;
-      appliedAppearance = V.appearancePref();
+      const pref = V.appearancePref();
+      if (pref === appliedAppearance) return;  // our own pick: already shown
+      appliedAppearance = pref;
       renderAppearance();
     });
 

@@ -56,7 +56,12 @@ window.Voisr = window.Voisr || {};
         type: "button", class: "btn-secondary", text: "Record from here instead",
         // starts the dock recording: a bare .focus() shows no ring after a
         // mouse click, so the button looked like it did nothing
-        on: { click: () => { V.ui.$("#record-btn").focus(); toggleRecord(); } },
+        // (only from idle: toggleRecord would stop a dock recording already
+        // running, which is not what "Record" says)
+        on: { click: () => {
+          V.ui.$("#record-btn").focus();
+          if (recState === "idle") toggleRecord();
+        } },
       }));
     }
 
