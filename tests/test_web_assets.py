@@ -526,3 +526,17 @@ def test_boot_toasts_a_moved_aside_config_and_the_mock_answers_it():
     # H3: a corrupt config.json is quarantined at load; boot must say so.
     assert "take_config_notice" in (WEB / "js" / "main.js").read_text()
     assert "take_config_notice" in (WEB / "js" / "api.js").read_text()
+
+
+def test_words_tile_says_its_number_is_all_time():
+    # M9: the number is total_words; "last 14 days" described only the bars
+    src = INDEX.read_text()
+    tile = src[src.index('id="stat-words"'):]
+    tile = tile[:tile.index("</div>\n          </div>") if "</div>\n          </div>" in tile else 600]
+    assert "all time" in tile
+    assert "last 14 days" not in tile
+
+
+def test_palette_dictation_goes_through_home():
+    # M7: a dock recording started from another view was invisible
+    assert "dictateFromAnywhere" in (WEB / "js" / "palette.js").read_text()

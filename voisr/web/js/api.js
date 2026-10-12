@@ -41,6 +41,7 @@ window.Voisr = window.Voisr || {};
         daily: Array.from({ length: 14 }, (_, i) => ({
           date: `2026-07-${String(12 + i).padStart(2, "0")}`,
           words: [0, 120, 340, 90, 0, 610, 480, 220, 0, 130, 700, 540, 310, 260][i],
+          saved_seconds: [0, 140, 400, 95, 0, 760, 560, 250, 0, 150, 820, 610, 350, 300][i],
         })),
       }),
       get_config: async () => JSON.parse(JSON.stringify(mockCfg)),
@@ -103,7 +104,9 @@ window.Voisr = window.Voisr || {};
         if (opt) return { display: opt.label };
         return { display: mockCfg.hotkey || "unset" };
       },
-      get_hotkey_status: async () => ({ status: `active on ${mockCfg.hotkey}` }),
+      // mirrors Api.get_hotkey_status(): state drives Home's listener dot
+      get_hotkey_status: async () => ({ status: `active on ${mockCfg.hotkey}`,
+                                        state: recording ? "busy" : "listening" }),
       get_pill_themes: async () => [
         { value: "classic", label: "Classic" }, { value: "ember", label: "Ember" },
         { value: "aurora", label: "Aurora" }, { value: "ocean", label: "Ocean" },

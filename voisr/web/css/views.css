@@ -62,6 +62,11 @@
   animation: ptt-pulse 2.4s var(--ease) infinite;
 }
 
+/* only "listening" pulses green; see renderListener() in views/home.js */
+.ptt-state[data-state="busy"] .ptt-dot { background: var(--warning); animation: none; }
+.ptt-state[data-state="off"] .ptt-dot,
+.ptt-state[data-state="unknown"] .ptt-dot { background: var(--muted); animation: none; }
+
 @keyframes ptt-pulse {
   0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 55%, transparent); }
   70%  { box-shadow: 0 0 0 6px color-mix(in srgb, var(--success) 0%, transparent); }

@@ -546,7 +546,7 @@ class HotkeyService:
         self._listener = None
         self._watcher = None
         self._wake = threading.Event()  # set by stop() to end a sleeping poll
-        self._stopped = False
+        self._stopped = True  # until start(); see running
         self._pressed = False
         self._latched = False  # pressed by a toggle key, not held
         self._key_name = None
@@ -564,6 +564,17 @@ class HotkeyService:
         self.status = "not started"
 
     _OPS_STOP = object()
+
+    @property
+    def running(self) -> bool:
+        """False while stopped, e.g. for capture_hotkey's 8 s key capture,
+        when status still reads "active on ..."."""
+        return not self._stopped
+
+    @property
+    def holding(self) -> bool:
+        """True while the key itself owns the current recording."""
+        return self._pressed
 
     def _submit(self, fn) -> None:
         """Run fn on the serial worker; inline if the worker is not running
@@ -1294,13 +1305,23 @@ class Api:
         return PILL_THEMES
 
     def get_hotkey_status(self):
-        if self._hotkey_service is None:
-            return {"status": "push-to-talk not running"}
-        status = self._hotkey_service.status
+        """status is the sentence Settings shows; state is what Home's dot
+        shows: "listening", "busy" (another recording owns the mic, so press()
+        drops the key) or "off"."""
+        svc = self._hotkey_service
+        if svc is None:
+            return {"status": "push-to-talk not running", "state": "off"}
+        status = svc.status
+        if not (svc.running and status.startswith("active")):
+            state = "off"
+        elif self._is_recording and not svc.holding:
+            state = "busy"
+        else:
+            state = "listening"
         if status.startswith("active") and self.get_config().get("paste"):
             status += " · paste ready" if paste_ready() \
                 else " · grant Accessibility to auto-paste"
-        return {"status": status}
+        return {"status": status, "state": state}
 
     def get_permissions(self):
         return {"panes": permissions.states()}
