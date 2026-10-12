@@ -1,5 +1,6 @@
 import hashlib
 import re
+from collections.abc import Callable
 
 # Case-sensitive on purpose: whisper writes fillers lowercase, or capitalised
 # at a sentence start, so "ER" (the ward) is a word. A hyphen next to it means
@@ -114,14 +115,15 @@ def _placeholder_namespace(content: str) -> str:
         counter += 1
 
 
-def _apply_dictionary(text: str, dictionary: dict[str, str] | None) -> str:
+def _dictionary_rewriter(dictionary: dict[str, str] | None) -> Callable[[str], str]:
     """One pass, longest phrase first: a replacement never feeds another
     entry ({"york": ..., "new york": ...} gave "New Yorkshire"), and a space
-    in a phrase matches any run of whitespace (whisper may break a line)."""
+    in a phrase matches any run of whitespace (whisper may break a line).
+    Built once per clean(): it runs on every gap between protected tokens."""
     entries = sorted(((k, v) for k, v in (dictionary or {}).items() if k.strip()),
                      key=lambda kv: len(kv[0]), reverse=True)
     if not entries:
-        return text
+        return lambda text: text
     patterns = []
     for i, (spoken, _) in enumerate(entries):
         # whole-word match: don't rewrite inside longer words
@@ -131,22 +133,26 @@ def _apply_dictionary(text: str, dictionary: dict[str, str] | None) -> str:
         if spoken.strip()[-1:].isalnum():
             pattern = pattern + r"\b"
         patterns.append(f"(?P<d{i}>{pattern})")
-    # a callable replacement keeps backslashes in `written` literal
-    return re.sub("|".join(patterns),
-                  lambda m: entries[int(m.lastgroup[1:])][1],
-                  text, flags=re.IGNORECASE)
+    compiled = re.compile("|".join(patterns), re.IGNORECASE)
+
+    def rewrite(text: str) -> str:
+        # a callable replacement keeps backslashes in `written` literal
+        return compiled.sub(lambda m: entries[int(m.lastgroup[1:])][1], text)
+
+    return rewrite
 
 
 def _protect_original_spans(
     text: str, dictionary: dict[str, str] | None
 ) -> tuple[str, list[str], re.Pattern[str]]:
     spans = list(_protected_spans(text))
+    rewrite = _dictionary_rewriter(dictionary)
     gaps: list[str] = []
     last = 0
     for start, end, _ in spans:
-        gaps.append(_apply_dictionary(FILLER_RE.sub("", text[last:start]), dictionary))
+        gaps.append(rewrite(FILLER_RE.sub("", text[last:start])))
         last = end
-    gaps.append(_apply_dictionary(FILLER_RE.sub("", text[last:]), dictionary))
+    gaps.append(rewrite(FILLER_RE.sub("", text[last:])))
 
     reserved_parts = [text]
     for gap, (_, _, token) in zip(gaps, spans):
