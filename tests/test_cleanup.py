@@ -432,3 +432,18 @@ def test_a_dictionary_phrase_matches_across_any_whitespace():
 
 def test_an_empty_dictionary_key_is_ignored():
     assert clean("x marks", {"": "Z"}) == "X marks"
+
+
+def test_a_large_dictionary_is_compiled_once_not_per_protected_span():
+    # was one pattern build per gap between protected tokens: a dictation
+    # full of numbers paid it hundreds of times, ~60x slower than one build.
+    # One-space gaps keep the matching itself negligible, so this times the
+    # builds alone; best of 3 so one GC pause or busy moment can't fail it.
+    dictionary = {f"word{i}": f"Written{i}" for i in range(500)}
+    raw = " ".join(["1.2"] * 400) + " word7"
+    timings = []
+    for _ in range(3):
+        started = perf_counter()
+        assert clean(raw, dictionary) == " ".join(["1.2"] * 400) + " Written7"
+        timings.append(perf_counter() - started)
+    assert min(timings) < 0.05
