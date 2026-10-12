@@ -1605,10 +1605,15 @@ def main():
             service._submit(service._toggle)
 
         def menu_open():
-            try:
-                window.show()
-            except Exception:
-                pass
+            # Called on the AppKit main thread (menu item, Dock click), and
+            # window.show() waits up to 20 s for the window's `shown` event,
+            # which only the main thread can set. Never wait there.
+            def show():
+                try:
+                    window.show()
+                except Exception:
+                    pass
+            threading.Thread(target=show, daemon=True).start()
 
         if not install_dock_reopen(menu_open):
             print("Voisr: Dock reopen unavailable; use the menu-bar Open",

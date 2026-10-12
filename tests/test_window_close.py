@@ -76,6 +76,8 @@ def test_a_stale_click_does_not_turn_a_dock_quit_into_a_hide():
 # asks the app delegate applicationShouldHandleReopen:hasVisibleWindows:, and
 # pywebview's delegate doesn't implement it, so a Dock click did nothing.
 
+import uuid
+
 import pytest
 
 from voisr.ui import install_dock_reopen
@@ -83,10 +85,11 @@ from voisr.ui import install_dock_reopen
 
 def _delegate_class(name):
     """A fresh class standing in for pywebview's AppDelegate. ObjC class
-    names are process-global, so each test needs its own."""
+    names are process-global, so every call needs a new one, even when the
+    same test runs twice in one process."""
     pytest.importorskip("objc")
     AppKit = pytest.importorskip("AppKit")
-    return type(name, (AppKit.NSObject,), {})
+    return type(f"{name}_{uuid.uuid4().hex}", (AppKit.NSObject,), {})
 
 
 @pytest.mark.parametrize("visible", [False, True])
