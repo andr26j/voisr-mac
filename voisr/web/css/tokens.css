@@ -18,6 +18,7 @@
   --border: #E8E3DA;
   --accent: #C94A25;
   --accent-hover: #B8401E;
+  --accent-text: #B8401E;   /* accent as text: --accent is 4.23:1 on --bg */
   --accent-soft: #FBEAE3;
   --on-accent: #FFFFFF;
   --success: #3E7C4F;
@@ -54,6 +55,7 @@
   --border: #332F27;
   --accent: #F2794F;
   --accent-hover: #FF8C63;
+  --accent-text: #F2794F;
   --accent-soft: #3A241B;
   --on-accent: #1A1815;
   --success: #6FBF85;

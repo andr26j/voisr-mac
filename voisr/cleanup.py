@@ -115,17 +115,26 @@ def _placeholder_namespace(content: str) -> str:
 
 
 def _apply_dictionary(text: str, dictionary: dict[str, str] | None) -> str:
-    out = text
-    for spoken, written in (dictionary or {}).items():
-        # whole-word match (don't rewrite inside longer words); replacement is
-        # a callable so backslashes in `written` stay literal
-        pattern = re.escape(spoken)
-        if spoken[:1].isalnum():
+    """One pass, longest phrase first: a replacement never feeds another
+    entry ({"york": ..., "new york": ...} gave "New Yorkshire"), and a space
+    in a phrase matches any run of whitespace (whisper may break a line)."""
+    entries = sorted(((k, v) for k, v in (dictionary or {}).items() if k.strip()),
+                     key=lambda kv: len(kv[0]), reverse=True)
+    if not entries:
+        return text
+    patterns = []
+    for i, (spoken, _) in enumerate(entries):
+        # whole-word match: don't rewrite inside longer words
+        pattern = r"\s+".join(re.escape(part) for part in spoken.split())
+        if spoken.strip()[:1].isalnum():
             pattern = r"\b" + pattern
-        if spoken[-1:].isalnum():
+        if spoken.strip()[-1:].isalnum():
             pattern = pattern + r"\b"
-        out = re.sub(pattern, lambda m: written, out, flags=re.IGNORECASE)
-    return out
+        patterns.append(f"(?P<d{i}>{pattern})")
+    # a callable replacement keeps backslashes in `written` literal
+    return re.sub("|".join(patterns),
+                  lambda m: entries[int(m.lastgroup[1:])][1],
+                  text, flags=re.IGNORECASE)
 
 
 def _protect_original_spans(

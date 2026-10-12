@@ -549,6 +549,7 @@ class HotkeyService:
         self._stopped = True  # until start(); see running
         self._pressed = False
         self._latched = False  # pressed by a toggle key, not held
+        self._rejected = False  # this press already reported it couldn't start
         self._key_name = None
         self._target_vk = None
         self._state_lock = threading.RLock()
@@ -633,9 +634,15 @@ class HotkeyService:
                 return
             result = self._api.start_recording()
             if "error" in result:
-                return  # e.g. a dashboard recording is already running
+                # e.g. the dock owns the mic, or the queue is full. Say so
+                # once per press; a held key's auto-repeat lands here too.
+                if not self._rejected:
+                    self._rejected = True
+                    self._flash_error()
+                return
             self._pressed = True
             self._latched = latched
+            self._rejected = False
             self._epoch += 1
             epoch = self._epoch
             cfg = self._api.get_config()
@@ -645,9 +652,27 @@ class HotkeyService:
                     theme=sanitize_pill_theme(cfg.get("pill_theme")),
                     color=sanitize_pill_color(cfg.get("pill_color")))
 
+    def _flash_error(self) -> None:
+        """Error pill, then hide; caller holds _state_lock."""
+        if not self._widget_enabled():
+            return
+        self._epoch += 1
+        epoch = self._epoch
+        self._widget_action("show_error", epoch)
+
+        def hide_later():
+            if self._hide_delay:
+                time.sleep(self._hide_delay)
+            with self._state_lock:
+                if epoch == self._epoch:
+                    self._widget_action("hide", epoch)
+
+        threading.Thread(target=hide_later, daemon=True).start()
+
     def release(self) -> None:
         with self._state_lock:
             if not self._pressed:
+                self._rejected = False
                 return
             self._pressed = False
             epoch = self._epoch
@@ -724,6 +749,9 @@ class HotkeyService:
         if self._pressed:
             self.release()
         else:
+            # every toggle is a press of its own, and a refused one gets no
+            # release() to clear the once-per-press guard
+            self._rejected = False
             self.press(latched=True)
 
     def cancel_chord(self) -> None:
@@ -865,6 +893,7 @@ class Api:
         self._window = None
         self._status_item = None
         self._is_recording = False
+        self._quitting = False  # set by close(): queued dictations still land
         self._sessions_in_flight = set()
         self._glyph_busy = False
         self._active_sequence = None
@@ -1043,7 +1072,7 @@ class Api:
         paste_error = None
         fallback_safe = True
         typing_generation = None
-        if session.paste_requested and cfg.get("paste"):
+        if session.paste_requested and cfg.get("paste") and not self._quitting:
             with self._paste_state_lock:
                 typing_generation = self._typing_generation
                 join = (
@@ -1068,7 +1097,7 @@ class Api:
 
         copied = pasted
         clipboard_error = None
-        if not pasted and fallback_safe:
+        if not pasted and fallback_safe and not self._quitting:
             try:
                 self._clipboard_fn(text)
                 copied = True
@@ -1174,6 +1203,10 @@ class Api:
         return cancelled
 
     def close(self):
+        # Quit still finishes queued transcriptions (they are the user's
+        # words and go to History), but nothing may paste or touch the
+        # clipboard after the user has left the app.
+        self._quitting = True
         self._recordings.close()
         if getattr(self, "_status_item", None) is not None:
             self._status_item.release()
@@ -1383,9 +1416,14 @@ class Api:
         if fmt == "json":
             text = json.dumps(items, indent=2)
         elif fmt == "md":
-            text = "\n".join(
-                f"- **{datetime.datetime.fromtimestamp(i['ts']):%Y-%m-%d %H:%M}** "
-                f"— {i['text']}" for i in items)
+            def when(ts):
+                # history keeps records whose ts can't be a date (e.g.
+                # milliseconds); one of those must not sink the export
+                try:
+                    return f"{datetime.datetime.fromtimestamp(ts):%Y-%m-%d %H:%M}"
+                except (OverflowError, OSError, ValueError):
+                    return "unknown time"
+            text = "\n".join(f"- **{when(i['ts'])}** — {i['text']}" for i in items)
         elif fmt == "txt":
             text = "\n".join(i["text"] for i in items)
         else:

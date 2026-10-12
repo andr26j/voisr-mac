@@ -67,8 +67,12 @@ window.Voisr = window.Voisr || {};
      tokens.css needs one block per theme instead of restating both. */
   V.applyAppearance = function (pref) {
     appearancePref = pref || "system";
-    return resolveAppearance();
+    const mode = resolveAppearance();
+    // Settings' picker listens: the palette applies a theme without it.
+    window.dispatchEvent(new Event("voisr:appearance"));
+    return mode;
   };
+  V.appearancePref = () => appearancePref;
 
   // keep following macOS when the user has not pinned a theme
   DARK_QUERY.addEventListener("change", () => {
@@ -97,9 +101,7 @@ window.Voisr = window.Voisr || {};
       if (!res) { e.target.checked = !e.target.checked; return; }
       V.ui.toast(e.target.checked ? "Recording widget on" : "Recording widget off");
     });
-    $("#theme-grid").addEventListener("click", async (e) => {
-      const btn = e.target.closest(".theme-opt");
-      if (!btn) return;
+    const pickPillTheme = V.ui.serial(async (btn) => {
       const res = await V.ui.tryApi(
         V.api().set_config({ pill_theme: btn.dataset.value }), "Save pill theme");
       // Re-render regardless: on success this reflects the newly active
@@ -110,6 +112,11 @@ window.Voisr = window.Voisr || {};
       if (!res) return;
       V.ui.toast(`Pill theme: ${btn.querySelector(".theme-name").textContent}`);
     });
+    $("#theme-grid").addEventListener("click", (e) => {
+      const btn = e.target.closest(".theme-opt");
+      if (btn) pickPillTheme(btn);
+    });
+    V.ui.radioKeys($("#theme-grid"), ".theme-opt", pickPillTheme);
     // pushed from Python after each dictation (hotkey ones land while the
     // dashboard is open) — refresh whichever view is on screen
     window.addEventListener("voisr:new-dictation", () => {

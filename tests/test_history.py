@@ -410,6 +410,10 @@ def test_two_instances_in_threads_do_not_lose_additions(tmp_path):
     }
 
 
+# These fork on purpose: fork safety is what they test, so Python 3.14's
+# "multi-threaded process, use of fork()" warning is expected (L10).
+@pytest.mark.filterwarnings(
+    "ignore:This process .* is multi-threaded, use of fork:DeprecationWarning")
 def test_independent_process_writers_keep_every_record(tmp_path):
     path = tmp_path / "h.jsonl"
     context = multiprocessing.get_context("fork")
@@ -642,6 +646,10 @@ def test_fork_child_does_not_inherit_another_threads_path_lock(tmp_path):
     assert [item["text"] for item in store.list()] == ["child"]
 
 
+# These fork on purpose: fork safety is what they test, so Python 3.14's
+# "multi-threaded process, use of fork()" warning is expected (L10).
+@pytest.mark.filterwarnings(
+    "ignore:This process .* is multi-threaded, use of fork:DeprecationWarning")
 def test_nested_mutation_lock_completes_within_timeout(tmp_path):
     context = multiprocessing.get_context("fork")
     process = context.Process(target=_enter_nested_mutation_lock,

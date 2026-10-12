@@ -175,8 +175,10 @@ def test_dictionary_output_is_written_exactly_as_the_user_typed_it(written, expe
     assert clean("say token", {"token": written}) == expected
 
 
-def test_dictionary_replacements_keep_cascade_order():
-    assert clean("say alpha", {"alpha": "beta", "beta": "gamma"}) == "Say gamma"
+def test_dictionary_replacements_do_not_cascade():
+    # was pinned as "Say gamma": a replacement must not feed another entry
+    # (L4, 2026-10-12 audit), or {"york": ..., "new york": ...} breaks
+    assert clean("say alpha", {"alpha": "beta", "beta": "gamma"}) == "Say beta"
 
 
 def test_unmatched_closing_parenthesis_and_suffix_are_unprotected():
@@ -414,3 +416,19 @@ def test_a_first_word_with_its_own_capitals_is_not_recapitalised(raw, dictionary
 )
 def test_filler_removal_keeps_real_words_and_sentence_punctuation(raw, expected):
     assert clean(raw) == expected
+
+
+# ---- L4 (2026-10-12 audit) ----
+
+def test_the_longest_dictionary_phrase_wins_whatever_the_order():
+    d = {"york": "Yorkshire", "new york": "NYC"}
+    assert clean("fly to new york", d) == "Fly to NYC"
+    assert clean("drive to york", d) == "Drive to Yorkshire"
+
+
+def test_a_dictionary_phrase_matches_across_any_whitespace():
+    assert clean("ask trade\n mate", {"trade mate": "TradeMate"}) == "Ask TradeMate"
+
+
+def test_an_empty_dictionary_key_is_ignored():
+    assert clean("x marks", {"": "Z"}) == "X marks"

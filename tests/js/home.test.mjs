@@ -385,3 +385,80 @@ test("the Time saved tile draws and compares its own series, not the word counts
   assert.equal(h["trend-saved"].children[0].style.getPropertyValue("--h"), "1.000",
     "the first day saved the most time, so it is the tallest bar");
 });
+
+
+test("'Record from here instead' starts a dock recording rather than only focusing the button", async () => {
+  // M11: .focus() after a mouse click shows no ring, so the button looked dead
+  const { api, calls } = recordingApi();
+  const h = mountHome({ ...api, get_permissions: async () => ({ panes: [
+    { key: "microphone", label: "Microphone", granted: true },
+    { key: "input_monitoring", label: "Input Monitoring", granted: false },
+    { key: "accessibility", label: "Accessibility", granted: true },
+  ]}) });
+  await h.V.views.home.renderPermissions();
+  const actions = h["perm-strip"].children[0].children.find((c) => c.className === "perm-actions");
+  const fallback = actions.children.find((b) => b.textContent === "Record from here instead");
+  try {
+    fallback.dispatch("click", { target: fallback });
+    await settle();
+    assert.equal(calls.start, 1);
+    assert.equal(h.dock.dataset.state, "recording");
+  } finally {
+    await stopDock(h);
+  }
+});
+
+/* ---------- L8 (2026-10-12 audit) ---------- */
+
+test("a focus refresh with no permission change leaves the strip alone, so it isn't re-announced", async () => {
+  const h = mountHome({});
+  await h.V.views.home.renderPermissions();
+  const first = h["perm-strip"].children[0];
+  await h.V.views.home.renderPermissions();
+  assert.equal(h["perm-strip"].children[0], first,
+    "aria-live re-reads the strip whenever its children are replaced");
+});
+
+test("a permission change still re-renders the strip", async () => {
+  let granted = true;
+  const h = mountHome({ get_permissions: async () => ({ panes: [
+    { key: "microphone", label: "Microphone", granted: true },
+    { key: "input_monitoring", label: "Input Monitoring", granted },
+    { key: "accessibility", label: "Accessibility", granted: true },
+  ]}) });
+  await h.V.views.home.renderPermissions();
+  granted = false;
+  await h.V.views.home.renderPermissions();
+  assert.equal(h["perm-strip"].children[0].className, "perm-block");
+});
+
+test("a dock dictation whose History write failed says so instead of a bare 'Copied'", async () => {
+  const { api } = recordingApi({
+    stop_recording: async () => ({ text: "Hi", copied: true, warning: "history failed: disk full" }),
+  });
+  const h = mountHome(api);
+  await h.V.views.home.toggleRecord();
+  await h.V.views.home.toggleRecord();
+  assert.match(h["record-error"].textContent, /History/);
+});
+
+test("'Record from here instead' never stops a dock recording already running", async () => {
+  const { api, calls } = recordingApi();
+  const h = mountHome({ ...api, get_permissions: async () => ({ panes: [
+    { key: "microphone", label: "Microphone", granted: true },
+    { key: "input_monitoring", label: "Input Monitoring", granted: false },
+    { key: "accessibility", label: "Accessibility", granted: true },
+  ]}) });
+  await h.V.views.home.renderPermissions();
+  await h.V.views.home.toggleRecord();          // recording from the dock
+  const actions = h["perm-strip"].children[0].children.find((c) => c.className === "perm-actions");
+  const fallback = actions.children.find((b) => b.textContent === "Record from here instead");
+  try {
+    fallback.dispatch("click", { target: fallback });
+    await settle();
+    assert.equal(calls.stop, 0);
+    assert.equal(h.dock.dataset.state, "recording");
+  } finally {
+    await stopDock(h);
+  }
+});

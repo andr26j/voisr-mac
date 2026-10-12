@@ -99,7 +99,10 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 /* ---------- Main ---------- */
 
-.main { flex: 1; overflow-y: auto; padding: var(--titlebar-h) 44px 60px; background: var(--bg); }
+/* --main-pad-b is shared with the sticky dock (views.css), whose edge is
+   inset by this padding */
+.main { --main-pad-b: 60px; flex: 1; overflow-y: auto;
+        padding: var(--titlebar-h) 44px var(--main-pad-b); background: var(--bg); }
 
 .page-head { margin-bottom: 26px; }
 

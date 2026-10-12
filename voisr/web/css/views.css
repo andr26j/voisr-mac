@@ -178,7 +178,10 @@
      you scroll a long Home, without being given the fold the way the old
      hero card was */
   position: sticky;
-  bottom: 0;
+  /* a sticky edge is inset by the scroller's padding: .main's bottom
+     padding left the dock floating 60px up with rows showing beneath it.
+     This lands it 16px above the window edge. */
+  bottom: calc(16px - var(--main-pad-b));
   z-index: 10;
   margin-top: 18px;
   padding: 10px 16px 10px 10px;
@@ -322,7 +325,7 @@ mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
 /* long caveats collapse instead of pushing every other row apart */
 .more { margin-top: 5px; }
 .more summary {
-  font-size: 12px; font-weight: 600; color: var(--accent);
+  font-size: 12px; font-weight: 600; color: var(--accent-text);
   cursor: pointer; list-style: none; width: fit-content;
 }
 .more summary::-webkit-details-marker { display: none; }
@@ -339,6 +342,9 @@ mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
 }
 
 .setting-status { font-size: 12px; font-weight: 600; color: var(--success); margin-top: 6px; }
+.setting-status[data-state="busy"] { color: var(--muted); }
+.setting-status[data-state="off"],
+.setting-status[data-state="unknown"] { color: var(--warning); }
 
 /* ---------- Hotkey capture ---------- */
 

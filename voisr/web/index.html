@@ -103,7 +103,6 @@
           <div class="tile">
             <span class="stat-label">Day streak</span>
             <span class="stat-num stat-sm" id="stat-streak">0</span>
-            <span class="stat-delta" id="delta-streak"></span>
             <div class="trend trend-dots" id="trend-streak" aria-hidden="true"></div>
             <span class="stat-note">a dot for every day you dictated</span>
           </div>
@@ -132,7 +131,7 @@
           <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
         </div>
         <span id="dock-time" class="dock-time">0:00</span>
-        <p id="record-status" class="dock-hint">Click to record here instead</p>
+        <p id="record-status" class="dock-hint" role="status">Click to record here instead</p>
         <p id="record-error" class="dock-error" role="alert"></p>
       </div>
     </section>
@@ -275,14 +274,14 @@
             <p class="setting-desc">Follow macOS, or pin Voisr to light or dark. An appearance choice is the one control that should show its own result, so it is picked by picture — like the pill themes below.</p>
           </div>
         </div>
-        <div id="appearance-grid" class="thumb-grid" role="group" aria-label="Theme"></div>
+        <div id="appearance-grid" class="thumb-grid" role="radiogroup" aria-label="Theme"></div>
         <div class="setting-row">
           <div>
             <h3>Pill theme</h3>
             <p class="setting-desc">Color and animation of the recording pill while you dictate. Applies from your next dictation.</p>
           </div>
         </div>
-        <div id="theme-grid" class="theme-grid" role="group" aria-label="Pill theme"></div>
+        <div id="theme-grid" class="theme-grid" role="radiogroup" aria-label="Pill theme"></div>
         <div class="setting-row">
           <div>
             <h3>Pill colour</h3>

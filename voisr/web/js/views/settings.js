@@ -18,14 +18,14 @@ window.Voisr = window.Voisr || {};
       V.ui.tryApi(V.api().get_pill_themes(), "Load pill themes"),
     ]);
     if (!cfg || !themes) return;
-    const active = cfg.pill_theme || "classic";
-    $("#theme-grid").replaceChildren(...themes.map((t) =>
-      V.ui.el("button", {
-        type: "button",
-        class: `theme-opt${t.value === active ? " active" : ""}`,
-        data: { value: t.value },
-        "aria-pressed": String(t.value === active),
-      }, miniPillNode(t.value), V.ui.el("span", { class: "theme-name", text: t.label }))));
+    const labels = Object.fromEntries(themes.map((t) => [t.value, t.label]));
+    V.ui.syncRadios($("#theme-grid"), {
+      values: themes.map((t) => t.value),
+      checked: cfg.pill_theme || "classic",
+      cls: "theme-opt",
+      build: (value) => V.ui.el("button", { type: "button", data: { value } },
+        miniPillNode(value), V.ui.el("span", { class: "theme-name", text: labels[value] })),
+    });
   }
 
   /* ----- appearance thumbnails -----
@@ -47,13 +47,14 @@ window.Voisr = window.Voisr || {};
   }
 
   function renderAppearance() {
-    V.ui.$("#appearance-grid").replaceChildren(...APPEARANCES.map((a) =>
-      V.ui.el("button", {
-        type: "button",
-        class: `thumb${a.value === appliedAppearance ? " active" : ""}`,
-        data: { value: a.value },
-        "aria-pressed": String(a.value === appliedAppearance),
-      }, thumbNode(a.value), V.ui.el("span", { class: "thumb-name", text: a.label }))));
+    const labels = Object.fromEntries(APPEARANCES.map((a) => [a.value, a.label]));
+    V.ui.syncRadios(V.ui.$("#appearance-grid"), {
+      values: APPEARANCES.map((a) => a.value),
+      checked: appliedAppearance,
+      cls: "thumb",
+      build: (value) => V.ui.el("button", { type: "button", data: { value } },
+        thumbNode(value), V.ui.el("span", { class: "thumb-name", text: labels[value] })),
+    });
   }
 
   /* ----- custom color wheel (HSV, V=1; standard f(5),f(3),f(1) mapping) ----- */
@@ -229,7 +230,7 @@ window.Voisr = window.Voisr || {};
         $("#launch-toggle").checked = !!cfg.launch_at_login;
       }
       if (hotkey) $("#hotkey-current").textContent = hotkey.display || "unset";
-      if (status) $("#hotkey-status").textContent = status.status;
+      if (status) renderHotkeyStatus(status);
 
       if (models && models.models) {
         const select = $("#model-select");
@@ -285,9 +286,7 @@ window.Voisr = window.Voisr || {};
        render — a listener bound to each button would be lost with it. A
        failed write re-renders from appliedAppearance, so the grid can never
        be left highlighting a theme that was neither applied nor persisted. */
-    document.getElementById("appearance-grid").addEventListener("click", async (e) => {
-      const btn = e.target.closest(".thumb");
-      if (!btn) return;
+    const pickAppearance = V.ui.serial(async (btn) => {
       const next = btn.dataset.value;
       if (next === appliedAppearance) return;
       const res = await V.ui.tryApi(V.api().set_appearance(next), "Change theme");
@@ -296,6 +295,21 @@ window.Voisr = window.Voisr || {};
       renderAppearance();
       V.applyAppearance(next);
       V.ui.toast(`Theme: ${next}`);
+    });
+    const appearanceGrid = document.getElementById("appearance-grid");
+    appearanceGrid.addEventListener("click", (e) => {
+      const btn = e.target.closest(".thumb");
+      if (btn) pickAppearance(btn);
+    });
+    V.ui.radioKeys(appearanceGrid, ".thumb", pickAppearance);
+    // The palette's "Toggle appearance" changes the theme without this view:
+    // follow it, or the grid highlights a theme that is no longer applied.
+    window.addEventListener("voisr:appearance", () => {
+      if (!V.appearancePref) return;
+      const pref = V.appearancePref();
+      if (pref === appliedAppearance) return;  // our own pick: already shown
+      appliedAppearance = pref;
+      renderAppearance();
     });
 
     document.getElementById("model-select").addEventListener("change", async (e) => {
@@ -368,5 +382,13 @@ window.Voisr = window.Voisr || {};
   }
 
   V.views = V.views || {};
-  V.views.settings = { renderAppearance, init, render, renderThemes, renderColorWheel, initColorWheel, openColorPopover };
+  /* The sentence comes from Python; its colour from state, so "push-to-talk
+     not running" no longer shows in the same green as "active". */
+  function renderHotkeyStatus(status) {
+    const node = V.ui.$("#hotkey-status");
+    node.textContent = status.status;
+    node.dataset.state = status.state || "unknown";
+  }
+
+  V.views.settings = { renderAppearance, renderHotkeyStatus, init, render, renderThemes, renderColorWheel, initColorWheel, openColorPopover };
 })(window.Voisr);

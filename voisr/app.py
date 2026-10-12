@@ -219,8 +219,11 @@ def main() -> None:
         if not args.file:
             ap.error("--file is required with --mode file")
         from voisr.audio import to_wav16k
-        wav = to_wav16k(args.file, args.file + ".16k.wav")
-        print(process_audio(wav, cfg["dictionary"]))
+        wav = Path(args.file + ".16k.wav")
+        try:
+            print(process_audio(to_wav16k(args.file, wav), cfg["dictionary"]))
+        finally:
+            wav.unlink(missing_ok=True)  # a scratch file beside the user's memo
     elif args.mode == "hotkey":
         hotkey_mode(cfg, args.config)
     else:
