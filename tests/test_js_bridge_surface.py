@@ -122,7 +122,7 @@ def test_main_exposes_the_bridge_and_never_the_api(monkeypatch):
 
     monkeypatch.setattr(ui, "Api", FakeApi)
     monkeypatch.setattr(ui, "HotkeyService", FakeService)
-    monkeypatch.setattr(ui, "RecordingWidget", lambda: SimpleNamespace(create=lambda: None))
+    monkeypatch.setattr(ui, "RecordingWidget", lambda **kwargs: SimpleNamespace(create=lambda: None))
     monkeypatch.setattr(ui, "StatusItem", lambda **kwargs: None)
     monkeypatch.setattr("voisr.inject.prepare_paste_controller", lambda: None)
     monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace())

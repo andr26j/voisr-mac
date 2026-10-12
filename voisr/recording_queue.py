@@ -118,6 +118,17 @@ class RecordingQueue:
         with self._lock:
             return self._active is not None
 
+    def active_level(self) -> float | None:
+        """Live mic level (0..1) of the capture in progress, or None when
+        nothing is capturing or the recorder has no meter (the ffmpeg
+        fallback). Lock-free on purpose: the main thread polls this at 30 Hz,
+        and start() holds the lock while a recorder opens the mic."""
+        active = self._active
+        if active is None:
+            return None
+        level = getattr(active.recorder, "level", None)
+        return level if isinstance(level, float) else None
+
     @staticmethod
     def _safe_cancel(recorder) -> None:
         if recorder is None:

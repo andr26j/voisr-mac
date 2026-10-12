@@ -361,9 +361,14 @@ class RecordingWidget:
     _SCREEN_SAVER_LEVEL = 1000
     _supports_ownership_action = True
 
-    def __init__(self):
+    LEVEL_HZ = 30  # pill bars follow the voice; the page smooths between pushes
+
+    def __init__(self, level_source=None):
         self._panel = None
         self._webview = None
+        # () -> float | None; polled only while the pill shows "recording"
+        self._level_source = level_source
+        self._feed_gen = 0  # main thread only; bumping it ends the running feed
 
     def create(self) -> None:
         """Build the panel + webview on the main thread and preload the HTML.
@@ -432,6 +437,9 @@ class RecordingWidget:
                         self._build()
                     if self._webview is None:
                         return
+                    # first, so a PyObjC call failing below still ends the
+                    # previous state's level feed
+                    self._feed_gen += 1
                     if theme is not None:
                         # sanitize_* whitelist both values — config.json content
                         # can never be interpolated into JS verbatim
@@ -446,6 +454,8 @@ class RecordingWidget:
                     self._panel.orderFrontRegardless()
                     if state == "recording":
                         self._check_visible()
+                        if self._level_source is not None:
+                            self._feed_tick(self._feed_gen)
 
                 if if_current is not None:
                     if_current(apply)
@@ -455,6 +465,39 @@ class RecordingWidget:
             AppHelper.callAfter(go)
         except Exception:
             pass  # never break the record path
+
+    @staticmethod
+    def level_js(level) -> str | None:
+        """The JS that hands one level to the page, or None for no reading.
+        Only a real number is ever interpolated into the script."""
+        if isinstance(level, bool) or not isinstance(level, (int, float)):
+            return None
+        if level != level:  # NaN
+            return None
+        level = min(1.0, max(0.0, float(level)))
+        return f"window.setLevel && setLevel({level:.3f})"
+
+    def _feed_tick(self, gen: int) -> None:
+        """Push the current level, then reschedule; main thread only. Any
+        later state change bumps _feed_gen, which ends this loop. A None
+        reading ends it too: StreamRecorder always reports a float, so None
+        means a recorder with no meter (ffmpeg) or a capture already over."""
+        if gen != self._feed_gen or self._webview is None:
+            return
+        try:
+            level = self._level_source()
+        except Exception:
+            level = float("nan")  # a failed read is transient: skip, keep polling
+        if level is None:
+            return
+        js = self.level_js(level)
+        if js is not None:
+            self._webview.evaluateJavaScript_completionHandler_(js, None)
+        try:
+            from PyObjCTools import AppHelper
+            AppHelper.callLater(1 / self.LEVEL_HZ, self._feed_tick, gen)
+        except Exception:
+            pass
 
     def _check_visible(self) -> None:
         """Log if the pill still failed to appear after a show. With the panel
@@ -496,6 +539,7 @@ class RecordingWidget:
 
             def go():
                 def apply():
+                    self._feed_gen += 1  # first: ends the level feed even if the fade fails
                     if self._panel is not None:
                         # Fade out but stay resident on all Spaces — do NOT orderOut.
                         # orderOut drops the window's Space membership, and the next
@@ -985,6 +1029,11 @@ class Api:
         if self._transcribe_fn is not None:
             return self._transcribe_fn(wav)
         return self._default_transcribe(wav, cfg)
+
+    def current_level(self):
+        """Live mic level of the dictation being captured (0..1), or None.
+        Read by the pill's 30 Hz feed; deliberately not a bridge method."""
+        return self._recordings.active_level()
 
     def note_user_typing(self):
         """Record manual typing without blocking the event-tap callback."""
@@ -1641,7 +1690,7 @@ def main():
     service = None
     try:
         api = Api()
-        widget = RecordingWidget()
+        widget = RecordingWidget(level_source=api.current_level)
         service = HotkeyService(api, widget=widget)
         api.attach_hotkey_service(service)
         # No js_api: see bridge_functions
