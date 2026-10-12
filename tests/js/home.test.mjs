@@ -205,3 +205,56 @@ test("home renderPermissions() collapses to one quiet line once every grant is i
   assert.equal(h["perm-strip"].children[0].className, "perm-ok");
   assert.equal(h["ptt-bar"].hidden, false, "the status line must come back");
 });
+
+test("home renderPermissions() keeps push-to-talk up on first run, when macOS hasn't asked for the mic yet", async () => {
+  // H2 (2026-10-12 audit): the mic prompt only appears on the first
+  // recording, so holding the key is exactly how a new user gets past it.
+  const h = mountHome({ get_permissions: async () => ({ panes: [
+    { key: "microphone", label: "Microphone", granted: null },
+    { key: "input_monitoring", label: "Input Monitoring", granted: true },
+    { key: "accessibility", label: "Accessibility", granted: true },
+  ]}) });
+  h["ptt-bar"].hidden = true;
+
+  await h.V.views.home.renderPermissions();
+
+  assert.equal(h["ptt-bar"].hidden, false, "the push-to-talk line stays");
+  assert.equal(h["perm-strip"].dataset.state, "pending");
+  assert.equal(h["perm-strip"].children.length, 1);
+  assert.notEqual(h["perm-strip"].children[0].className, "perm-block");
+  const hint = h["perm-strip"].children[0].textContent;
+  assert.match(hint, /will ask/i);
+  assert.match(hint, /first time you dictate/i);
+});
+
+test("home renderPermissions() leads with a real denial, not a mic that hasn't been asked yet", async () => {
+  const h = mountHome({ get_permissions: async () => ({ panes: [
+    { key: "microphone", label: "Microphone", granted: null },
+    { key: "input_monitoring", label: "Input Monitoring", granted: false },
+    { key: "accessibility", label: "Accessibility", granted: true },
+  ]}) });
+
+  await h.V.views.home.renderPermissions();
+
+  const block = h["perm-strip"].children[0];
+  assert.equal(block.className, "perm-block");
+  const actions = block.children.find((c) => c.className === "perm-actions");
+  assert.equal(actions.children[0].textContent, "Open Input Monitoring");
+  const checks = block.children.find((c) => c.className === "perm-checks");
+  const micWhy = checks.children[0].children.find((c) => c.className === "perm-why");
+  assert.match(micWhy.textContent, /first dictation/i,
+    "the mic row says it will be asked, not that it is needed");
+});
+
+test("home renderPermissions() still blocks on a mic the user switched off", async () => {
+  const h = mountHome({ get_permissions: async () => ({ panes: [
+    { key: "microphone", label: "Microphone", granted: false },
+    { key: "input_monitoring", label: "Input Monitoring", granted: true },
+    { key: "accessibility", label: "Accessibility", granted: true },
+  ]}) });
+
+  await h.V.views.home.renderPermissions();
+
+  assert.equal(h["perm-strip"].children[0].className, "perm-block");
+  assert.equal(h["ptt-bar"].hidden, true);
+});

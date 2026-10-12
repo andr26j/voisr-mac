@@ -1,7 +1,7 @@
 """TCC permission probes and their System Settings deep links.
 
-Every probe returns True (granted), False (denied), or raises — callers get
-None for "unknown". Unknown must never be presented as granted: a wrongly
+Every probe returns True (granted), False (denied), None (not asked yet), or
+raises — callers get None for "unknown". Unknown must never be presented as granted: a wrongly
 green chip is how someone spends twenty minutes debugging a dead hotkey.
 """
 
@@ -16,12 +16,21 @@ PANES = {
 ORDER = ["microphone", "input_monitoring", "accessibility"]
 
 
-def microphone_granted() -> bool:
-    """AVAuthorizationStatusAuthorized is 3."""
+def microphone_state(status: int):
+    """AVAuthorizationStatus -> granted. 0 is "not determined": macOS has not
+    asked yet and will on the first recording, so it is unknown, not denied.
+    1 (restricted) and 2 (denied) are real refusals; 3 is authorized."""
+    status = int(status)
+    if status == 0:
+        return None
+    return status == 3
+
+
+def microphone_granted():
     import AVFoundation
-    status = AVFoundation.AVCaptureDevice.authorizationStatusForMediaType_(
-        AVFoundation.AVMediaTypeAudio)
-    return int(status) == 3
+    return microphone_state(
+        AVFoundation.AVCaptureDevice.authorizationStatusForMediaType_(
+            AVFoundation.AVMediaTypeAudio))
 
 
 def input_monitoring_granted() -> bool:
@@ -48,7 +57,8 @@ def states(probes=None) -> list[dict]:
         label, url = PANES[key]
         probe = probes.get(key)
         try:
-            granted = bool(probe()) if probe is not None else None
+            granted = probe() if probe is not None else None
+            granted = None if granted is None else bool(granted)
         except Exception:
             granted = None  # unknown, never granted
         out.append({"key": key, "label": label,
