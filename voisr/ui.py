@@ -169,6 +169,21 @@ def wav_peak(path) -> int:
         return -1
 
 
+def wav_seconds(path) -> float:
+    """Length of a WAV in seconds, -1 if unparseable (skip the check)."""
+    import wave
+    try:
+        with wave.open(str(path), "rb") as w:
+            return w.getnframes() / w.getframerate()
+    except Exception:
+        return -1.0
+
+
+# Shorter than any spoken word: a tap, or a hotkey used as a modifier. The
+# WAV is measured, not the key hold, because the hold includes mic start-up.
+MIN_SPEECH_S = 0.3
+
+
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
@@ -533,6 +548,7 @@ class HotkeyService:
         self._wake = threading.Event()  # set by stop() to end a sleeping poll
         self._stopped = False
         self._pressed = False
+        self._latched = False  # pressed by a toggle key, not held
         self._key_name = None
         self._target_vk = None
         self._state_lock = threading.RLock()
@@ -600,7 +616,7 @@ class HotkeyService:
         else:
             method(*args, **kwargs)
 
-    def press(self) -> None:
+    def press(self, latched=False) -> None:
         with self._state_lock:
             if self._pressed:
                 return
@@ -608,6 +624,7 @@ class HotkeyService:
             if "error" in result:
                 return  # e.g. a dashboard recording is already running
             self._pressed = True
+            self._latched = latched
             self._epoch += 1
             epoch = self._epoch
             cfg = self._api.get_config()
@@ -696,7 +713,19 @@ class HotkeyService:
         if self._pressed:
             self.release()
         else:
-            self.press()
+            self.press(latched=True)
+
+    def cancel_chord(self) -> None:
+        """Another key went down while the hotkey was held: it's a shortcut
+        (⌥e for é with Right Option), not a dictation. A latched toggle key
+        isn't held, so typing during it is left alone."""
+        with self._state_lock:
+            if not self._pressed or self._latched:
+                return
+            self._pressed = False
+            self._api._cancel_recording()
+            if self._widget_enabled():
+                self._widget_action("hide", self._epoch)
 
     def _spawn_listener(self) -> None:
         target_vk = self._target_vk
@@ -709,6 +738,7 @@ class HotkeyService:
                         # user is typing manually -> don't smart-join the
                         # next dictation onto the previous one
                         self._api.note_user_typing()
+                        self._submit(self.cancel_chord)
                     return
                 # Everything below is queued, never run here (see _submit).
                 if kind == "down":       # auto-repeats; press() guards
@@ -960,6 +990,12 @@ class Api:
         wav = session.wav_path
         cfg = session.context
         duration = max((session.released_at - session.started_at), 0.1)
+        # Some audio but too little is a tap, not a mic fault. No audio at
+        # all still falls through to the permission message below.
+        if 0 < wav_seconds(wav) < MIN_SPEECH_S:
+            return SessionResult.failure(
+                session.sequence, "audio",
+                "too short — hold the key while you speak")
         if not wav.exists() or wav.stat().st_size < 1000:
             detail = session.capture_stderr.strip()[:120]
             return SessionResult.failure(
@@ -1113,6 +1149,17 @@ class Api:
 
     def stop_recording(self, paste=False):
         return self._release_recording(paste).result().to_api_dict()
+
+    def _cancel_recording(self) -> bool:
+        """Close the mic and drop the capture. Private so the JS bridge
+        can't reach it; only the hotkey path cancels."""
+        with self._busy_lock:
+            sequence, self._active_sequence = self._active_sequence, None
+            self._is_recording = False
+            cancelled = self._recordings.cancel()
+        if sequence is not None:
+            self._mark_session(sequence, False)
+        return cancelled
 
     def close(self):
         self._recordings.close()

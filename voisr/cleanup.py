@@ -6,6 +6,22 @@ FILLER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# whisper.cpp annotates non-speech instead of returning nothing: a key click
+# or room noise comes back as `[BLANK_AUDIO]`, `[ Silence ]`, `(wind blowing)`.
+# Whisper's square-bracket tags are plain words, so a bracketed run of words
+# goes (a bracketed URL or number stays). Parentheses can be dictated, so only
+# those naming a sound go.
+NON_SPEECH_RE = re.compile(
+    r"""
+    \[[\sA-Za-z_'-]*\]
+    | \((?=[^()]*\b(?:blank|silence|silent|music|inaudible|noise|wind|
+                      blowing|laugh\w*|cough\w*|sigh\w*|applause|static|
+                      beep\w*|breath\w*|click\w*|typing|keyboard|mumbl\w*|
+                      sniff\w*)\b)[^()]*\)
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
 PROTECTED_TOKEN_RE = re.compile(
     r"""
     (?P<url>(?<![\w._%+-])(?:https?://|www\.)[^\s]+)  # URL
@@ -140,6 +156,7 @@ def _restore_tokens(text: str, protected: list[str], placeholder_re: re.Pattern[
 def clean(text: str, dictionary: dict[str, str] | None = None) -> str:
     """Normalize a raw transcript: strip fillers, fix spacing/punctuation,
     apply the user's spoken->written dictionary, capitalize the first letter."""
+    text = NON_SPEECH_RE.sub(" ", text)
     if not text.strip():
         return ""
     out, protected, placeholder_re = _protect_original_spans(text, dictionary)
