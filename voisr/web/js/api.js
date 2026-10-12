@@ -15,8 +15,8 @@ window.Voisr = window.Voisr || {};
     ];
     let mockCfg = { hotkey: "alt_r", paste: true, show_widget: true, device: ":0", pill_theme: "classic", pill_color: null, dictionary: { trademake: "TradeMate", "trade mate": "TradeMate" }, model: "small.en", launch_at_login: false };
     let recording = false;
-    // mirrors voisr/ui.py's HOTKEY_OPTIONS, used both for the dropdown mock
-    // and to resolve a human label for hotkey_display() below.
+    // mirrors voisr/ui.py's HOTKEY_OPTIONS, to resolve a human label for
+    // hotkey_display() below.
     const HOTKEY_OPTIONS = [
       { value: "alt_r", label: "Right Option (⌥)" }, { value: "alt_l", label: "Left Option (⌥)" },
       { value: "cmd_r", label: "Right Command (⌘)" }, { value: "ctrl_r", label: "Right Control (⌃)" },
@@ -95,7 +95,6 @@ window.Voisr = window.Voisr || {};
         mockCfg.hotkey_vk = 63; mockCfg.hotkey_label = "Fn / Globe";
         return { vk: 63, label: "Fn / Globe" };
       },
-      get_hotkey_options: async () => HOTKEY_OPTIONS,
       // mirrors Api.hotkey_display() in voisr/ui.py: captured label, else
       // the matching HOTKEY_OPTIONS label, else the raw value, else "unset".
       hotkey_display: async () => {

@@ -79,7 +79,7 @@ def open_pane(key: str, opener=None) -> bool:
         return False
     if opener is None:
         def opener(u):
-            # open_pane is a js_api method reached from a pywebview worker
+            # open_pane is a bridge call reached from a pywebview worker
             # thread, so NSWorkspace.openURL_ must not run inline here --
             # dispatch it to the main thread like every other AppKit entry
             # point on this branch (ui.py's apply_app_appearance,
