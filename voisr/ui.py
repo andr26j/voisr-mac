@@ -550,6 +550,13 @@ class HotkeyService:
         self._pressed = False
         self._latched = False  # pressed by a toggle key, not held
         self._rejected = False  # this press already reported it couldn't start
+        # press() calls start_recording() with _state_lock released (it can
+        # take seconds, and the pill's main-thread callbacks take the lock).
+        # While it runs _pressed is already True, so auto-repeat stays out;
+        # a release or chord in the gap is noted here and settled after.
+        self._starting = False
+        self._start_released = False
+        self._start_cancelled = False
         self._key_name = None
         self._target_vk = None
         self._state_lock = threading.RLock()
@@ -632,25 +639,56 @@ class HotkeyService:
         with self._state_lock:
             if self._pressed:
                 return
+            self._pressed = True
+            self._latched = latched
+            self._starting = True
+            self._start_released = False
+            self._start_cancelled = False
+        try:
             result = self._api.start_recording()
+        except Exception as error:
+            print(f"Voisr hotkey: recording start failed: {error}", flush=True)
+            result = {"error": str(error)}
+        except BaseException:
+            # nothing will settle this press: un-mark it or the key is dead
+            with self._state_lock:
+                self._starting = False
+                self._pressed = False
+                self._latched = False
+            raise
+        finish = None
+        with self._state_lock:
+            self._starting = False
+            released, cancelled = self._start_released, self._start_cancelled
             if "error" in result:
+                self._pressed = False
+                self._latched = False
                 # e.g. the dock owns the mic, or the queue is full. Say so
                 # once per press; a held key's auto-repeat lands here too.
                 if not self._rejected:
-                    self._rejected = True
                     self._flash_error()
+                # a key already let go needs no guard against its repeats
+                self._rejected = not released
                 return
-            self._pressed = True
-            self._latched = latched
             self._rejected = False
             self._epoch += 1
             epoch = self._epoch
-            cfg = self._api.get_config()
-            if self._widget is not None and bool(cfg.get("show_widget", True)):
-                self._widget_action(
-                    "show_recording", epoch,
-                    theme=sanitize_pill_theme(cfg.get("pill_theme")),
-                    color=sanitize_pill_color(cfg.get("pill_color")))
+            if cancelled:
+                # still hide: the new epoch orphans an older pill's own hide
+                self._drop_chord(epoch)
+            else:
+                cfg = self._api.get_config()
+                if self._widget is not None and bool(cfg.get("show_widget", True)):
+                    self._widget_action(
+                        "show_recording", epoch,
+                        theme=sanitize_pill_theme(cfg.get("pill_theme")),
+                        color=sanitize_pill_color(cfg.get("pill_color")))
+                if released:
+                    finish = self._end_recording()
+        if cancelled:
+            self._api._cancel_recording()
+        if finish is not None:
+            self._spawn_finish(*finish)
 
     def _flash_error(self) -> None:
         """Error pill, then hide; caller holds _state_lock."""
@@ -674,12 +712,24 @@ class HotkeyService:
             if not self._pressed:
                 self._rejected = False
                 return
-            self._pressed = False
-            epoch = self._epoch
-            show = self._widget_enabled()
-            if show:
-                self._widget_action("show_processing", epoch)
-            future = self._api._release_recording(paste=True)
+            if self._starting:
+                self._start_released = True  # press() ends it once started
+                return
+            finish = self._end_recording()
+        self._spawn_finish(*finish)
+
+    def _end_recording(self):
+        """Close the mic and show processing; caller holds _state_lock and
+        passes the result to _spawn_finish after letting go of it."""
+        self._pressed = False
+        epoch = self._epoch
+        show = self._widget_enabled()
+        if show:
+            self._widget_action("show_processing", epoch)
+        future = self._api._release_recording(paste=True)
+        return future, show, epoch
+
+    def _spawn_finish(self, future, show: bool, epoch: int) -> None:
         threading.Thread(
             target=self._finish,
             args=(future, show, epoch),
@@ -761,10 +811,21 @@ class HotkeyService:
         with self._state_lock:
             if not self._pressed or self._latched:
                 return
-            self._pressed = False
-            self._api._cancel_recording()
-            if self._widget_enabled():
-                self._widget_action("hide", self._epoch)
+            if self._starting:
+                # once let go, a key going down is typing, not a chord
+                if not self._start_released:
+                    self._start_cancelled = True
+                return
+            self._drop_chord(self._epoch)
+        self._api._cancel_recording()
+
+    def _drop_chord(self, epoch: int) -> None:
+        """Un-press and hide; caller holds _state_lock, then cancels the
+        recording after letting go of it: closing a mic can block, and the
+        pill's main-thread callbacks take the lock."""
+        self._pressed = False
+        if self._widget_enabled():
+            self._widget_action("hide", epoch)
 
     def _spawn_listener(self) -> None:
         target_vk = self._target_vk
