@@ -31,3 +31,23 @@ def test_audio_marker_excludes_every_microphone_and_speech_test():
                    "test_transcribe_works_with_launchd_path"):
         assert needle not in collected, f"{needle} still collected under -m 'not audio'"
     assert "test_infra.py" in collected
+
+
+# ---- L9 / L10 (2026-10-12 audit) ----
+
+def test_readme_states_the_real_download_size_and_test_commands():
+    readme = (ROOT / "README.md").read_text()
+    assert "~141 MB" not in readme, "setup downloads both models, ~630 MB"
+    assert "630 MB" in readme
+    # a bare directory fails on Node 24; the glob works everywhere
+    assert "node --test tests/js/*.test.mjs" in readme
+
+
+def test_readme_says_the_device_key_is_cli_only():
+    line = next(l for l in (ROOT / "README.md").read_text().splitlines()
+                if '"device"' in l)
+    assert "CLI" in line
+
+
+def test_finder_metadata_is_ignored():
+    assert ".DS_Store" in (ROOT / ".gitignore").read_text().split()

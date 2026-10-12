@@ -5,14 +5,14 @@ A local-only macOS clone of [Wispr Flow](https://wisprflow.ai)'s core loop: **ho
 ## What it does
 
 1. **Capture** — records your mic while you hold the hotkey (or between Enter presses in toggle mode)
-2. **Transcribe** — on-device speech-to-text via whisper.cpp (`ggml-base.en`)
+2. **Transcribe** — on-device speech-to-text via whisper.cpp (`ggml-small.en`, falling back to `ggml-base.en`)
 3. **Clean up** — strips filler words (um, uh, hmm…), normalizes spacing/punctuation, capitalizes, and applies your custom dictionary (e.g. `"trademake" → "TradeMate"` for names the ASR mishears)
 4. **Insert** — pastes the result at the cursor of the frontmost app (Cmd-V via System Events), restoring your clipboard afterwards. If a default paste is blocked, your original clipboard is preserved. The desktop app and `--mode hotkey` both write to history; CLI toggle mode does not. Use `paste: false` or `--no-paste` for clipboard-only/manual paste.
 
 ## Setup
 
 ```bash
-bash setup.sh   # installs whisper-cpp (brew), downloads the model (~141 MB), creates venv
+bash setup.sh   # installs whisper-cpp (brew), downloads both models (~630 MB: small.en ~490 MB, base.en ~150 MB), creates venv
 ```
 
 ## Desktop app (dashboard)
@@ -81,7 +81,7 @@ and pastes it in the order recorded.
   "hotkey_vk": 63,             // macOS virtual keycode captured via Settings → Change…
   "hotkey_label": "Fn / Globe",// display label for that key
   "paste": true,               // false = clipboard only
-  "device": ":0",              // avfoundation audio device (ffmpeg -f avfoundation -list_devices true -i "")
+  "device": ":0",              // CLI toggle mode only: avfoundation device for ffmpeg (ffmpeg -f avfoundation -list_devices true -i ""); the app uses the macOS default input
   "model": "small.en",         // whisper model: small.en (accuracy) or base.en (speed)
   "show_widget": true,         // floating recording pill
   "pill_theme": "classic",     // classic | ember | aurora | ocean | neon | breathe | scanner
@@ -127,6 +127,12 @@ Tests synthesize speech with macOS `say`, so the full audio → text pipeline is
 
 ```bash
 ./venv/bin/pytest -q -m "not audio"
+```
+
+The dashboard's JS tests run under Node (use the glob: a bare `tests/js/` directory fails on Node 24):
+
+```bash
+node --test tests/js/*.test.mjs
 ```
 
 Dependencies are pinned in `requirements.txt`; bump them deliberately and re-run the full suite.
