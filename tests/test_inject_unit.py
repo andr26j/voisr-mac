@@ -6,6 +6,7 @@ import voisr.inject as inject
 from voisr.pasteboard import (
     ClipboardPreservationError,
     PasteDeliveryError,
+    PasteboardItemSnapshot,
     PasteboardSnapshot,
 )
 
@@ -322,3 +323,49 @@ def test_keyboard_interrupt_chains_restore_failure_without_replacement():
     assert caught.value is interrupt
     assert str(caught.value.__cause__) == "restore unavailable"
     assert adapter.calls[-1][0] == "restore"
+
+
+# ---- M4 (2026-10-12 audit) ----
+
+CONCEALED = PasteboardSnapshot(4, (PasteboardItemSnapshot((
+    ("public.utf8-plain-text", b"hunter2"),
+    ("org.nspasteboard.ConcealedType", b""),
+)),))
+
+
+def test_snapshot_knows_when_it_holds_a_concealed_secret():
+    assert CONCEALED.concealed is True
+    plain = PasteboardSnapshot(4, (PasteboardItemSnapshot((
+        ("public.utf8-plain-text", b"hello"),)),))
+    assert plain.concealed is False
+    assert PasteboardSnapshot(4, ()).concealed is False
+
+
+def test_a_password_on_the_clipboard_is_not_put_back_after_a_paste():
+    # Cmd-V is async: a busy app can handle it after the restore and paste
+    # whatever is back on the clipboard. Never let that be a password.
+    adapter = FakeAdapter()
+    adapter.snapshot_value = CONCEALED
+    slept = []
+    assert inject._paste_with_adapter(
+        "hello", adapter=adapter, post_cmd_v=lambda: True,
+        applescript_cmd_v=lambda: False, sleeper=slept.append,
+    ) is True
+    assert not any(c[0] == "restore" for c in adapter.calls if isinstance(c, tuple))
+    assert slept == []   # nothing to restore, so nothing to wait for
+
+
+def test_a_password_is_restored_when_the_paste_never_happened():
+    adapter = FakeAdapter()
+    adapter.snapshot_value = CONCEALED
+    with pytest.raises(PasteDeliveryError):
+        inject._paste_with_adapter(
+            "hello", adapter=adapter, post_cmd_v=lambda: False,
+            applescript_cmd_v=lambda: False, sleeper=lambda delay: None,
+        )
+    assert adapter.calls[-1][0] == "restore"
+
+
+def test_the_restore_waits_long_enough_for_a_busy_app():
+    # 300 ms was shorter than an Electron app's stall on a large paste
+    assert inject.PASTE_GRACE_S >= 1.0

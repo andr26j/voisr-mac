@@ -7,10 +7,19 @@ class PasteboardItemSnapshot:
     payloads: tuple[tuple[str, bytes], ...]
 
 
+# Password managers mark secrets with this type (nspasteboard.org convention).
+CONCEALED_TYPE = "org.nspasteboard.ConcealedType"
+
+
 @dataclass(frozen=True)
 class PasteboardSnapshot:
     change_count: int
     items: tuple[PasteboardItemSnapshot, ...]
+
+    @property
+    def concealed(self) -> bool:
+        return any(type_name == CONCEALED_TYPE
+                   for item in self.items for type_name, _ in item.payloads)
 
 
 class PasteDeliveryError(RuntimeError):
