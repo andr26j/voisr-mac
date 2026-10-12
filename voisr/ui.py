@@ -350,8 +350,11 @@ class RecordingWidget:
     so paste-at-cursor is undisturbed.
     """
 
-    WIDTH, HEIGHT = 232, 52
-    BOTTOM_MARGIN = 72
+    # 6 px of headroom above and below the 44 px pill for its entrance rise;
+    # the margin keeps the pill's centre where it has always been
+    WIDTH, HEIGHT = 232, 56
+    BOTTOM_MARGIN = 70
+    EXIT_S = 0.18  # the pill's 160 ms exit (widget.html), plus a frame
 
     # AppKit constants (stable ABI values)
     _STYLE_NONACTIVATING = 1 << 7
@@ -369,6 +372,7 @@ class RecordingWidget:
         # () -> float | None; polled only while the pill shows "recording"
         self._level_source = level_source
         self._feed_gen = 0  # main thread only; bumping it ends the running feed
+        self._vis_gen = 0   # main thread only; a show cancels a pending panel fade
 
     def create(self) -> None:
         """Build the panel + webview on the main thread and preload the HTML.
@@ -438,8 +442,9 @@ class RecordingWidget:
                     if self._webview is None:
                         return
                     # first, so a PyObjC call failing below still ends the
-                    # previous state's level feed
+                    # previous state's level feed (and any pending fade)
                     self._feed_gen += 1
+                    self._vis_gen += 1
                     if theme is not None:
                         # sanitize_* whitelist both values — config.json content
                         # can never be interpolated into JS verbatim
@@ -448,7 +453,7 @@ class RecordingWidget:
                         safe = sanitize_pill_color(color)
                         self._webview.evaluateJavaScript_completionHandler_(
                             f'setColor("{safe}")' if safe else "setColor(null)", None)
-                    self._panel.setAlphaValue_(1.0)   # fade in (window stays resident)
+                    self._panel.setAlphaValue_(1.0)   # window stays resident; the pill animates in
                     self._webview.evaluateJavaScript_completionHandler_(
                         f'setState("{state}")', None)
                     self._panel.orderFrontRegardless()
@@ -465,6 +470,15 @@ class RecordingWidget:
             AppHelper.callAfter(go)
         except Exception:
             pass  # never break the record path
+
+    def _fade_panel(self, gen: int) -> None:
+        """Main thread. Fade out but stay resident on all Spaces — do NOT
+        orderOut. orderOut drops the window's Space membership, and the next
+        orderFront intermittently fails to rejoin a fullscreen Space
+        (onActiveSpace=False → the pill never appears)."""
+        if gen != self._vis_gen or self._panel is None:
+            return
+        self._panel.setAlphaValue_(0.0)
 
     @staticmethod
     def level_js(level) -> str | None:
@@ -540,12 +554,15 @@ class RecordingWidget:
             def go():
                 def apply():
                     self._feed_gen += 1  # first: ends the level feed even if the fade fails
-                    if self._panel is not None:
-                        # Fade out but stay resident on all Spaces — do NOT orderOut.
-                        # orderOut drops the window's Space membership, and the next
-                        # orderFront intermittently fails to rejoin a fullscreen Space
-                        # (onActiveSpace=False → the pill never appears).
-                        self._panel.setAlphaValue_(0.0)
+                    self._vis_gen += 1
+                    # The pill animates out first; the panel fades only once
+                    # that exit is over, and not at all if a new dictation
+                    # has shown the pill again in the meantime. Scheduled
+                    # before the JS call so a dead webview still fades.
+                    AppHelper.callLater(self.EXIT_S, self._fade_panel, self._vis_gen)
+                    if self._webview is not None:
+                        self._webview.evaluateJavaScript_completionHandler_(
+                            "window.hide && hide()", None)
 
                 if if_current is not None:
                     if_current(apply)

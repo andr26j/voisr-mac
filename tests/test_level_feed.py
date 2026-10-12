@@ -359,3 +359,63 @@ def test_api_current_level_tracks_the_capture(tmp_path):
 def test_current_level_is_not_exposed_to_the_page():
     from voisr.ui import BRIDGE_METHODS
     assert "current_level" not in BRIDGE_METHODS
+
+
+# ---------- exit: the pill animates out before the panel fades ----------
+
+class AlphaPanel(FakePanel):
+    def __init__(self):
+        self.alpha = None
+
+    def setAlphaValue_(self, a):
+        self.alpha = a
+
+
+def make_alpha_widget():
+    from voisr.ui import RecordingWidget
+    widget = RecordingWidget(level_source=lambda: 0.5)
+    widget._panel = AlphaPanel()
+    widget._webview = FakeWebview()
+    return widget
+
+
+def fire_exit(later):
+    from voisr.ui import RecordingWidget
+    due = [item for item in later if item[0] == RecordingWidget.EXIT_S]
+    for item in due:
+        later.remove(item)
+        item[1](*item[2])
+    return due
+
+
+def test_hide_plays_the_exit_then_fades_the_panel(main_thread):
+    widget = make_alpha_widget()
+    widget.show_done()
+    widget.hide()
+    assert widget._webview.js[-1] == "window.hide && hide()"
+    assert widget._panel.alpha == 1.0  # still visible while the pill animates out
+    assert fire_exit(main_thread)
+    assert widget._panel.alpha == 0.0
+
+
+def test_a_show_during_the_exit_keeps_the_panel_visible(main_thread):
+    widget = make_alpha_widget()
+    widget.show_done()
+    widget.hide()
+    widget.show_recording()  # next dictation starts inside the 180 ms exit
+    fire_exit(main_thread)
+    assert widget._panel.alpha == 1.0
+
+
+def test_exit_outlasts_the_pill_animation():
+    from voisr.ui import RecordingWidget, WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    assert "160ms var(--ease-in)" in html  # the exit the panel waits for
+    assert RecordingWidget.EXIT_S > 0.16
+
+
+def test_panel_leaves_room_for_the_entrance_rise():
+    """The pill (44 px) rises 6 px into place: the panel needs 2 x 6 px of
+    headroom or the first frames are clipped."""
+    from voisr.ui import RecordingWidget
+    assert RecordingWidget.HEIGHT - 44 >= 12
