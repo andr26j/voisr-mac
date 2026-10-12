@@ -1339,3 +1339,52 @@ def test_undecodable_line_is_skipped_and_history_stays_usable(tmp_path):
     h.add("after", 1.0)
     assert [i["text"] for i in h.list()] == ["after", "good"]
     assert h.stats()["dictations"] == 2
+
+
+# ---- M9 (2026-10-12 audit) ----
+
+def _shift_days(store, *days_ago):
+    """Move the stored records back by the given whole days, in order."""
+    def shift(items):
+        for item, n in zip(items, days_ago):
+            item["ts"] = time.time() - n * 86400
+    store._mutate(shift)
+
+
+def test_a_streak_survives_until_the_day_ends(tmp_path):
+    # Dictated yesterday and the day before, not yet today: the streak is
+    # still alive this morning, not zero above a row of lit dots.
+    store = HistoryStore(tmp_path / "h.jsonl")
+    store.add("one", duration_s=1.0)
+    store.add("two", duration_s=1.0)
+    _shift_days(store, 1, 2)
+    assert store.stats()["streak_days"] == 2
+
+
+def test_a_streak_with_a_gap_before_yesterday_is_broken(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    store.add("one", duration_s=1.0)
+    _shift_days(store, 2)
+    assert store.stats()["streak_days"] == 0
+
+
+def test_dictating_today_extends_the_streak(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    store.add("one", duration_s=1.0)
+    store.add("two", duration_s=1.0)
+    store.add("three", duration_s=1.0)
+    _shift_days(store, 0, 1, 2)
+    assert store.stats()["streak_days"] == 3
+
+
+def test_daily_carries_time_saved_per_day(tmp_path):
+    # Time saved has its own trend: 40 wpm typing minus speaking time, per
+    # day, never below zero. It must not be the word series relabelled.
+    store = HistoryStore(tmp_path / "h.jsonl")
+    store.add(" ".join(["w"] * 40), duration_s=20.0)   # 60 s typed - 20 s = 40
+    store.add("slow", duration_s=30.0)                 # 1.5 s typed - 30 s -> 0
+    _shift_days(store, 0, 1)
+    daily = store.stats()["daily"]
+    assert daily[-1]["saved_seconds"] == 40
+    assert daily[-2]["saved_seconds"] == 0
+    assert all("saved_seconds" in d for d in daily)

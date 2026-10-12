@@ -78,6 +78,13 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 .nav-item.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
 
+/* the dock's mic is open (set by views/home.js); visible from every view */
+.nav-item[data-recording="true"]::after {
+  content: ""; margin-left: auto;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent);
+}
+
 .sidebar-foot {
   margin-top: auto;
   display: flex;

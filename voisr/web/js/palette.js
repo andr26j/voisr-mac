@@ -109,7 +109,7 @@ window.Voisr = window.Voisr || {};
     });
 
     register({ id: "dictate", title: "Start dictation", hint: "record",
-               run: () => V.views.home.toggleRecord() });
+               run: () => V.views.home.dictateFromAnywhere() });
     /* Drives the History search box through a real input event rather than
        calling into that view directly — so this command works both before
        and after Task 16 adds the search field. */

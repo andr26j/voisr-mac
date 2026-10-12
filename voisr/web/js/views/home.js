@@ -132,6 +132,7 @@ window.Voisr = window.Voisr || {};
     // renderPermissions; this catch only covers a genuine throw, which
     // would otherwise surface as an unhandled rejection nobody sees.
     renderPermissions().catch(() => V.ui.toast("Permissions failed to refresh"));
+    renderListener().catch(() => {});
   });
 
   async function onCopy(item) {
@@ -169,31 +170,48 @@ window.Voisr = window.Voisr || {};
     V.ui.$("#ptt-key-name").textContent = display;
   }
 
+  /* The dot beside the push-to-talk line reports the listener as it is,
+     from get_hotkey_status().state. It used to be static HTML that pulsed
+     green through a stopped listener and a dock recording alike. */
+  const LISTENER_LABELS = {
+    listening: "Listening for the key",
+    busy: "Paused while you record here",
+    off: "Not listening — see Settings",
+    unknown: "Listener status unknown",
+  };
+
+  async function renderListener() {
+    const res = await V.ui.tryApi(V.api().get_hotkey_status(), "Load shortcut status");
+    const state = res && LISTENER_LABELS[res.state] ? res.state : "unknown";
+    V.ui.$("#ptt-state").dataset.state = state;
+    V.ui.$("#ptt-state-label").textContent = LISTENER_LABELS[state];
+  }
+
   /* Each tile owns its own 14-day trend, so a chart always belongs to the
      number above it rather than floating between two unrelated ones.
      Returns bar heights as 0..1 fractions of the series maximum; an all-zero
      series stays flat on the floor rather than dividing by zero. */
-  function trendBars(daily) {
+  function trendBars(daily, key = "words") {
     if (!daily || !daily.length) return [];
-    const max = Math.max(...daily.map((d) => d.words || 0), 0);
-    return daily.map((d) => (max === 0 ? 0 : (d.words || 0) / max));
+    const max = Math.max(...daily.map((d) => d[key] || 0), 0);
+    return daily.map((d) => (max === 0 ? 0 : (d[key] || 0) / max));
   }
 
   /* Week-over-week change across the same 14 days the bars draw. Answers
      null rather than a fake 0% when there is no prior week to compare
      against (a fresh install, or a week with nothing in it). */
-  function weekDelta(daily) {
+  function weekDelta(daily, key = "words") {
     if (!daily || daily.length < 14) return null;
-    const sum = (xs) => xs.reduce((t, d) => t + (d.words || 0), 0);
+    const sum = (xs) => xs.reduce((t, d) => t + (d[key] || 0), 0);
     const prev = sum(daily.slice(-14, -7));
     const curr = sum(daily.slice(-7));
     if (prev === 0) return null;
     return Math.round(((curr - prev) / prev) * 100);
   }
 
-  function renderTrend(sel, daily) {
+  function renderTrend(sel, daily, key) {
     const node = V.ui.$(sel);
-    const bars = trendBars(daily);
+    const bars = trendBars(daily, key);
     const last = bars.length - 1;
     node.replaceChildren(...bars.map((h, i) => {
       const bar = V.ui.el("span", {
@@ -236,6 +254,7 @@ window.Voisr = window.Voisr || {};
         V.ui.tryApi(V.api().get_history(), "Load history"),
         renderPermissions(),
         renderPtt(),
+        renderListener(),
       ]);
 
       if (stats) {
@@ -243,11 +262,11 @@ window.Voisr = window.Voisr || {};
         $("#stat-words").textContent = (stats.total_words || 0).toLocaleString();
         $("#stat-streak").textContent = (stats.streak_days || 0).toLocaleString();
 
-        const pct = weekDelta(stats.daily);
-        renderDelta("#delta-saved", pct);
-        renderDelta("#delta-words", pct);
-        renderTrend("#trend-saved", stats.daily);
-        renderTrend("#trend-words", stats.daily);
+        // each tile compares and draws its own series
+        renderDelta("#delta-saved", weekDelta(stats.daily, "saved_seconds"));
+        renderDelta("#delta-words", weekDelta(stats.daily, "words"));
+        renderTrend("#trend-saved", stats.daily, "saved_seconds");
+        renderTrend("#trend-words", stats.daily, "words");
         renderStreakDots("#trend-streak", stats.daily);
       }
 
@@ -270,7 +289,9 @@ window.Voisr = window.Voisr || {};
      whole state machine — elapsed time while listening, then transcribing,
      then a done state — so nothing else on Home has to move. */
 
-  let recState = "idle"; // idle | recording | processing
+  // "starting" covers the await on start_recording: a second click in that
+  // window used to start a second recording and strand "Couldn't start."
+  let recState = "idle"; // idle | starting | recording | processing
   let tickTimer = null;
   let doneTimer = null;
   let elapsed = 0;
@@ -292,6 +313,11 @@ window.Voisr = window.Voisr || {};
     if (state) dock.dataset.state = state;
     else delete dock.dataset.state;
     V.ui.$("#record-status").textContent = hint;
+    // The dock lives on Home, but the mic stays open on every view and
+    // push-to-talk is dropped meanwhile, so the Home nav item carries it.
+    const nav = V.ui.$("#nav-home");
+    if (state === "recording" || state === "processing") nav.dataset.recording = "true";
+    else delete nav.dataset.recording;
   }
 
   async function toggleRecord() {
@@ -299,16 +325,17 @@ window.Voisr = window.Voisr || {};
     const btn = $("#record-btn");
     const errEl = $("#record-error");
 
-    if (recState === "processing") return;
+    if (recState === "processing" || recState === "starting") return;
 
     if (recState === "idle") {
       errEl.textContent = "";
       clearTimeout(doneTimer);
+      recState = "starting";
       const res = await V.ui.tryApi(V.api().start_recording(), "Start recording");
       // tryApi owns the detail (and the throw path, which used to be able to
       // strand recState). #record-error keeps its job as the persistent
       // marker beside the button, since a 3.5s toast is easy to miss.
-      if (!res) { errEl.textContent = "Couldn't start."; return; }
+      if (!res) { recState = "idle"; errEl.textContent = "Couldn't start."; return; }
       recState = "recording";
       elapsed = 0;
       showElapsed();
@@ -316,6 +343,7 @@ window.Voisr = window.Voisr || {};
       btn.setAttribute("aria-label", "Stop recording");
       stopTick();
       tickTimer = setInterval(() => { elapsed += 1; showElapsed(); }, 1000);
+      renderListener().catch(() => {});
       return;
     }
 
@@ -329,6 +357,7 @@ window.Voisr = window.Voisr || {};
     const res = await V.ui.tryApi(V.api().stop_recording(), "Transcribe");
     btn.setAttribute("aria-label", "Start recording");
     recState = "idle";
+    renderListener().catch(() => {});
 
     if (!res) {
       setDockState(null, "Click to record here instead");
@@ -348,6 +377,15 @@ window.Voisr = window.Voisr || {};
     render();
   }
 
+  /* The palette's "Start dictation" runs from any view; switching to Home
+     first puts the dock — the only thing showing the mic is open — on
+     screen. */
+  async function dictateFromAnywhere() {
+    V.show("home");
+    await toggleRecord();
+  }
+
   V.views = V.views || {};
-  V.views.home = { render, toggleRecord, renderPermissions, trendBars, weekDelta };
+  V.views.home = { render, toggleRecord, dictateFromAnywhere, renderPermissions,
+                   renderListener, trendBars, weekDelta };
 })(window.Voisr);

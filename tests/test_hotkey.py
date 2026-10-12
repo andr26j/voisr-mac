@@ -16,6 +16,8 @@ class FakeHotkeyService:
     def __init__(self):
         self.restarted_with = None
         self.status = "active on alt_r"
+        self.running = True
+        self.holding = False
 
     def restart(self, key_name):
         self.restarted_with = key_name
@@ -120,3 +122,59 @@ def test_set_config_hotkey_name_clears_a_captured_vk(tmp_path):
     assert "hotkey_vk" not in cfg
     assert "hotkey_label" not in cfg
     assert svc.restarted_with == "f13"
+
+
+# ---- M6 (2026-10-12 audit): the Home dot reports the listener's real state ----
+
+class StateService:
+    def __init__(self, status="active on Right Option (⌥)", running=True, holding=False):
+        self.status, self.running, self.holding = status, running, holding
+
+
+def test_hotkey_state_listening_when_active(tmp_path):
+    api = make_api(tmp_path, StateService())
+    assert api.get_hotkey_status()["state"] == "listening"
+
+
+def test_hotkey_state_off_without_a_service_or_permission(tmp_path):
+    assert make_api(tmp_path)._hotkey_service is None
+    assert make_api(tmp_path).get_hotkey_status()["state"] == "off"
+    waiting = make_api(tmp_path, StateService(status="waiting for permission — open"))
+    assert waiting.get_hotkey_status()["state"] == "off"
+
+
+def test_hotkey_state_off_while_the_listener_is_stopped(tmp_path):
+    # capture_hotkey stops the listener for up to 8 s; status still reads
+    # "active on ..." then, so it can't be trusted alone
+    api = make_api(tmp_path, StateService(running=False))
+    assert api.get_hotkey_status()["state"] == "off"
+
+
+def test_hotkey_state_busy_while_the_dock_is_recording(tmp_path):
+    # press() drops every key press while another recording owns the mic
+    api = make_api(tmp_path, StateService())
+    api.start_recording()
+    assert api.get_hotkey_status()["state"] == "busy"
+    api.stop_recording()
+    assert api.get_hotkey_status()["state"] == "listening"
+
+
+def test_hotkey_state_listening_while_the_key_itself_records(tmp_path):
+    api = make_api(tmp_path, StateService(holding=True))
+    api.start_recording()
+    assert api.get_hotkey_status()["state"] == "listening"
+    api.stop_recording()
+
+
+def test_hotkey_service_reports_running_and_holding(tmp_path):
+    from voisr.ui import HotkeyService
+    svc = HotkeyService(make_api(tmp_path), listener_factory=lambda h: None,
+                        permissions_check=lambda: True)
+    assert svc.running is False and svc.holding is False
+    svc.start("alt_r")
+    assert svc.running is True
+    svc.press()
+    assert svc.holding is True
+    svc.release()
+    svc.stop()
+    assert svc.running is False

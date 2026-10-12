@@ -20,9 +20,12 @@ import { makeNode } from "./dom.mjs";
    real fake nodes, with nothing patched per-test. */
 
 const HOME_IDS = ["greeting", "perm-strip", "ptt-bar", "ptt-keycap", "ptt-key-name",
+                  "ptt-state", "ptt-state-label",
                   "stat-saved", "stat-words", "stat-streak", "delta-saved", "delta-words",
                   "trend-saved", "trend-words", "trend-streak", "recent-list",
-                  "recent-empty", "toast", "view-home"];
+                  "recent-empty", "toast", "view-home",
+                  "dock", "record-btn", "record-status", "record-error", "dock-time",
+                  "nav-home"];
 
 const HISTORY = Array.from({ length: 7 }, (_, i) => ({
   id: `h${i}`, ts: 1_750_000_000 + i * 60, text: `dictation ${i}`, words: 10 + i, duration_s: 4,
@@ -35,9 +38,13 @@ const OK_API = {
     { key: "accessibility", label: "Accessibility", granted: true },
   ]}),
   hotkey_display: async () => ({ display: "Right Option (⌥)" }),
+  get_hotkey_status: async () => ({ status: "active on Right Option (⌥)", state: "listening" }),
+  // saved_seconds runs 1.5x the words (40 wpm, no speaking time), so the
+  // saved tile's own trend has the same shape the words fixture always had
   get_stats: async () => ({
     total_words: 12480, streak_days: 6, time_saved_seconds: 13320,
-    daily: Array.from({ length: 14 }, (_, i) => ({ date: `d${i}`, words: i * 10 })),
+    daily: Array.from({ length: 14 }, (_, i) => ({
+      date: `d${i}`, words: i * 10, saved_seconds: i * 15 })),
   }),
   get_history: async () => HISTORY,
 };
@@ -257,4 +264,124 @@ test("home renderPermissions() still blocks on a mic the user switched off", asy
 
   assert.equal(h["perm-strip"].children[0].className, "perm-block");
   assert.equal(h["ptt-bar"].hidden, true);
+});
+
+
+/* ---------- M6-M9 (2026-10-12 audit): Home tells the truth ---------- */
+
+for (const [state, label] of [
+  ["listening", /Listening for the key/],
+  ["busy", /Paused while you record here/],
+  ["off", /Not listening/],
+]) {
+  test(`home render() shows the listener as ${state}, from get_hotkey_status`, async () => {
+    const h = mountHome({ get_hotkey_status: async () => ({ status: "x", state }) });
+    await h.V.views.home.render();
+    assert.equal(h["ptt-state"].dataset.state, state);
+    assert.match(h["ptt-state-label"].textContent, label);
+  });
+}
+
+test("home render() does not claim it is listening when the status call fails", async () => {
+  const h = mountHome({ get_hotkey_status: async () => ({ error: "bridge gone" }) });
+  await h.V.views.home.render();
+  assert.equal(h["ptt-state"].dataset.state, "unknown");
+  assert.doesNotMatch(h["ptt-state-label"].textContent, /Listening/);
+});
+
+function recordingApi(extra = {}) {
+  let recording = false;
+  const calls = { start: 0, stop: 0 };
+  const api = {
+    get_hotkey_status: async () => ({ status: "x", state: recording ? "busy" : "listening" }),
+    start_recording: async () => { calls.start += 1; recording = true; return { recording: true }; },
+    stop_recording: async () => { calls.stop += 1; recording = false; return { text: "Hi" }; },
+    ...extra,
+  };
+  return { api, calls };
+}
+
+/* The dock's one-second tick is a real setInterval: a test that ends with
+   the dock recording keeps Node alive, so every recording test stops it. */
+async function stopDock(h) {
+  if (h.dock.dataset.state === "recording") await h.V.views.home.toggleRecord();
+}
+
+test("a dock recording marks the Home nav item and pauses the listener dot until it stops", async () => {
+  const { api } = recordingApi();
+  const h = mountHome(api);
+  await h.V.views.home.toggleRecord();
+  await settle();
+  try {
+    assert.equal(h["nav-home"].dataset.recording, "true",
+      "visible from every view, since push-to-talk is dropped meanwhile");
+    assert.equal(h["ptt-state"].dataset.state, "busy");
+  } catch (e) {
+    await stopDock(h);
+    throw e;
+  }
+
+  await h.V.views.home.toggleRecord();
+  await settle();
+  assert.equal(h["nav-home"].dataset.recording, undefined);
+  assert.equal(h["ptt-state"].dataset.state, "listening");
+});
+
+test("a double-click on the dock mic starts one recording and shows no error", async () => {
+  const pending = [];
+  const { api, calls } = recordingApi();
+  const slowStart = api.start_recording;
+  api.start_recording = () => new Promise((r) => { pending.push(() => r(slowStart())); });
+  const h = mountHome(api);
+
+  const first = h.V.views.home.toggleRecord();
+  const second = h.V.views.home.toggleRecord();   // lands while the first is in flight
+  pending.forEach((go) => go());
+  await Promise.all([first, second]);
+
+  try {
+    assert.equal(calls.start, 1);
+    assert.equal(calls.stop, 0, "the second click must not stop what the first started");
+    assert.equal(h["record-error"].textContent, "");
+    assert.equal(h.dock.dataset.state, "recording");
+  } finally {
+    await stopDock(h);
+  }
+});
+
+test("a failed start returns the dock to idle so the next click can try again", async () => {
+  const { api, calls } = recordingApi();
+  api.start_recording = async () => { calls.start += 1; return { error: "already recording" }; };
+  const h = mountHome(api);
+  await h.V.views.home.toggleRecord();
+  assert.equal(h["record-error"].textContent, "Couldn't start.");
+  await h.V.views.home.toggleRecord();
+  assert.equal(calls.start, 2);
+});
+
+test("dictateFromAnywhere switches to Home before recording, so the dock is in view", async () => {
+  const { api, calls } = recordingApi();
+  const h = mountHome(api);
+  const shown = [];
+  h.V.show = (view) => { shown.push(view); };
+  try {
+    await h.V.views.home.dictateFromAnywhere();
+    assert.deepEqual(shown, ["home"]);
+    assert.equal(calls.start, 1);
+  } finally {
+    await stopDock(h);
+  }
+});
+
+test("the Time saved tile draws and compares its own series, not the word counts", async () => {
+  // words climb while time saved falls (slower speech): each tile must say so
+  const daily = Array.from({ length: 14 }, (_, i) => ({
+    date: `d${i}`, words: 10 + i * 10, saved_seconds: 300 - i * 20 }));
+  const h = mountHome({ get_stats: async () => ({
+    total_words: 1000, streak_days: 1, time_saved_seconds: 600, daily }) });
+  await h.V.views.home.render();
+  assert.equal(h["delta-words"].dataset.dir, "up");
+  assert.equal(h["delta-saved"].dataset.dir, "down");
+  assert.equal(h["trend-saved"].children[0].style.getPropertyValue("--h"), "1.000",
+    "the first day saved the most time, so it is the tallest bar");
 });
