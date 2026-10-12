@@ -69,3 +69,50 @@ def test_a_stale_click_does_not_turn_a_dock_quit_into_a_hide():
     # took may be a click in the dashboard from minutes ago
     old_click = FakeEvent(LEFT_MOUSE_UP, DASHBOARD, timestamp=NOW - 120)
     assert not close_hides_window(old_click, DASHBOARD, NOW)
+
+
+# --- Dock click reopens the hidden dashboard --------------------------------
+# Since the red button only hides, the Dock icon is the obvious way back. AppKit
+# asks the app delegate applicationShouldHandleReopen:hasVisibleWindows:, and
+# pywebview's delegate doesn't implement it, so a Dock click did nothing.
+
+import pytest
+
+from voisr.ui import install_dock_reopen
+
+
+def _delegate_class(name):
+    """A fresh class standing in for pywebview's AppDelegate. ObjC class
+    names are process-global, so each test needs its own."""
+    pytest.importorskip("objc")
+    AppKit = pytest.importorskip("AppKit")
+    return type(name, (AppKit.NSObject,), {})
+
+
+@pytest.mark.parametrize("visible", [False, True])
+def test_a_dock_click_shows_the_dashboard(visible):
+    # hasVisibleWindows is True while the recording pill is up, even with the
+    # dashboard hidden, so the flag can't decide whether to show
+    cls = _delegate_class(f"VoisrReopenTest{int(visible)}")
+    shown = []
+    assert install_dock_reopen(lambda: shown.append(1), cls)
+    delegate = cls.alloc().init()
+    assert delegate.applicationShouldHandleReopen_hasVisibleWindows_(None, visible)
+    assert shown == [1]
+
+
+def test_a_failing_show_never_breaks_the_dock_click():
+    cls = _delegate_class("VoisrReopenTestBroken")
+
+    def broken():
+        raise RuntimeError("window gone")
+
+    assert install_dock_reopen(broken, cls)
+    assert cls.alloc().init().applicationShouldHandleReopen_hasVisibleWindows_(None, False)
+
+
+def test_without_pywebviews_delegate_it_reports_unavailable(monkeypatch):
+    # startup must carry on with menu-bar Open as the way back
+    import sys
+    monkeypatch.setitem(sys.modules, "webview.platforms.cocoa", None)
+    assert install_dock_reopen(lambda: None) is False
