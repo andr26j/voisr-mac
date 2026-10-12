@@ -2,6 +2,7 @@
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -129,3 +130,51 @@ def test_a_key_press_that_cannot_start_flashes_an_error_once(tmp_path):
         time.sleep(0.02)
     assert widget.calls == ["error", "hide", "error", "hide"]
     api.stop_recording()
+
+
+# ---- L6: Markdown export crashed on a record whose ts is out of range ----
+
+def test_markdown_export_survives_an_unrepresentable_timestamp(tmp_path):
+    history = HistoryStore(tmp_path / "h.jsonl")
+    history.add("from the future", duration_s=1.0)
+    history.add("normal", duration_s=1.0)
+
+    def millis(items):
+        items[0]["ts"] = 1.75e15   # e.g. a tool that wrote milliseconds
+
+    history._mutate(millis)
+    api = Api(config_path=tmp_path / "config.json", history=history,
+              transcribe_fn=lambda w: "", clock=lambda: 1.0,
+              clipboard_fn=lambda t: None)
+    md = api.export_history("md")["text"]
+    assert "from the future" in md and "normal" in md
+    assert "unknown time" in md
+
+
+# ---- L7: setup.sh kept a half-downloaded model; --mode file left a WAV ----
+
+def test_setup_downloads_models_atomically():
+    src = (Path(__file__).resolve().parent.parent / "setup.sh").read_text()
+    for model in ("ggml-base.en.bin", "ggml-small.en.bin"):
+        assert f"-o models/{model} " not in src, \
+            f"{model}: curl straight to the final name keeps a partial file forever"
+    assert ".part" in src and "mv " in src
+
+
+def test_cli_file_mode_removes_its_converted_wav(tmp_path, monkeypatch, capsys):
+    import sys
+    from voisr import app, audio
+    memo = tmp_path / "memo.m4a"
+    memo.write_bytes(b"x")
+
+    def fake_convert(src, dst):
+        Path(dst).write_bytes(b"wav")
+        return Path(dst)
+
+    monkeypatch.setattr(audio, "to_wav16k", fake_convert)
+    monkeypatch.setattr(app, "process_audio", lambda wav, d: "transcribed")
+    monkeypatch.setattr(sys, "argv", ["voisr", "--mode", "file", "--file", str(memo),
+                                      "--config", str(tmp_path / "config.json")])
+    app.main()
+    assert "transcribed" in capsys.readouterr().out
+    assert not (tmp_path / "memo.m4a.16k.wav").exists()

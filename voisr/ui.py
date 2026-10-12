@@ -1412,9 +1412,14 @@ class Api:
         if fmt == "json":
             text = json.dumps(items, indent=2)
         elif fmt == "md":
-            text = "\n".join(
-                f"- **{datetime.datetime.fromtimestamp(i['ts']):%Y-%m-%d %H:%M}** "
-                f"— {i['text']}" for i in items)
+            def when(ts):
+                # history keeps records whose ts can't be a date (e.g.
+                # milliseconds); one of those must not sink the export
+                try:
+                    return f"{datetime.datetime.fromtimestamp(ts):%Y-%m-%d %H:%M}"
+                except (OverflowError, OSError, ValueError):
+                    return "unknown time"
+            text = "\n".join(f"- **{when(i['ts'])}** — {i['text']}" for i in items)
         elif fmt == "txt":
             text = "\n".join(i["text"] for i in items)
         else:
