@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from voisr import launch_agent, permissions
-from voisr.app import load_config
+from voisr.app import config_errors, load_config
 from voisr.cleanup import clean
 from voisr.history import HistoryStore
 from voisr.inject import paste_at_cursor, set_clipboard
@@ -167,6 +167,21 @@ def wav_peak(path) -> int:
         return max(abs(s) for s in samples) if samples else 0
     except Exception:
         return -1
+
+
+def wav_seconds(path) -> float:
+    """Length of a WAV in seconds, -1 if unparseable (skip the check)."""
+    import wave
+    try:
+        with wave.open(str(path), "rb") as w:
+            return w.getnframes() / w.getframerate()
+    except Exception:
+        return -1.0
+
+
+# Shorter than any spoken word: a tap, or a hotkey used as a modifier. The
+# WAV is measured, not the key hold, because the hold includes mic start-up.
+MIN_SPEECH_S = 0.3
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -533,6 +548,7 @@ class HotkeyService:
         self._wake = threading.Event()  # set by stop() to end a sleeping poll
         self._stopped = False
         self._pressed = False
+        self._latched = False  # pressed by a toggle key, not held
         self._key_name = None
         self._target_vk = None
         self._state_lock = threading.RLock()
@@ -600,7 +616,7 @@ class HotkeyService:
         else:
             method(*args, **kwargs)
 
-    def press(self) -> None:
+    def press(self, latched=False) -> None:
         with self._state_lock:
             if self._pressed:
                 return
@@ -608,6 +624,7 @@ class HotkeyService:
             if "error" in result:
                 return  # e.g. a dashboard recording is already running
             self._pressed = True
+            self._latched = latched
             self._epoch += 1
             epoch = self._epoch
             cfg = self._api.get_config()
@@ -696,7 +713,19 @@ class HotkeyService:
         if self._pressed:
             self.release()
         else:
-            self.press()
+            self.press(latched=True)
+
+    def cancel_chord(self) -> None:
+        """Another key went down while the hotkey was held: it's a shortcut
+        (⌥e for é with Right Option), not a dictation. A latched toggle key
+        isn't held, so typing during it is left alone."""
+        with self._state_lock:
+            if not self._pressed or self._latched:
+                return
+            self._pressed = False
+            self._api._cancel_recording()
+            if self._widget_enabled():
+                self._widget_action("hide", self._epoch)
 
     def _spawn_listener(self) -> None:
         target_vk = self._target_vk
@@ -709,6 +738,7 @@ class HotkeyService:
                         # user is typing manually -> don't smart-join the
                         # next dictation onto the previous one
                         self._api.note_user_typing()
+                        self._submit(self.cancel_chord)
                     return
                 # Everything below is queued, never run here (see _submit).
                 if kind == "down":       # auto-repeats; press() guards
@@ -835,6 +865,7 @@ class Api:
         # (set_config from pywebview workers, capture_hotkey, launch-at-login).
         self._config_lock = threading.RLock()
         self._config_cache = None  # (stat key, parsed config) or None
+        self._config_notice = None  # set when a corrupt config was moved aside
         self._recordings = RecordingQueue(
             recorder_factory=recorder_factory,
             fallback_recorder_factory=fallback_recorder_factory,
@@ -960,6 +991,12 @@ class Api:
         wav = session.wav_path
         cfg = session.context
         duration = max((session.released_at - session.started_at), 0.1)
+        # Some audio but too little is a tap, not a mic fault. No audio at
+        # all still falls through to the permission message below.
+        if 0 < wav_seconds(wav) < MIN_SPEECH_S:
+            return SessionResult.failure(
+                session.sequence, "audio",
+                "too short — hold the key while you speak")
         if not wav.exists() or wav.stat().st_size < 1000:
             detail = session.capture_stderr.strip()[:120]
             return SessionResult.failure(
@@ -1114,6 +1151,17 @@ class Api:
     def stop_recording(self, paste=False):
         return self._release_recording(paste).result().to_api_dict()
 
+    def _cancel_recording(self) -> bool:
+        """Close the mic and drop the capture. Private so the JS bridge
+        can't reach it; only the hotkey path cancels."""
+        with self._busy_lock:
+            sequence, self._active_sequence = self._active_sequence, None
+            self._is_recording = False
+            cancelled = self._recordings.cancel()
+        if sequence is not None:
+            self._mark_session(sequence, False)
+        return cancelled
+
     def close(self):
         self._recordings.close()
         if getattr(self, "_status_item", None) is not None:
@@ -1148,7 +1196,8 @@ class Api:
             if cached is not None and cached[0] == key:
                 cfg = copy.deepcopy(cached[1])
             else:
-                cfg = load_config(self._config_path)
+                cfg = load_config(self._config_path,
+                                  on_corrupt=self._note_corrupt_config)
                 self._config_cache = (key, copy.deepcopy(cfg))
         cfg["launch_at_login"] = launch_agent.is_enabled(path=launch_agent.PLIST_PATH)
         return cfg
@@ -1190,7 +1239,22 @@ class Api:
             self._write_config_atomic(cfg)
             return cfg
 
+    def _note_corrupt_config(self, saved):
+        self._config_notice = (
+            f"Your settings file couldn't be read, so Voisr started on "
+            f"defaults. The old file is kept as {saved.name}.")
+
+    def take_config_notice(self):
+        """One-shot: the dashboard toasts this once at boot."""
+        notice, self._config_notice = self._config_notice, None
+        return {"notice": notice} if notice else {}
+
     def set_config(self, updates):
+        # The bridge is the only way in from the dashboard: a wrong type here
+        # would be saved and then break every dictation that reads it.
+        errors = config_errors(updates)
+        if errors:
+            return {"error": "; ".join(errors)}
         with self._config_lock:
             old_hotkey = self.get_config().get("hotkey")
             cfg = self._update_config(updates)
@@ -1335,6 +1399,52 @@ class Api:
         return {"ok": True}
 
 
+_NS_LEFT_MOUSE_DOWN, _NS_LEFT_MOUSE_UP, _NS_KEY_DOWN = 1, 2, 10
+_NS_COMMAND_FLAG = 1 << 20
+_CLOSE_EVENT_FRESH_S = 1.0
+
+
+def close_hides_window(event, ns_window, now) -> bool:
+    """Should this close only hide the dashboard?
+
+    pywebview fires the same `closing` event for the red button and for
+    applicationShouldTerminate_ (app-menu Quit, Dock Quit, logout), so the
+    event that triggered it is the only way to tell them apart. A click in
+    this window or ⌘W hides; anything else, including no event at all, is a
+    quit and must be allowed — refusing it would block logout.
+
+    currentEvent is the last event the app *took*, so a quit arriving as an
+    Apple Event can still see an old click. `now` (system uptime, the clock
+    NSEvent timestamps use) rules out anything that isn't this moment's."""
+    try:
+        if event is None or now - event.timestamp() > _CLOSE_EVENT_FRESH_S:
+            return False
+        kind = event.type()
+        if kind in (_NS_LEFT_MOUSE_DOWN, _NS_LEFT_MOUSE_UP):
+            # == is isEqual: on an NSWindow; the proxies needn't be identical
+            return ns_window is not None and event.window() == ns_window
+        if kind == _NS_KEY_DOWN:
+            return (event.charactersIgnoringModifiers() == "w"
+                    and bool(event.modifierFlags() & _NS_COMMAND_FLAG))
+    except Exception:
+        pass
+    return False
+
+
+def start_hotkey_service(service):
+    """Start push-to-talk without letting a failure abort the rest of startup:
+    on_started schedules the menu-bar item and window chrome after this, and
+    an app with no hotkey can still be fixed from its own Settings. Returns
+    the error text, or None."""
+    try:
+        service.start()
+    except Exception as e:
+        service.status = f"push-to-talk not running: {e}"[:200]
+        print(f"Voisr hotkey: {service.status}", flush=True)
+        return str(e)
+    return None
+
+
 def main():
     import platform
 
@@ -1362,6 +1472,31 @@ def main():
                                        min_size=(900, 620))
         api.attach_window(window)
         widget.create()
+
+        def on_closing():
+            # Closing the last pywebview window ends webview.start(), and the
+            # finally below then stops push-to-talk. The menu-bar item is the
+            # way back in, so the red button only hides. Returning False
+            # cancels the close; anything else lets it (and a quit) proceed.
+            try:
+                import AppKit
+                import Foundation
+                # pywebview's `native` is the NSWindow itself
+                if close_hides_window(
+                        AppKit.NSApp.currentEvent(),
+                        getattr(window, "native", None),
+                        Foundation.NSProcessInfo.processInfo().systemUptime()):
+                    window.hide()
+                    return False
+            except Exception:
+                pass
+            return True
+
+        try:
+            window.events.closing += on_closing
+        except Exception as e:  # startup must not die over this
+            print(f"Voisr: hide-on-close unavailable ({e}); closing the "
+                  "window will quit", flush=True)
 
         def menu_dictate():
             # Routed through HotkeyService (not Api directly): an NSMenuItem
@@ -1405,7 +1540,7 @@ def main():
             # calls never freeze startup. The mic is NOT opened here — it opens
             # only during an actual dictation, so the "mic in use" indicator is
             # off while idle.
-            service.start()  # config-driven: prefers captured hotkey_vk
+            start_hotkey_service(service)  # config-driven: prefers captured hotkey_vk
 
             from PyObjCTools import AppHelper
 

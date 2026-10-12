@@ -247,6 +247,24 @@ class RecordingQueue:
                 self._capture_finalizing = None
             return session.completion
 
+    def cancel(self) -> bool:
+        """Discard the active capture: no transcription, no delivery. Returns
+        False when nothing was recording."""
+        with self._lock:
+            session, self._active = self._active, None
+            if session is None:
+                return False
+            self._release_admission_locked(session)
+        # Outside the lock, like close(): closing a mic can block.
+        self._safe_cancel(session.recorder)
+        self._remove_wav(session.wav_path)
+        try:
+            session.completion.set_result(
+                SessionResult.failure(session.sequence, "cancelled", "cancelled"))
+        except InvalidStateError:
+            pass
+        return True
+
     def _finalize_capture(self, session: RecordingSession) -> None:
         try:
             session.capture_stderr = session.recorder.stop()

@@ -146,6 +146,11 @@ window.Voisr = window.Voisr || {};
     const cfg = await V.ui.tryApi(V.api().get_config(), "Load settings");
     V.applyAppearance((cfg && cfg.appearance) || "system");
 
+    // A config.json that couldn't be parsed was moved aside at load; say so
+    // once, or the user just sees their dictionary gone.
+    const notice = await V.ui.tryApi(V.api().take_config_notice(), "Check settings file");
+    if (notice && notice.notice) V.ui.toast(notice.notice);
+
     show("home");
   }
 

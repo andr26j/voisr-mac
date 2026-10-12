@@ -16,15 +16,108 @@ DEFAULT_CONFIG = {"hotkey": "alt_r", "paste": True, "device": ":0", "dictionary"
                   "appearance": "system", "launch_at_login": False, "model": None}
 
 
-def load_config(path) -> dict:
+def _is_str(v):
+    return isinstance(v, str)
+
+
+def _is_bool(v):
+    return isinstance(v, bool)
+
+
+def _is_optional_str(v):
+    return v is None or isinstance(v, str)
+
+
+def _is_vk(v):
+    # bool is an int subclass; True is not a key code
+    return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 0xFFFF
+
+
+def _is_dictionary(v):
+    return isinstance(v, dict) and all(
+        isinstance(k, str) and k and isinstance(w, str) for k, w in v.items())
+
+
+CONFIG_VALIDATORS = {
+    "hotkey": _is_str, "paste": _is_bool, "device": _is_str,
+    "dictionary": _is_dictionary, "show_widget": _is_bool,
+    "pill_theme": _is_str, "pill_color": _is_optional_str,
+    "appearance": _is_str, "launch_at_login": _is_bool,
+    "model": _is_optional_str, "hotkey_vk": _is_vk, "hotkey_label": _is_str,
+}
+
+
+def config_errors(updates: dict) -> list[str]:
+    """Why `updates` can't be saved, one line per bad key; [] when it can."""
+    if not isinstance(updates, dict):
+        return ["settings must be an object"]
+    errors = []
+    for key, value in updates.items():
+        check = CONFIG_VALIDATORS.get(key)
+        if check is None:
+            errors.append(f"unknown setting: {key}")
+        elif not check(value):
+            errors.append(f"invalid value for {key}")
+    return errors
+
+
+def _salvage(data: dict, path) -> dict:
+    """Keep every valid value from a hand-edited file. A bad value falls back
+    to its default instead of crashing whatever reads it later; a dictionary
+    keeps its good entries, since those are the user's work."""
+    out = {}
+    for key, value in data.items():
+        check = CONFIG_VALIDATORS.get(key)
+        if check is None or check(value):
+            out[key] = value  # unknown keys are the user's; leave them be
+        elif key == "dictionary" and isinstance(value, dict):
+            out[key] = {k: w for k, w in value.items()
+                        if isinstance(k, str) and k and isinstance(w, str)}
+            print(f"voisr: dropped invalid dictionary entries in {path}", flush=True)
+        else:
+            print(f"voisr: ignoring invalid {key} in {path}", flush=True)
+    return out
+
+
+def _quarantine(p: Path) -> Path | None:
+    """Move an unparseable config aside so the next save can't overwrite the
+    only copy of the user's dictionary."""
+    import time
+    target = p.with_name(f"{p.name}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}")
+    n = 1
+    while target.exists():
+        n += 1
+        target = target.with_name(f"{p.name}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}-{n}")
+    try:
+        os.replace(p, target)
+    except OSError as e:
+        print(f"voisr: could not move aside corrupt config {p}: {e}", flush=True)
+        return None
+    return target
+
+
+def load_config(path, on_corrupt=None) -> dict:
+    """Defaults overlaid with config.json. A file that can't be parsed is
+    moved to config.json.corrupt-<ts> and on_corrupt(saved_path) is called."""
     cfg = dict(DEFAULT_CONFIG)
     p = Path(path)
-    if p.exists():
-        try:
-            cfg.update(json.loads(p.read_text()))
-        except (json.JSONDecodeError, OSError) as e:
-            # a corrupt config must not brick the app; run on defaults
-            print(f"voisr: ignoring unreadable config {p}: {e}", flush=True)
+    if not p.exists():
+        return cfg
+    try:
+        data = json.loads(p.read_bytes().decode("utf-8"))
+    except OSError as e:
+        # unreadable right now, not proven corrupt: leave the file alone
+        print(f"voisr: ignoring unreadable config {p}: {e}", flush=True)
+        return cfg
+    except ValueError as e:  # JSONDecodeError and UnicodeDecodeError
+        data = None
+        print(f"voisr: config {p} is not valid JSON: {e}", flush=True)
+    if not isinstance(data, dict):
+        saved = _quarantine(p)
+        if saved is not None and on_corrupt is not None:
+            on_corrupt(saved)
+        return cfg
+    cfg.update(_salvage(data, p))
     return cfg
 
 

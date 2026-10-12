@@ -74,7 +74,9 @@
    chip. Without Input Monitoring the product does nothing when you hold the
    key, which is not a footnote-sized fact. */
 
-.perm-strip[data-state="ok"] { margin: -4px 2px 0; }
+/* "pending": first run, the mic hasn't been asked for yet. Same quiet line. */
+.perm-strip[data-state="ok"],
+.perm-strip[data-state="pending"] { margin: -4px 2px 0; }
 
 .perm-ok { color: var(--muted); font-size: 12px; }
 

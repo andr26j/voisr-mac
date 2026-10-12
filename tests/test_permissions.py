@@ -55,3 +55,24 @@ def test_open_pane_refuses_unknown_key_without_calling_opener():
     opened = []
     assert permissions.open_pane("../../evil", opener=opened.append) is False
     assert opened == []
+
+
+@pytest.mark.parametrize("status, expected", [
+    (0, None),    # not determined: macOS asks on the first recording
+    (1, False),   # restricted
+    (2, False),   # denied
+    (3, True),    # authorized
+])
+def test_microphone_not_yet_asked_is_unknown_not_denied(status, expected):
+    # H2 (2026-10-12 audit): a fresh install has never been asked for the mic.
+    # Reporting that as "off" sent new users to a pane Voisr isn't listed in.
+    assert permissions.microphone_state(status) is expected
+
+
+def test_a_probe_answering_none_stays_unknown():
+    out = permissions.states(probes={
+        "microphone": lambda: None,
+        "input_monitoring": lambda: True,
+        "accessibility": lambda: True,
+    })
+    assert out[0]["granted"] is None

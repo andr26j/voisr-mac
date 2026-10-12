@@ -17,11 +17,19 @@ window.Voisr = window.Voisr || {};
                    "Dictations are copied to your clipboard instead.",
   };
 
+  const MIC_FIRST_ASK = "asked on your first dictation";
+
   const PERM_WHY = {
     microphone: "needed to hear you",
     input_monitoring: "needed for push-to-talk",
     accessibility: "needed to paste for you",
   };
+
+  /* A null mic is "not asked yet": macOS shows the prompt on the first
+     recording, and Voisr isn't even listed in the Microphone pane until then.
+     So it never blocks — holding the key is how the user gets asked. */
+  const micPending = (p) => p.key === "microphone" && p.granted === null;
+  const blocking = (panes) => panes.filter((p) => p.granted !== true && !micPending(p));
 
   function openPane(key) {
     return async () => {
@@ -38,7 +46,7 @@ window.Voisr = window.Voisr || {};
      Monitoring the entire product does nothing when you hold the key, and a
      chip above a hero still saying "hold this key to dictate" was a lie. */
   function permBlock(panes) {
-    const bad = panes.filter((p) => p.granted !== true);
+    const bad = blocking(panes);
     // worst first: a false is a known denial, a null is merely unverified
     const lead = bad.find((p) => p.granted === false) || bad[0];
 
@@ -60,11 +68,12 @@ window.Voisr = window.Voisr || {};
       ...panes.map((p) => {
         const state = p.granted === true ? "ok" : p.granted === false ? "denied" : "unknown";
         const mark = state === "ok" ? "\u2713" : state === "denied" ? "!" : "?";
+        const why = state === "ok" ? "granted"
+          : micPending(p) ? MIC_FIRST_ASK : PERM_WHY[p.key] || "";
         return V.ui.el("li", { class: `perm-${state}-row` },
           V.ui.el("span", { class: "perm-mark", "aria-hidden": "true", text: mark }),
           V.ui.el("span", { text: p.label }),
-          V.ui.el("span", { class: "perm-why",
-                            text: state === "ok" ? "granted" : PERM_WHY[p.key] || "" }));
+          V.ui.el("span", { class: "perm-why", text: why }));
       }));
 
     return V.ui.el("div", { class: "perm-block" },
@@ -83,7 +92,19 @@ window.Voisr = window.Voisr || {};
     // strip beside a toast explaining the staleness beats an empty one.
     if (!res || !res.panes) return;
     const panes = res.panes;
-    const bad = panes.filter((p) => p.granted !== true);
+    const bad = blocking(panes);
+
+    if (bad.length === 0 && panes.some(micPending)) {
+      // first run: nothing is wrong yet, the first dictation will ask
+      strip.replaceChildren(V.ui.el("p", {
+        class: "perm-ok",
+        text: "macOS will ask for the microphone the first time you dictate — " +
+              "hold the key and allow it.",
+      }));
+      strip.dataset.state = "pending";
+      if (ptt) ptt.hidden = false;
+      return;
+    }
 
     if (bad.length === 0) {
       // a healthy app should not shout — one quiet line, not three badges
