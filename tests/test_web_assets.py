@@ -576,3 +576,24 @@ def test_the_more_disclosure_uses_the_text_safe_accent():
     rule = css[css.index(".more summary {"):]
     rule = rule[:rule.index("}")]
     assert "var(--accent-text)" in rule
+
+
+# ---- L8 (2026-10-12 audit) ----
+
+def test_settings_status_colour_follows_its_state():
+    css = (WEB / "css" / "views.css").read_text()
+    assert '.setting-status[data-state="off"]' in css
+
+
+def test_dock_sits_near_the_window_edge_not_a_padding_above_it():
+    # sticky bottom:0 is inset by .main's 60px bottom padding, so the dock
+    # floated 60px up with rows showing through the gap
+    css = (WEB / "css" / "views.css").read_text()
+    rule = css[css.index(".dock {"):]
+    rule = rule[:rule.index("}")]
+    assert "bottom: 0;" not in rule
+
+
+def test_dead_home_code_is_gone():
+    assert "PERM_HELP" not in (WEB / "js" / "views" / "home.js").read_text()
+    assert 'id="delta-streak"' not in INDEX.read_text()

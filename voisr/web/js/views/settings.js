@@ -230,7 +230,7 @@ window.Voisr = window.Voisr || {};
         $("#launch-toggle").checked = !!cfg.launch_at_login;
       }
       if (hotkey) $("#hotkey-current").textContent = hotkey.display || "unset";
-      if (status) $("#hotkey-status").textContent = status.status;
+      if (status) renderHotkeyStatus(status);
 
       if (models && models.models) {
         const select = $("#model-select");
@@ -380,5 +380,13 @@ window.Voisr = window.Voisr || {};
   }
 
   V.views = V.views || {};
-  V.views.settings = { renderAppearance, init, render, renderThemes, renderColorWheel, initColorWheel, openColorPopover };
+  /* The sentence comes from Python; its colour from state, so "push-to-talk
+     not running" no longer shows in the same green as "active". */
+  function renderHotkeyStatus(status) {
+    const node = V.ui.$("#hotkey-status");
+    node.textContent = status.status;
+    node.dataset.state = status.state || "unknown";
+  }
+
+  V.views.settings = { renderAppearance, renderHotkeyStatus, init, render, renderThemes, renderColorWheel, initColorWheel, openColorPopover };
 })(window.Voisr);

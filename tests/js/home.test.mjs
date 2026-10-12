@@ -407,3 +407,37 @@ test("'Record from here instead' starts a dock recording rather than only focusi
     await stopDock(h);
   }
 });
+
+/* ---------- L8 (2026-10-12 audit) ---------- */
+
+test("a focus refresh with no permission change leaves the strip alone, so it isn't re-announced", async () => {
+  const h = mountHome({});
+  await h.V.views.home.renderPermissions();
+  const first = h["perm-strip"].children[0];
+  await h.V.views.home.renderPermissions();
+  assert.equal(h["perm-strip"].children[0], first,
+    "aria-live re-reads the strip whenever its children are replaced");
+});
+
+test("a permission change still re-renders the strip", async () => {
+  let granted = true;
+  const h = mountHome({ get_permissions: async () => ({ panes: [
+    { key: "microphone", label: "Microphone", granted: true },
+    { key: "input_monitoring", label: "Input Monitoring", granted },
+    { key: "accessibility", label: "Accessibility", granted: true },
+  ]}) });
+  await h.V.views.home.renderPermissions();
+  granted = false;
+  await h.V.views.home.renderPermissions();
+  assert.equal(h["perm-strip"].children[0].className, "perm-block");
+});
+
+test("a dock dictation whose History write failed says so instead of a bare 'Copied'", async () => {
+  const { api } = recordingApi({
+    stop_recording: async () => ({ text: "Hi", copied: true, warning: "history failed: disk full" }),
+  });
+  const h = mountHome(api);
+  await h.V.views.home.toggleRecord();
+  await h.V.views.home.toggleRecord();
+  assert.match(h["record-error"].textContent, /History/);
+});

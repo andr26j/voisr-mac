@@ -453,3 +453,15 @@ test("the theme picker follows an appearance change made elsewhere (the palette)
   assert.equal(activeOf(s["appearance-grid"]), "dark",
     "the highlighted option must be the one actually applied");
 });
+
+test("the push-to-talk status is only green while the key is listening", async (t) => {
+  // L8 (2026-10-12 audit): "push-to-talk not running" used to show in green
+  const s = mountSettings(t, {});
+  const node = makeNode("p");
+  s.V.ui.$ = ((orig) => (sel) => (sel === "#hotkey-status" ? node : orig(sel)))(s.V.ui.$);
+  s.V.views.settings.renderHotkeyStatus({ status: "active on F13", state: "listening" });
+  assert.equal(node.dataset.state, "listening");
+  s.V.views.settings.renderHotkeyStatus({ status: "push-to-talk not running", state: "off" });
+  assert.equal(node.dataset.state, "off");
+  assert.equal(node.textContent, "push-to-talk not running");
+});

@@ -1,12 +1,6 @@
 "use strict";
 window.Voisr = window.Voisr || {};
 (function (V) {
-  const PERM_HELP = {
-    microphone: "Voisr needs the microphone to hear you.",
-    input_monitoring: "Without this, the push-to-talk key does nothing.",
-    accessibility: "Without this, text is copied but not pasted for you.",
-  };
-
   /* What each grant costs you when it is missing — the block leads with the
      consequence, not the name of the setting. */
   const PERM_BREAKS = {
@@ -94,6 +88,12 @@ window.Voisr = window.Voisr || {};
     // strip beside a toast explaining the staleness beats an empty one.
     if (!res || !res.panes) return;
     const panes = res.panes;
+    // #perm-strip is aria-live, and replacing its children makes a screen
+    // reader read it again: on every window focus, it re-announced a strip
+    // that hadn't changed. Only re-render when a grant actually moved.
+    const sig = JSON.stringify(panes.map((p) => [p.key, p.granted]));
+    if (strip.dataset.sig === sig) return;
+    strip.dataset.sig = sig;
     const bad = blocking(panes);
 
     if (bad.length === 0 && panes.some(micPending)) {
@@ -370,6 +370,9 @@ window.Voisr = window.Voisr || {};
     // The transcript itself lands at the top of Recent activity a line below,
     // so the dock reports the outcome rather than repeating the text.
     setDockState("done", "Copied to clipboard");
+    // the transcript lands in Recent activity, unless History couldn't save
+    // it: then "Copied" alone was the only trace, and a wrong one
+    if (res.warning) errEl.textContent = "Copied, but not saved to History.";
     doneTimer = setTimeout(() => {
       if (recState !== "idle") return;
       setDockState(null, "Click to record here instead");
