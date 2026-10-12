@@ -30,6 +30,7 @@ def make_api(tmp_path, service=None):
                transcribe_fn=lambda wav: "hello",
                clock=lambda: 1.0,
                hotkey_service=service,
+               paste_fn=lambda text: True,
                clipboard_fn=lambda text: None)
 
 
