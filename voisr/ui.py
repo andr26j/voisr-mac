@@ -1490,6 +1490,36 @@ def close_hides_window(event, ns_window, now) -> bool:
     return False
 
 
+def install_dock_reopen(on_reopen, delegate_cls=None) -> bool:
+    """Make a Dock click call on_reopen. The red button only hides the
+    dashboard, and pywebview's AppDelegate lacks
+    applicationShouldHandleReopen:hasVisibleWindows:, so without this the Dock
+    icon is dead. Added to pywebview's class (it builds the instance itself in
+    webview.start). Returns False if that isn't possible."""
+    try:
+        import objc
+        if delegate_cls is None:
+            from webview.platforms.cocoa import BrowserView
+            delegate_cls = BrowserView.AppDelegate
+
+        def applicationShouldHandleReopen_hasVisibleWindows_(self, app, flag):
+            # Show whatever the flag says: the recording pill counts as a
+            # visible window while the dashboard is hidden.
+            try:
+                on_reopen()
+            except Exception:
+                pass
+            return True
+
+        objc.classAddMethods(delegate_cls, [objc.selector(
+            applicationShouldHandleReopen_hasVisibleWindows_,
+            selector=b"applicationShouldHandleReopen:hasVisibleWindows:",
+            signature=b"Z@:@Z")])
+        return True
+    except Exception:
+        return False
+
+
 def start_hotkey_service(service):
     """Start push-to-talk without letting a failure abort the rest of startup:
     on_started schedules the menu-bar item and window chrome after this, and
@@ -1575,10 +1605,19 @@ def main():
             service._submit(service._toggle)
 
         def menu_open():
-            try:
-                window.show()
-            except Exception:
-                pass
+            # Called on the AppKit main thread (menu item, Dock click), and
+            # window.show() waits up to 20 s for the window's `shown` event,
+            # which only the main thread can set. Never wait there.
+            def show():
+                try:
+                    window.show()
+                except Exception:
+                    pass
+            threading.Thread(target=show, daemon=True).start()
+
+        if not install_dock_reopen(menu_open):
+            print("Voisr: Dock reopen unavailable; use the menu-bar Open",
+                  flush=True)
 
         def menu_quit():
             try:
