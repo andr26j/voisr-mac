@@ -498,7 +498,8 @@ def test_push_to_talk_end_to_end_real_transcription(tmp_path, spoken_wav):
     api = Api(config_path=tmp_path / "config.json",
               history=HistoryStore(tmp_path / "h.jsonl"),
               recorder_factory=SpeechRecorder, transcribe_fn=transcribe,
-              clock=_time.monotonic)
+              clock=_time.monotonic,
+              clipboard_fn=set_clipboard)  # real: the assertion reads it back
     widget = FakeWidget()
     svc = HotkeyService(api, widget=widget, hide_delay=0)
     old_clip = get_clipboard()

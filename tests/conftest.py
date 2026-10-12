@@ -17,6 +17,26 @@ def pytest_collection_modifyitems(items):
             item.add_marker(pytest.mark.audio)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_paste(monkeypatch):
+    """An Api built in a test must never paste into the user's focused
+    window or overwrite their clipboard. The release path pastes from a
+    background thread after the test has already passed, so a missing
+    paste_fn typed fake transcripts into whatever app was in front. An Api
+    built without paste_fn / clipboard_fn gets inert ones; a test that
+    needs the real thing passes it explicitly."""
+    from voisr.ui import Api
+
+    real_init = Api.__init__
+
+    def init(self, *args, **kwargs):
+        kwargs.setdefault("paste_fn", lambda text: True)
+        kwargs.setdefault("clipboard_fn", lambda text: None)
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(Api, "__init__", init)
+
+
 @pytest.fixture
 def spoken_wav(tmp_path):
     def make(text: str):

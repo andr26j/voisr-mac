@@ -51,3 +51,16 @@ def test_readme_says_the_device_key_is_cli_only():
 
 def test_finder_metadata_is_ignored():
     assert ".DS_Store" in (ROOT / ".gitignore").read_text().split()
+
+
+def test_an_api_built_in_a_test_cannot_paste_into_the_users_window(tmp_path):
+    # an Api left on the real defaults pasted its fake transcript ("Hello",
+    # "X") into whatever window had focus each time the suite ran
+    from voisr.history import HistoryStore
+    from voisr.inject import paste_at_cursor, set_clipboard
+    from voisr.ui import Api
+
+    api = Api(config_path=tmp_path / "config.json",
+              history=HistoryStore(tmp_path / "h.jsonl"))
+    assert api._paste_fn is not paste_at_cursor
+    assert api._clipboard_fn is not set_clipboard

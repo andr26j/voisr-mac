@@ -113,7 +113,8 @@ def test_a_key_press_that_cannot_start_flashes_an_error_once(tmp_path):
     api = Api(config_path=tmp_path / "config.json",
               history=HistoryStore(tmp_path / "h.jsonl"),
               recorder_factory=FakeRecorder, transcribe_fn=lambda w: "x",
-              clock=lambda: 1.0, clipboard_fn=lambda t: None)
+              clock=lambda: 1.0, paste_fn=lambda t: True,
+              clipboard_fn=lambda t: None)
     widget = FakeWidget()
     svc = HotkeyService(api, widget=widget, hide_delay=0)
     api.start_recording()          # the dock owns the mic
@@ -188,7 +189,8 @@ def test_every_refused_toggle_press_flashes(tmp_path):
     api = Api(config_path=tmp_path / "config.json",
               history=HistoryStore(tmp_path / "h.jsonl"),
               recorder_factory=FakeRecorder, transcribe_fn=lambda w: "x",
-              clock=lambda: 1.0, clipboard_fn=lambda t: None)
+              clock=lambda: 1.0, paste_fn=lambda t: True,
+              clipboard_fn=lambda t: None)
     widget = FakeWidget()
     svc = HotkeyService(api, widget=widget, hide_delay=0)
     api.start_recording()          # the dock owns the mic
@@ -205,7 +207,8 @@ def test_a_successful_press_clears_the_refusal(tmp_path):
     api = Api(config_path=tmp_path / "config.json",
               history=HistoryStore(tmp_path / "h.jsonl"),
               recorder_factory=FakeRecorder, transcribe_fn=lambda w: "x",
-              clock=lambda: 1.0, clipboard_fn=lambda t: None)
+              clock=lambda: 1.0, paste_fn=lambda t: True,
+              clipboard_fn=lambda t: None)
     svc = HotkeyService(api, widget=FakeWidget(), hide_delay=0)
     svc._rejected = True
     svc.press()
