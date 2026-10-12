@@ -1096,19 +1096,24 @@ def test_concurrent_set_config_calls_keep_every_update(tmp_path, monkeypatch):
     from voisr import ui as ui_mod
     real_load = ui_mod.load_config
 
-    def slow_load(path):
-        cfg = real_load(path)
+    def slow_load(path, **kwargs):
+        cfg = real_load(path, **kwargs)
         time.sleep(0.02)   # widen the read-modify-write window
         return cfg
 
     monkeypatch.setattr(ui_mod, "load_config", slow_load)
     api = make_api(tmp_path)
-    n = 8
+    # eight real settings (set_config rejects unknown keys), none at default
+    updates = [("device", ":1"), ("pill_theme", "ember"),
+               ("pill_color", "#112233"), ("appearance", "dark"),
+               ("model", "base.en"), ("hotkey_label", "X"),
+               ("paste", False), ("show_widget", False)]
+    n = len(updates)
     barrier = threading.Barrier(n)
 
     def worker(i):
         barrier.wait()
-        api.set_config({f"k{i}": i})
+        api.set_config(dict([updates[i]]))
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
     for t in threads:
@@ -1116,7 +1121,7 @@ def test_concurrent_set_config_calls_keep_every_update(tmp_path, monkeypatch):
     for t in threads:
         t.join()
     cfg = api.get_config()
-    assert all(cfg.get(f"k{i}") == i for i in range(n)), cfg
+    assert all(cfg.get(k) == v for k, v in updates), cfg
 
 
 def test_capture_hotkey_write_is_atomic(tmp_path, monkeypatch):
@@ -1167,9 +1172,9 @@ def test_get_config_does_not_reread_an_unchanged_file(tmp_path, monkeypatch):
     calls = []
     real = ui_mod.load_config
 
-    def counting(path):
+    def counting(path, **kwargs):
         calls.append(1)
-        return real(path)
+        return real(path, **kwargs)
 
     monkeypatch.setattr(ui_mod, "load_config", counting)
     api = make_api(tmp_path)

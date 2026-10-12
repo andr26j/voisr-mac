@@ -45,6 +45,9 @@ window.Voisr = window.Voisr || {};
       }),
       get_config: async () => JSON.parse(JSON.stringify(mockCfg)),
       set_config: async (u) => Object.assign(mockCfg, u),
+      // mirrors Api.take_config_notice() in voisr/ui.py: {} unless a corrupt
+      // config.json was moved aside at load.
+      take_config_notice: async () => ({}),
       // mirrors Api.set_appearance() in voisr/ui.py, used by the command
       // palette's "Toggle appearance" command.
       set_appearance: async (mode) => {

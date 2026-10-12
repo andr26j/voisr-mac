@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from voisr import launch_agent, permissions
-from voisr.app import load_config
+from voisr.app import config_errors, load_config
 from voisr.cleanup import clean
 from voisr.history import HistoryStore
 from voisr.inject import paste_at_cursor, set_clipboard
@@ -865,6 +865,7 @@ class Api:
         # (set_config from pywebview workers, capture_hotkey, launch-at-login).
         self._config_lock = threading.RLock()
         self._config_cache = None  # (stat key, parsed config) or None
+        self._config_notice = None  # set when a corrupt config was moved aside
         self._recordings = RecordingQueue(
             recorder_factory=recorder_factory,
             fallback_recorder_factory=fallback_recorder_factory,
@@ -1195,7 +1196,8 @@ class Api:
             if cached is not None and cached[0] == key:
                 cfg = copy.deepcopy(cached[1])
             else:
-                cfg = load_config(self._config_path)
+                cfg = load_config(self._config_path,
+                                  on_corrupt=self._note_corrupt_config)
                 self._config_cache = (key, copy.deepcopy(cfg))
         cfg["launch_at_login"] = launch_agent.is_enabled(path=launch_agent.PLIST_PATH)
         return cfg
@@ -1237,7 +1239,22 @@ class Api:
             self._write_config_atomic(cfg)
             return cfg
 
+    def _note_corrupt_config(self, saved):
+        self._config_notice = (
+            f"Your settings file couldn't be read, so Voisr started on "
+            f"defaults. The old file is kept as {saved.name}.")
+
+    def take_config_notice(self):
+        """One-shot: the dashboard toasts this once at boot."""
+        notice, self._config_notice = self._config_notice, None
+        return {"notice": notice} if notice else {}
+
     def set_config(self, updates):
+        # The bridge is the only way in from the dashboard: a wrong type here
+        # would be saved and then break every dictation that reads it.
+        errors = config_errors(updates)
+        if errors:
+            return {"error": "; ".join(errors)}
         with self._config_lock:
             old_hotkey = self.get_config().get("hotkey")
             cfg = self._update_config(updates)
@@ -1382,6 +1399,20 @@ class Api:
         return {"ok": True}
 
 
+def start_hotkey_service(service):
+    """Start push-to-talk without letting a failure abort the rest of startup:
+    on_started schedules the menu-bar item and window chrome after this, and
+    an app with no hotkey can still be fixed from its own Settings. Returns
+    the error text, or None."""
+    try:
+        service.start()
+    except Exception as e:
+        service.status = f"push-to-talk not running: {e}"[:200]
+        print(f"Voisr hotkey: {service.status}", flush=True)
+        return str(e)
+    return None
+
+
 def main():
     import platform
 
@@ -1452,7 +1483,7 @@ def main():
             # calls never freeze startup. The mic is NOT opened here — it opens
             # only during an actual dictation, so the "mic in use" indicator is
             # off while idle.
-            service.start()  # config-driven: prefers captured hotkey_vk
+            start_hotkey_service(service)  # config-driven: prefers captured hotkey_vk
 
             from PyObjCTools import AppHelper
 

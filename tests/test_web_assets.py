@@ -520,3 +520,9 @@ def test_settings_explains_smart_join_spacing():
     html = INDEX.read_text()
     assert "joined with a space" in html
     assert "mouse" in html
+
+
+def test_boot_toasts_a_moved_aside_config_and_the_mock_answers_it():
+    # H3: a corrupt config.json is quarantined at load; boot must say so.
+    assert "take_config_notice" in (WEB / "js" / "main.js").read_text()
+    assert "take_config_notice" in (WEB / "js" / "api.js").read_text()
