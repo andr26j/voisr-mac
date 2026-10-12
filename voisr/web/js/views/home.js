@@ -60,7 +60,9 @@ window.Voisr = window.Voisr || {};
     if (lead.key !== "microphone") {
       actions.append(V.ui.el("button", {
         type: "button", class: "btn-secondary", text: "Record from here instead",
-        on: { click: () => V.ui.$("#record-btn").focus() },
+        // starts the dock recording: a bare .focus() shows no ring after a
+        // mouse click, so the button looked like it did nothing
+        on: { click: () => { V.ui.$("#record-btn").focus(); toggleRecord(); } },
       }));
     }
 

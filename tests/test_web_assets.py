@@ -540,3 +540,39 @@ def test_words_tile_says_its_number_is_all_time():
 def test_palette_dictation_goes_through_home():
     # M7: a dock recording started from another view was invisible
     assert "dictateFromAnywhere" in (WEB / "js" / "palette.js").read_text()
+
+
+# ---- M11 (2026-10-12 audit) ----
+
+def test_theme_pickers_are_radio_groups():
+    html = INDEX.read_text()
+    for grid in ("appearance-grid", "theme-grid"):
+        tag = re.search(rf'<div id="{grid}"[^>]*>', html).group(0)
+        assert 'role="radiogroup"' in tag, grid
+
+
+def test_dock_status_is_announced():
+    tag = re.search(r'<p id="record-status"[^>]*>', INDEX.read_text()).group(0)
+    assert 'role="status"' in tag
+
+
+def test_apply_appearance_tells_the_rest_of_the_app():
+    src = (WEB / "js" / "main.js").read_text()
+    assert "voisr:appearance" in src
+    assert "V.appearancePref" in src
+
+
+def test_accent_text_meets_aa_on_every_background_in_both_themes():
+    css = TOKENS.read_text()
+    for selector in (':root[data-appearance="light"]', ':root[data-appearance="dark"]'):
+        block = _theme_block(css, selector)
+        for bg in ("--bg", "--surface", "--surface-2"):
+            ratio = contrast_ratio(_token(block, "--accent-text"), _token(block, bg))
+            assert ratio >= 4.5, f"{selector}: accent-text on {bg} is {ratio:.2f}:1"
+
+
+def test_the_more_disclosure_uses_the_text_safe_accent():
+    css = (WEB / "css" / "views.css").read_text()
+    rule = css[css.index(".more summary {"):]
+    rule = rule[:rule.index("}")]
+    assert "var(--accent-text)" in rule

@@ -322,7 +322,7 @@ mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
 /* long caveats collapse instead of pushing every other row apart */
 .more { margin-top: 5px; }
 .more summary {
-  font-size: 12px; font-weight: 600; color: var(--accent);
+  font-size: 12px; font-weight: 600; color: var(--accent-text);
   cursor: pointer; list-style: none; width: fit-content;
 }
 .more summary::-webkit-details-marker { display: none; }

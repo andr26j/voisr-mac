@@ -385,3 +385,25 @@ test("the Time saved tile draws and compares its own series, not the word counts
   assert.equal(h["trend-saved"].children[0].style.getPropertyValue("--h"), "1.000",
     "the first day saved the most time, so it is the tallest bar");
 });
+
+
+test("'Record from here instead' starts a dock recording rather than only focusing the button", async () => {
+  // M11: .focus() after a mouse click shows no ring, so the button looked dead
+  const { api, calls } = recordingApi();
+  const h = mountHome({ ...api, get_permissions: async () => ({ panes: [
+    { key: "microphone", label: "Microphone", granted: true },
+    { key: "input_monitoring", label: "Input Monitoring", granted: false },
+    { key: "accessibility", label: "Accessibility", granted: true },
+  ]}) });
+  await h.V.views.home.renderPermissions();
+  const actions = h["perm-strip"].children[0].children.find((c) => c.className === "perm-actions");
+  const fallback = actions.children.find((b) => b.textContent === "Record from here instead");
+  try {
+    fallback.dispatch("click", { target: fallback });
+    await settle();
+    assert.equal(calls.start, 1);
+    assert.equal(h.dock.dataset.state, "recording");
+  } finally {
+    await stopDock(h);
+  }
+});
