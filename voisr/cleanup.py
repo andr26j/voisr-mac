@@ -1,9 +1,13 @@
 import hashlib
 import re
 
+# Case-sensitive on purpose: whisper writes fillers lowercase, or capitalised
+# at a sentence start, so "ER" (the ward) is a word. A hyphen next to it means
+# a word too ("uh-oh"). Only the filler's own comma goes; a following . ? !
+# ends the sentence and stays. A filler alone in parentheses goes with them.
+_FILLER = r"(?:[Uu]m+|[Uu]h+|[Uu]hm+|[Ee]rm+|[Ee]r|[Aa]h+|[Hh]mm+)"
 FILLER_RE = re.compile(
-    r"\b(?:um+|uh+|uhm+|erm+|er|ah+|hmm+)\b[,.!?]?\s*",
-    re.IGNORECASE,
+    rf"\(\s*{_FILLER}\s*\)\s*|(?<![\w-]){_FILLER}(?![\w-]),?\s*"
 )
 
 # whisper.cpp annotates non-speech instead of returning nothing: a key click
@@ -36,6 +40,9 @@ PROTECTED_TOKEN_RE = re.compile(
     | \bph\.d\.                                             # degree
     | \b(?:[a-z]\.){2,}                                     # abbreviation
     | \b(?:dr|mr|mrs|ms|prof|sr|jr|st)\.               # title
+    | (?-i:(?<![\w.])(?![A-Z]\.)[^\W_]\w*(?:\.[a-z0-9][\w-]*)+)
+      # dotted name: google.com, config.json, Node.js. A capital after the
+      # dot ("yes.No") or a lone capital before it ("I.am") is prose instead.
     """,
     re.IGNORECASE | re.VERBOSE,
 )
@@ -140,12 +147,28 @@ def _protect_original_spans(
     namespace = _placeholder_namespace(reserved)
     placeholder_re = re.compile(re.escape(namespace) + r"([0-9a-f]+)" + re.escape(namespace))
     protected: list[str] = []
+
+    def hold(token: str) -> str:
+        protected.append(token)
+        return f"{namespace}{len(protected) - 1:x}{namespace}"
+
+    # The user's replacement text is final: "e.g." or "12:00" must not get
+    # the spacing pass. Only values it could touch are held, so a plain
+    # replacement at the start is still capitalised.
+    written = sorted({w for w in (dictionary or {}).values()
+                      if re.search(r"[,.;:!?]", w)}, key=len, reverse=True)
+    written_re = re.compile("|".join(map(re.escape, written))) if written else None
+
+    def hold_written(gap: str) -> str:
+        if written_re is None:
+            return gap
+        return written_re.sub(lambda m: hold(m.group(0)), gap)
+
     parts: list[str] = []
     for gap, (_, _, token) in zip(gaps, spans):
-        parts.append(gap)
-        parts.append(f"{namespace}{len(protected):x}{namespace}")
-        protected.append(token)
-    parts.append(gaps[-1])
+        parts.append(hold_written(gap))
+        parts.append(hold(token))
+    parts.append(hold_written(gaps[-1]))
     return "".join(parts), protected, placeholder_re
 
 
@@ -162,8 +185,12 @@ def clean(text: str, dictionary: dict[str, str] | None = None) -> str:
     out, protected, placeholder_re = _protect_original_spans(text, dictionary)
     out = re.sub(r"\s+", " ", out).strip()
     out = re.sub(r"\s+([,.;:!?])", r"\1", out)
-    out = re.sub(r"^[,.;:\s]+", "", out)
-    out = re.sub(r"([,.;:!?])(?=\S)", r"\1 ", out)
-    if out and out[0].islower():
-        out = out[0].upper() + out[1:]
+    # a dropped filler can leave its comma against the sentence end ("it, uh?")
+    out = re.sub(r",(?=[.?!])", "", out)
+    out = re.sub(r"^[,.;:!?\s]+", "", out)
+    # space after punctuation, but never inside a run ("...", "?!")
+    out = re.sub(r"([,.;:!?])(?=[^\s,.;:!?])", r"\1 ", out)
+    first_word = out.split(" ", 1)[0]
+    if out and out[0].islower() and not any(c.isupper() for c in first_word):
+        out = out[0].upper() + out[1:]  # but leave iPhone and eBay alone
     return _restore_tokens(out, protected, placeholder_re)

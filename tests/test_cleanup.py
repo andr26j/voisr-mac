@@ -94,8 +94,9 @@ def test_url_preserves_adjacent_exclamation_and_prose_as_uri_text():
     assert clean("visit https://example.com!now") == "Visit https://example.com!now"
 
 
-def test_non_url_www_substring_is_not_protected():
-    assert clean("say notwww.example.com now") == "Say notwww. example. com now"
+def test_non_url_www_substring_is_kept_as_a_dotted_token():
+    # was pinned as "notwww. example. com" -- the M1 bug (2026-10-12 audit)
+    assert clean("say notwww.example.com now") == "Say notwww.example.com now"
 
 
 def test_time_preserves_final_period_in_meridiem():
@@ -125,8 +126,8 @@ def test_preserves_uri_commas_colons_and_semicolons():
     assert clean(raw) == "Open https://example.com/a:b,c;d?x=one,two;three#now"
 
 
-def test_unicode_embedded_www_substring_is_not_protected():
-    assert clean("say éwww.example.com now") == "Say éwww. example. com now"
+def test_unicode_embedded_www_substring_is_kept_as_a_dotted_token():
+    assert clean("say éwww.example.com now") == "Say éwww.example.com now"
 
 
 def test_preserves_urls_wrapped_in_parentheses_and_quotes():
@@ -161,11 +162,16 @@ def test_dictionary_phrases_apply_around_multiple_protected_spans():
 @pytest.mark.parametrize(
     ("written", "expected"),
     [
-        ("https://example.com", "Say https: //example. com"),
-        ("a@example.com", "Say a@example. com"),
+        ("https://example.com", "Say https://example.com"),
+        ("a@example.com", "Say a@example.com"),
+        ("e.g.", "Say e.g."),
+        ("12:00", "Say 12:00"),
+        ("trademate.com.au", "Say trademate.com.au"),
     ],
 )
-def test_dictionary_generated_structured_text_keeps_base_cleanup_behavior(written, expected):
+def test_dictionary_output_is_written_exactly_as_the_user_typed_it(written, expected):
+    # was pinned as "https: //example. com": the user's own replacement text
+    # must not be re-punctuated (M1, 2026-10-12 audit)
     assert clean("say token", {"token": written}) == expected
 
 
@@ -350,3 +356,61 @@ def test_mixed_length_dotted_prose_keeps_legacy_cleanup(raw, dictionary, expecte
 )
 def test_namespace_digest_accepts_lone_surrogates(raw, dictionary, expected):
     assert clean(raw, dictionary) == expected
+
+
+# ---- M1 / M2 (2026-10-12 audit) ----
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("go to google.com", "Go to google.com"),
+        ("open config.json now", "Open config.json now"),
+        ("built with Node.js today", "Built with Node.js today"),
+        ("see trademate.com.au.", "See trademate.com.au."),
+        ("google.com, then bing.com", "google.com, then bing.com"),
+    ],
+)
+def test_dotted_names_keep_their_dots(raw, expected):
+    assert clean(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Wait...", "Wait..."),
+        ("wait... then go", "Wait... then go"),
+        ("Really?!", "Really?!"),
+        ("no way!? yes", "No way!? yes"),
+    ],
+)
+def test_punctuation_runs_stay_together(raw, expected):
+    assert clean(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "dictionary", "expected"),
+    [
+        ("iphone is great", {"iphone": "iPhone"}, "iPhone is great"),
+        ("ebay sold it", {"ebay": "eBay"}, "eBay sold it"),
+        ("iPad first", None, "iPad first"),
+        ("hello there", None, "Hello there"),
+    ],
+)
+def test_a_first_word_with_its_own_capitals_is_not_recapitalised(raw, dictionary, expected):
+    assert clean(raw, dictionary) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Take him to the ER now.", "Take him to the ER now."),
+        ("Uh-oh, that broke.", "Uh-oh, that broke."),
+        ("I need it, uh?", "I need it?"),
+        ("so (um) yes", "So yes"),
+        ("I think uh.", "I think."),
+        ("Um. I think so", "I think so"),
+        ("Is it, hmm?", "Is it?"),
+    ],
+)
+def test_filler_removal_keeps_real_words_and_sentence_punctuation(raw, expected):
+    assert clean(raw) == expected
