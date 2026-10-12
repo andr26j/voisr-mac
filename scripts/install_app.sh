@@ -22,7 +22,15 @@ rsync -a "$PROJECT/models/" "$APPSUP/models/"
 [ -f "$APPSUP/config.json" ] || cp "$PROJECT/config.json" "$APPSUP/"
 
 echo "==> Creating venv"
-[ -d "$APPSUP/venv" ] || python3 -m venv "$APPSUP/venv"
+# shellcheck source=install_lib.sh
+source "$PROJECT/scripts/install_lib.sh"
+PYVER="$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')"
+if ! venv_usable "$APPSUP/venv" "$PYVER"; then
+  # missing, or built by another Python (e.g. 3.14 -> 3.15): rebuild it, or
+  # the launcher below looks for site-packages the venv doesn't have
+  rm -rf "$APPSUP/venv"
+  python3 -m venv "$APPSUP/venv"
+fi
 "$APPSUP/venv/bin/pip" install -q -r "$APPSUP/requirements.txt"
 
 echo "==> Creating $APPDIR"
@@ -68,7 +76,6 @@ PLIST
 #
 # The stub dlopen()s the Python framework dylib, so its paths must match the
 # python3 that built the venv — derive them here instead of hardcoding.
-PYVER="$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')"
 PYFW="$(python3 -c 'import sys; print(sys.base_prefix)')"
 LAUNCHER="$APPDIR/Contents/MacOS/Voisr"
 
