@@ -1490,6 +1490,32 @@ def close_hides_window(event, ns_window, now) -> bool:
     return False
 
 
+# Every Api method the dashboard calls, and nothing else.
+# tests/test_js_bridge_surface.py pins this to the V.api() calls in voisr/web/js.
+BRIDGE_METHODS = (
+    "capture_hotkey", "clear_history", "copy_text", "delete_history_item",
+    "export_history", "get_config", "get_history", "get_hotkey_status",
+    "get_models", "get_permissions", "get_pill_themes", "get_stats",
+    "hotkey_display", "open_settings_pane", "restore_history_item",
+    "save_text_file", "set_appearance", "set_config", "set_launch_at_login",
+    "start_recording", "stop_recording", "take_config_notice",
+)
+
+
+def bridge_functions(api):
+    """The dashboard's bridge: one plain function per BRIDGE_METHODS name,
+    for window.expose(). Passing the Api as js_api instead exposes it whole:
+    pywebview resolves a call's dotted name with getattr and no underscore
+    filter, so page script could reach "_history.path.unlink" or a method's
+    __func__.__globals__. Exposed functions are looked up by exact name."""
+    def forward(name):
+        def call(*args):
+            return getattr(api, name)(*args)
+        call.__name__ = call.__qualname__ = name
+        return call
+    return [forward(name) for name in BRIDGE_METHODS]
+
+
 def start_hotkey_service(service):
     """Start push-to-talk without letting a failure abort the rest of startup:
     on_started schedules the menu-bar item and window chrome after this, and
@@ -1526,9 +1552,11 @@ def main():
         widget = RecordingWidget()
         service = HotkeyService(api, widget=widget)
         api.attach_hotkey_service(service)
+        # No js_api: see bridge_functions
         window = webview.create_window("Voisr", str(WEB_DIR / "index.html"),
-                                       js_api=api, width=1060, height=700,
+                                       width=1060, height=700,
                                        min_size=(900, 620))
+        window.expose(*bridge_functions(api))
         api.attach_window(window)
         widget.create()
 

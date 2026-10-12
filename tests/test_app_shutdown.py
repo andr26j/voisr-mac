@@ -207,7 +207,10 @@ def test_gui_shutdown_stops_listener_then_closes_api(monkeypatch):
     monkeypatch.setattr("voisr.inject.prepare_paste_controller", lambda: None)
     monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace())
     monkeypatch.setitem(sys.modules, "webview", SimpleNamespace(
-        create_window=lambda *args, **kwargs: object(), start=start))
+        # main() exposes the JS bridge on the window (L3)
+        create_window=lambda *args, **kwargs: SimpleNamespace(
+            expose=lambda *funcs: None),
+        start=start))
 
     with pytest.raises(KeyboardInterrupt):
         ui.main()
