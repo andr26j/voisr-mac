@@ -85,8 +85,8 @@ def apply_app_appearance(mode: str) -> None:
     """Point NSApp at a fixed appearance so the titlebar and vibrancy follow
     the user's choice. 'system' clears the override. Never raises.
 
-    set_appearance() is a js_api method, and pywebview dispatches every
-    js_api call on a fresh worker thread -- so without this, setAppearance_
+    set_appearance() is a bridge call, and pywebview dispatches every
+    bridge call on a fresh worker thread -- so without this, setAppearance_
     would hit AppKit off the main thread. Route it through AppHelper.callAfter
     like every other AppKit entry point on this branch (_run_save_panel,
     native_setup). Safe to call from the main thread too (e.g. native_setup's
@@ -865,7 +865,8 @@ class HotkeyService:
 
 
 class Api:
-    """JS<->Python bridge exposed to the dashboard via pywebview."""
+    """What the dashboard talks to. Only BRIDGE_METHODS reach the page, via
+    bridge_functions; never pass this as js_api."""
 
     SPACE_JOIN_WINDOW_S = 300  # only join dictations this close together
 
