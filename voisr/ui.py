@@ -1399,6 +1399,38 @@ class Api:
         return {"ok": True}
 
 
+_NS_LEFT_MOUSE_DOWN, _NS_LEFT_MOUSE_UP, _NS_KEY_DOWN = 1, 2, 10
+_NS_COMMAND_FLAG = 1 << 20
+_CLOSE_EVENT_FRESH_S = 1.0
+
+
+def close_hides_window(event, ns_window, now) -> bool:
+    """Should this close only hide the dashboard?
+
+    pywebview fires the same `closing` event for the red button and for
+    applicationShouldTerminate_ (app-menu Quit, Dock Quit, logout), so the
+    event that triggered it is the only way to tell them apart. A click in
+    this window or ⌘W hides; anything else, including no event at all, is a
+    quit and must be allowed — refusing it would block logout.
+
+    currentEvent is the last event the app *took*, so a quit arriving as an
+    Apple Event can still see an old click. `now` (system uptime, the clock
+    NSEvent timestamps use) rules out anything that isn't this moment's."""
+    try:
+        if event is None or now - event.timestamp() > _CLOSE_EVENT_FRESH_S:
+            return False
+        kind = event.type()
+        if kind in (_NS_LEFT_MOUSE_DOWN, _NS_LEFT_MOUSE_UP):
+            # == is isEqual: on an NSWindow; the proxies needn't be identical
+            return ns_window is not None and event.window() == ns_window
+        if kind == _NS_KEY_DOWN:
+            return (event.charactersIgnoringModifiers() == "w"
+                    and bool(event.modifierFlags() & _NS_COMMAND_FLAG))
+    except Exception:
+        pass
+    return False
+
+
 def start_hotkey_service(service):
     """Start push-to-talk without letting a failure abort the rest of startup:
     on_started schedules the menu-bar item and window chrome after this, and
@@ -1440,6 +1472,31 @@ def main():
                                        min_size=(900, 620))
         api.attach_window(window)
         widget.create()
+
+        def on_closing():
+            # Closing the last pywebview window ends webview.start(), and the
+            # finally below then stops push-to-talk. The menu-bar item is the
+            # way back in, so the red button only hides. Returning False
+            # cancels the close; anything else lets it (and a quit) proceed.
+            try:
+                import AppKit
+                import Foundation
+                # pywebview's `native` is the NSWindow itself
+                if close_hides_window(
+                        AppKit.NSApp.currentEvent(),
+                        getattr(window, "native", None),
+                        Foundation.NSProcessInfo.processInfo().systemUptime()):
+                    window.hide()
+                    return False
+            except Exception:
+                pass
+            return True
+
+        try:
+            window.events.closing += on_closing
+        except Exception as e:  # startup must not die over this
+            print(f"Voisr: hide-on-close unavailable ({e}); closing the "
+                  "window will quit", flush=True)
 
         def menu_dictate():
             # Routed through HotkeyService (not Api directly): an NSMenuItem
