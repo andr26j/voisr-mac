@@ -11,3 +11,9 @@ venv_usable() {
   got="$("$venv/bin/python3" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)" || return 1
   [ "$got" = "$pyver" ]
 }
+
+# bundle_cdhash PATH: the code hash macOS pins an ad-hoc-signed app's
+# Input Monitoring / Accessibility grants to; empty when unsigned or absent.
+bundle_cdhash() {
+  codesign -dvvv "$1" 2>&1 | sed -n 's/^CDHash=//p' || true
+}

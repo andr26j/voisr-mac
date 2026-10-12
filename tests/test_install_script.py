@@ -62,3 +62,41 @@ def test_installer_checks_the_venv_version_instead_of_only_existence():
     assert "install_lib.sh" in src
     assert "venv_usable" in src
     assert '[ -d "$APPSUP/venv" ] ||' not in src
+
+
+# ---- L5 (2026-10-12 audit) ----
+
+def bundle_cdhash(path) -> str:
+    proc = subprocess.run(
+        ["bash", "-c", 'source "$1" && bundle_cdhash "$2"', "_", str(LIB), str(path)],
+        capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip()
+
+
+def test_bundle_cdhash_reads_an_ad_hoc_signature(tmp_path):
+    import shutil
+    binary = tmp_path / "tool"
+    shutil.copy("/usr/bin/true", binary)
+    subprocess.run(["codesign", "--force", "-s", "-", str(binary)],
+                   check=True, capture_output=True, timeout=30)
+    digest = bundle_cdhash(binary)
+    assert len(digest) == 40 and int(digest, 16) >= 0
+
+
+def test_bundle_cdhash_is_empty_when_there_is_nothing_to_read(tmp_path):
+    assert bundle_cdhash(tmp_path / "missing.app") == ""
+
+
+def test_installer_reports_grants_from_the_real_cdhash_not_a_guess():
+    # it printed "grants survive" even when an icon or Info.plist change had
+    # changed the cdhash, which silently revokes them
+    src = INSTALLER.read_text()
+    assert "grants survive" not in src
+    assert src.count("bundle_cdhash") >= 2
+    assert "tccutil reset" in src
+
+
+def test_installer_warns_when_the_old_version_is_still_running():
+    src = INSTALLER.read_text()
+    assert "pgrep" in src
