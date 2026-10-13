@@ -76,3 +76,25 @@ def test_a_probe_answering_none_stays_unknown():
         "accessibility": lambda: True,
     })
     assert out[0]["granted"] is None
+
+
+ALL_TRUE = {"microphone": lambda: True, "input_monitoring": lambda: True,
+            "accessibility": lambda: True}
+
+
+def test_listen_mode_lists_three_panes_and_marks_input_monitoring_as_the_hotkey():
+    out = permissions.states(probes=ALL_TRUE, mode="listen")
+    assert [p["key"] for p in out] == ["microphone", "input_monitoring", "accessibility"]
+    assert [p["key"] for p in out if p["hotkey"]] == ["input_monitoring"]
+    assert all(p["effective"] is True for p in out)
+
+
+def test_active_mode_drops_input_monitoring_and_marks_accessibility_as_the_hotkey():
+    out = permissions.states(probes=ALL_TRUE, mode="active")
+    assert [p["key"] for p in out] == ["microphone", "accessibility"]
+    assert [p["key"] for p in out if p["hotkey"]] == ["accessibility"]
+
+
+def test_hotkey_key_per_mode():
+    assert permissions.hotkey_key("listen") == "input_monitoring"
+    assert permissions.hotkey_key("active") == "accessibility"

@@ -1501,7 +1501,8 @@ class Api:
         return {"status": status, "state": state}
 
     def get_permissions(self):
-        return {"panes": permissions.states()}
+        mode = self.get_config().get("event_tap", "listen")
+        return {"panes": permissions.states(mode=mode)}
 
     def open_settings_pane(self, key):
         return {"ok": permissions.open_pane(key)}

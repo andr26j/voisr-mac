@@ -16,6 +16,19 @@ PANES = {
 ORDER = ["microphone", "input_monitoring", "accessibility"]
 
 
+def hotkey_key(mode: str) -> str:
+    """The pane whose grant the key tap needs in this mode (see keytap)."""
+    return "accessibility" if mode == "active" else "input_monitoring"
+
+
+def required_keys(mode: str) -> list[str]:
+    """Panes Voisr needs in this mode: an active tap has no use for Input
+    Monitoring, so it isn't shown (or asked for) at all."""
+    if mode == "active":
+        return [k for k in ORDER if k != "input_monitoring"]
+    return list(ORDER)
+
+
 def microphone_state(status: int):
     """AVAuthorizationStatus -> granted. 0 is "not determined": macOS has not
     asked yet and will on the first recording, so it is unknown, not denied.
@@ -50,10 +63,11 @@ DEFAULT_PROBES = {
 }
 
 
-def states(probes=None) -> list[dict]:
+def states(probes=None, mode: str = "listen") -> list[dict]:
     probes = probes if probes is not None else DEFAULT_PROBES
+    hotkey = hotkey_key(mode)
     out = []
-    for key in ORDER:
+    for key in required_keys(mode):
         label, url = PANES[key]
         probe = probes.get(key)
         try:
@@ -62,7 +76,8 @@ def states(probes=None) -> list[dict]:
         except Exception:
             granted = None  # unknown, never granted
         out.append({"key": key, "label": label,
-                    "granted": granted, "settings_url": url})
+                    "granted": granted, "settings_url": url,
+                    "hotkey": key == hotkey, "effective": True})
     return out
 
 
