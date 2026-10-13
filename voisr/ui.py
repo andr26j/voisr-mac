@@ -1791,8 +1791,9 @@ BRIDGE_METHODS = (
     "capture_hotkey", "clear_history", "copy_text", "delete_history_item",
     "export_history", "get_config", "get_history", "get_hotkey_status",
     "get_level", "get_models", "get_permissions", "get_pill_themes", "get_stats",
-    "hotkey_display", "open_settings_pane", "restore_history_item",
-    "save_text_file", "set_appearance", "set_config", "set_launch_at_login",
+    "hotkey_display", "open_settings_pane", "relaunch_app",
+    "reset_permission", "restore_history_item", "save_text_file",
+    "set_appearance", "set_config", "set_launch_at_login",
     "start_recording", "stop_recording", "take_config_notice",
 )
 

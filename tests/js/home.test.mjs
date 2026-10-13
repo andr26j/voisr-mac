@@ -27,6 +27,15 @@ const HOME_IDS = ["greeting", "perm-strip", "ptt-bar", "ptt-keycap", "ptt-key-na
                   "dock", "record-btn", "record-status", "record-error", "dock-time",
                   "nav-home"];
 
+/* Home polls permissions with a real setInterval while something is blocked.
+   Unref'd, a render that ends blocked can't keep the test process alive. */
+const realSetInterval = globalThis.setInterval;
+globalThis.setInterval = (...args) => {
+  const timer = realSetInterval(...args);
+  if (timer && typeof timer.unref === "function") timer.unref();
+  return timer;
+};
+
 const HISTORY = Array.from({ length: 7 }, (_, i) => ({
   id: `h${i}`, ts: 1_750_000_000 + i * 60, text: `dictation ${i}`, words: 10 + i, duration_s: 4,
 }));
@@ -152,7 +161,7 @@ test("home render() degrades one panel at a time -- a failed get_stats still lea
 test("home renderPermissions() replaces the whole panel when a grant is missing, and says what broke", async () => {
   const h = mountHome({ get_permissions: async () => ({ panes: [
     { key: "microphone", label: "Microphone", granted: true },
-    { key: "input_monitoring", label: "Input Monitoring", granted: false },
+    { key: "input_monitoring", label: "Input Monitoring", granted: false, hotkey: true },
     { key: "accessibility", label: "Accessibility", granted: null },
   ]}) });
 
@@ -237,7 +246,7 @@ test("home renderPermissions() keeps push-to-talk up on first run, when macOS ha
 test("home renderPermissions() leads with a real denial, not a mic that hasn't been asked yet", async () => {
   const h = mountHome({ get_permissions: async () => ({ panes: [
     { key: "microphone", label: "Microphone", granted: null },
-    { key: "input_monitoring", label: "Input Monitoring", granted: false },
+    { key: "input_monitoring", label: "Input Monitoring", granted: false, hotkey: true },
     { key: "accessibility", label: "Accessibility", granted: true },
   ]}) });
 
@@ -392,7 +401,7 @@ test("'Record from here instead' starts a dock recording rather than only focusi
   const { api, calls } = recordingApi();
   const h = mountHome({ ...api, get_permissions: async () => ({ panes: [
     { key: "microphone", label: "Microphone", granted: true },
-    { key: "input_monitoring", label: "Input Monitoring", granted: false },
+    { key: "input_monitoring", label: "Input Monitoring", granted: false, hotkey: true },
     { key: "accessibility", label: "Accessibility", granted: true },
   ]}) });
   await h.V.views.home.renderPermissions();
@@ -446,7 +455,7 @@ test("'Record from here instead' never stops a dock recording already running", 
   const { api, calls } = recordingApi();
   const h = mountHome({ ...api, get_permissions: async () => ({ panes: [
     { key: "microphone", label: "Microphone", granted: true },
-    { key: "input_monitoring", label: "Input Monitoring", granted: false },
+    { key: "input_monitoring", label: "Input Monitoring", granted: false, hotkey: true },
     { key: "accessibility", label: "Accessibility", granted: true },
   ]}) });
   await h.V.views.home.renderPermissions();
@@ -591,4 +600,73 @@ test("a recent-list refresh that fails mid-animation says so instead of an unhan
 
   const toastText = h.toast.children.map((c) => c.textContent).join("");
   assert.match(toastText, /Recent dictations failed to update/);
+});
+
+/* ---------- Task 7: a granted-but-refused hotkey grant, Reset/Relaunch, polling ---------- */
+
+// a fake container's textContent doesn't include its descendants
+const allText = (node) => [node.textContent || "", ...(node.children || []).map(allText)].join(" ");
+
+const STALE_API = {
+  get_permissions: async () => ({ panes: [
+    { key: "microphone", label: "Microphone", granted: true, hotkey: false, effective: true },
+    { key: "accessibility", label: "Accessibility", granted: true, hotkey: true, effective: false },
+  ]}),
+};
+
+test("a granted-but-not-effective hotkey pane blocks with Reset and Relaunch", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const h = mountHome(STALE_API);
+  await h.V.views.home.render();
+  assert.equal(h["perm-strip"].dataset.state, "attention");
+  const text = allText(h["perm-strip"]);
+  assert.match(text, /isn't honouring/);
+  assert.match(text, /Reset Accessibility/);
+  assert.match(text, /Relaunch Voisr/);
+  assert.equal(h["ptt-bar"].hidden, true, "the key doesn't work, so don't promise it");
+});
+
+test("active mode: two granted panes read as all granted", async () => {
+  const h = mountHome({ get_permissions: async () => ({ panes: [
+    { key: "microphone", label: "Microphone", granted: true, hotkey: false, effective: true },
+    { key: "accessibility", label: "Accessibility", granted: true, hotkey: true, effective: true },
+  ]}) });
+  await h.V.views.home.render();
+  assert.equal(h["perm-strip"].dataset.state, "ok");
+  assert.equal(h["perm-strip"].children[0].textContent,
+               "Microphone and Accessibility granted.");
+});
+
+test("while attention is needed, permissions re-render every second", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let calls = 0;
+  const h = mountHome({ get_permissions: async () => {
+    calls += 1;
+    return (await STALE_API.get_permissions());
+  } });
+  await h.V.views.home.render();
+  const before = calls;
+  t.mock.timers.tick(3000);
+  await settle();
+  assert.ok(calls >= before + 3, `expected ≥3 polls, got ${calls - before}`);
+});
+
+test("Reset and Relaunch call the bridge, and surface a failure as a toast", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const calls = [];
+  const h = mountHome({ ...STALE_API,
+    reset_permission: async (key) => { calls.push(["reset", key]); return { ok: true }; },
+    relaunch_app: async () => { calls.push(["relaunch"]); return { ok: false, error: "no bundle" }; },
+  });
+  await h.V.views.home.render();
+  const actions = h["perm-strip"].children[0].children.find((c) => c.className === "perm-actions");
+  const [reset, relaunch] = actions.children;
+  const toastText = () => h.toast.children.map((c) => c.textContent).join("|");
+  reset.dispatch("click", { target: reset });
+  await settle();
+  assert.match(toastText(), /switch Voisr on under Accessibility/);
+  relaunch.dispatch("click", { target: relaunch });
+  await settle();
+  assert.match(toastText(), /no bundle/);
+  assert.deepEqual(calls, [["reset", "accessibility"], ["relaunch"]]);
 });

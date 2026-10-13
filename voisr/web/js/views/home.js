@@ -5,11 +5,17 @@ window.Voisr = window.Voisr || {};
      consequence, not the name of the setting. */
   const PERM_BREAKS = {
     microphone: "Voisr can't hear you at all until macOS grants Microphone.",
-    input_monitoring: "Voisr can't see the key until macOS grants Input Monitoring. " +
-                      "Until then, holding it does nothing — everything else still works.",
     accessibility: "Voisr can't paste for you until macOS grants Accessibility. " +
                    "Dictations are copied to your clipboard instead.",
   };
+
+  const hotkeyBreak = (label) =>
+    `Voisr can't see the key until macOS grants ${label}. ` +
+    "Until then, holding it does nothing — everything else still works.";
+  const STALE_BREAK =
+    "Voisr is listed and switched on, but macOS still blocks it — this " +
+    "usually happens after an update. Reset clears the stale entry; then " +
+    "switch Voisr on again in the pane that opens.";
 
   const MIC_FIRST_ASK = "asked on your first dictation";
 
@@ -23,7 +29,17 @@ window.Voisr = window.Voisr || {};
      recording, and Voisr isn't even listed in the Microphone pane until then.
      So it never blocks — holding the key is how the user gets asked. */
   const micPending = (p) => p.key === "microphone" && p.granted === null;
-  const blocking = (panes) => panes.filter((p) => p.granted !== true && !micPending(p));
+  /* Granted in System Settings, yet macOS still refuses it (the hotkey
+     pane's `effective` is false) — the stale grant an update leaves behind. */
+  const stale = (p) => p.effective === false;
+  const blocking = (panes) =>
+    panes.filter((p) => stale(p) || (p.granted !== true && !micPending(p)));
+
+  const listLabels = (panes) => {
+    const names = panes.map((p) => p.label);
+    return names.length < 2 ? names.join("")
+      : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  };
 
   function openPane(key) {
     return async () => {
@@ -41,35 +57,60 @@ window.Voisr = window.Voisr || {};
      chip above a hero still saying "hold this key to dictate" was a lie. */
   function permBlock(panes) {
     const bad = blocking(panes);
-    // worst first: a false is a known denial, a null is merely unverified
-    const lead = bad.find((p) => p.granted === false) || bad[0];
+    // worst first: a stale grant, then a known denial, then a merely unverified null
+    const lead = bad.find(stale) || bad.find((p) => p.granted === false) || bad[0];
+    const isStale = stale(lead);
+    const heading = isStale ? `macOS isn't honouring the ${lead.label} switch`
+      : lead.hotkey ? "Push-to-talk isn't working"
+      : `${lead.label} is switched off`;
+    const body = isStale ? STALE_BREAK
+      : lead.hotkey ? hotkeyBreak(lead.label)
+      : PERM_BREAKS[lead.key] || "";
 
-    const actions = V.ui.el("div", { class: "perm-actions" },
-      V.ui.el("button", {
+    const actions = V.ui.el("div", { class: "perm-actions" });
+    if (isStale) {
+      actions.append(
+        V.ui.el("button", { type: "button", class: "btn-primary",
+          text: `Reset ${lead.label}`, on: { click: async () => {
+            const res = await V.ui.tryApi(V.api().reset_permission(lead.key),
+                                          `Reset ${lead.label}`);
+            if (res && res.ok) V.ui.toast(`Reset — switch Voisr on under ${lead.label}`);
+            else if (res && res.error) V.ui.toast(res.error);
+          } } }),
+        V.ui.el("button", { type: "button", class: "btn-secondary",
+          text: "Relaunch Voisr", on: { click: async () => {
+            const res = await V.ui.tryApi(V.api().relaunch_app(), "Relaunch");
+            if (res && res.ok === false) V.ui.toast(res.error || "Couldn't relaunch");
+          } } }));
+    } else {
+      actions.append(V.ui.el("button", {
         type: "button", class: "btn-primary", text: `Open ${lead.label}`,
         on: { click: openPane(lead.key) },
       }));
-    // Recording from the dock still works without Input Monitoring or
-    // Accessibility; without the microphone nothing does, so no second path.
-    if (lead.key !== "microphone") {
-      actions.append(V.ui.el("button", {
-        type: "button", class: "btn-secondary", text: "Record from here instead",
-        // starts the dock recording: a bare .focus() shows no ring after a
-        // mouse click, so the button looked like it did nothing
-        // (only from idle: toggleRecord would stop a dock recording already
-        // running, which is not what "Record" says)
-        on: { click: () => {
-          V.ui.$("#record-btn").focus();
-          if (recState === "idle") toggleRecord();
-        } },
-      }));
+      // Recording from the dock still works without Input Monitoring or
+      // Accessibility; without the microphone nothing does, so no second path.
+      if (lead.key !== "microphone") {
+        actions.append(V.ui.el("button", {
+          type: "button", class: "btn-secondary", text: "Record from here instead",
+          // starts the dock recording: a bare .focus() shows no ring after a
+          // mouse click, so the button looked like it did nothing
+          // (only from idle: toggleRecord would stop a dock recording already
+          // running, which is not what "Record" says)
+          on: { click: () => {
+            V.ui.$("#record-btn").focus();
+            if (recState === "idle") toggleRecord();
+          } },
+        }));
+      }
     }
 
     const checks = V.ui.el("ul", { class: "perm-checks" },
       ...panes.map((p) => {
-        const state = p.granted === true ? "ok" : p.granted === false ? "denied" : "unknown";
+        const state = stale(p) ? "denied"
+          : p.granted === true ? "ok" : p.granted === false ? "denied" : "unknown";
         const mark = state === "ok" ? "\u2713" : state === "denied" ? "!" : "?";
-        const why = state === "ok" ? "granted"
+        const why = stale(p) ? "switched on, not working"
+          : state === "ok" ? "granted"
           : micPending(p) ? MIC_FIRST_ASK : PERM_WHY[p.key] || "";
         return V.ui.el("li", { class: `perm-${state}-row` },
           V.ui.el("span", { class: "perm-mark", "aria-hidden": "true", text: mark }),
@@ -79,11 +120,12 @@ window.Voisr = window.Voisr || {};
 
     return V.ui.el("div", { class: "perm-block" },
       V.ui.el("div", { class: "perm-glyph", html: V.ui.ICONS.keyboard }),
-      V.ui.el("h2", { text: lead.key === "input_monitoring"
-                        ? "Push-to-talk isn't working" : `${lead.label} is switched off` }),
-      V.ui.el("p", { text: PERM_BREAKS[lead.key] || "" }),
+      V.ui.el("h2", { text: heading }),
+      V.ui.el("p", { text: body }),
       actions, checks);
   }
+
+  let permPoll = null;
 
   async function renderPermissions() {
     const strip = V.ui.$("#perm-strip");
@@ -93,13 +135,26 @@ window.Voisr = window.Voisr || {};
     // strip beside a toast explaining the staleness beats an empty one.
     if (!res || !res.panes) return;
     const panes = res.panes;
+    const bad = blocking(panes);
+    // Granting happens in System Settings, so while something is blocked the
+    // strip re-checks itself every second. Started and stopped before the
+    // sig early-return so an unchanged attention state keeps polling.
+    if (bad.length > 0 && permPoll === null) {
+      permPoll = setInterval(() => {
+        if (document.getElementById("view-home").hidden) return;
+        renderPermissions().catch(() => {});
+        renderListener().catch(() => {});
+      }, 1000);
+    } else if (bad.length === 0 && permPoll !== null) {
+      clearInterval(permPoll);
+      permPoll = null;
+    }
     // #perm-strip is aria-live, and replacing its children makes a screen
     // reader read it again: on every window focus, it re-announced a strip
     // that hadn't changed. Only re-render when a grant actually moved.
-    const sig = JSON.stringify(panes.map((p) => [p.key, p.granted]));
+    const sig = JSON.stringify(panes.map((p) => [p.key, p.granted, p.effective]));
     if (strip.dataset.sig === sig) return;
     strip.dataset.sig = sig;
-    const bad = blocking(panes);
 
     if (bad.length === 0 && panes.some(micPending)) {
       // first run: nothing is wrong yet, the first dictation will ask
@@ -117,7 +172,7 @@ window.Voisr = window.Voisr || {};
       // a healthy app should not shout — one quiet line, not three badges
       strip.replaceChildren(V.ui.el("p", {
         class: "perm-ok",
-        text: "Microphone, Input Monitoring and Accessibility all granted.",
+        text: `${listLabels(panes)} granted.`,
       }));
       strip.dataset.state = "ok";
       if (ptt) ptt.hidden = false;
@@ -127,7 +182,7 @@ window.Voisr = window.Voisr || {};
     strip.dataset.state = "attention";
     strip.replaceChildren(permBlock(panes));
     // the status line promises a key that does not currently work
-    if (ptt) ptt.hidden = bad.some((p) => p.key !== "accessibility");
+    if (ptt) ptt.hidden = bad.some((p) => p.hotkey || p.key === "microphone");
   }
 
   // granting a permission happens in System Settings, outside the app;
