@@ -134,3 +134,15 @@ test("updates to one list run in order, the later one wins", async () => {
   await Promise.all([first, second]);
   assert.deepEqual(t.keys(), ["z", "a", "c"]);
 });
+
+test("a row pushed out and wanted back mid-fade comes back as a new row, not the fading one", async () => {
+  const t = setup();
+  await t.L.sync(t.list, t.entries(["a", "b", "c", "d", "e"]));
+  const exists = { stillExists: () => true, wasKnown: () => true };
+  const fading = t.list.children[4];
+  t.L.sync(t.list, t.entries(["n", "a", "b", "c", "d"]), exists);   // e fades under the edge
+  await t.L.sync(t.list, t.entries(["a", "b", "c", "d", "e"]), exists);  // and is wanted straight back
+  await wait(250);
+  assert.deepEqual(t.keys(), ["a", "b", "c", "d", "e"], "e is still listed once its old node's fade ends");
+  assert.ok(!t.list.children.includes(fading), "the fading node finished leaving");
+});

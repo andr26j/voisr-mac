@@ -133,9 +133,12 @@ window.Voisr.lists = (function () {
     }));
   }
 
-  /* Rows pushed past the end: fade under the edge, then go. */
+  /* Rows pushed past the end: fade under the edge, then go. Each gives up
+     its key first, so a later update that wants that item back builds a
+     fresh row instead of reusing one that is about to remove itself. */
   function fadeAway(nodes) {
     for (const n of nodes) {
+      delete n.dataset.key;
       n.classList.add("is-leaving");
       n.style.pointerEvents = "none";
       const anim = canAnimate(n) ? n.animate([{ opacity: 1 }, { opacity: 0 }], { duration: LEAVE_MS, fill: "forwards" }) : null;
