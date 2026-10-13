@@ -119,21 +119,29 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   to   { opacity: 1; transform: none; }
 }
 
-.item-list .item-row { animation: row-in var(--base) var(--ease) both; }
+/* The row stagger plays when a page opens or a list first fills
+   (js/lists.js adds .is-staggering), never on a refresh: a refresh moves
+   only the rows that changed. */
+.item-list.is-staggering .item-row { animation: row-in var(--base) var(--ease) both; }
 /* stagger only the first ten rows — a long list must never crawl */
-.item-list .item-row:nth-child(1) { animation-delay: 0ms; }
-.item-list .item-row:nth-child(2) { animation-delay: 20ms; }
-.item-list .item-row:nth-child(3) { animation-delay: 40ms; }
-.item-list .item-row:nth-child(4) { animation-delay: 60ms; }
-.item-list .item-row:nth-child(5) { animation-delay: 80ms; }
-.item-list .item-row:nth-child(6) { animation-delay: 100ms; }
-.item-list .item-row:nth-child(7) { animation-delay: 120ms; }
-.item-list .item-row:nth-child(8) { animation-delay: 140ms; }
-.item-list .item-row:nth-child(9) { animation-delay: 160ms; }
-.item-list .item-row:nth-child(n+10) { animation-delay: 180ms; }
+.item-list.is-staggering .item-row:nth-child(1) { animation-delay: 0ms; }
+.item-list.is-staggering .item-row:nth-child(2) { animation-delay: 20ms; }
+.item-list.is-staggering .item-row:nth-child(3) { animation-delay: 40ms; }
+.item-list.is-staggering .item-row:nth-child(4) { animation-delay: 60ms; }
+.item-list.is-staggering .item-row:nth-child(5) { animation-delay: 80ms; }
+.item-list.is-staggering .item-row:nth-child(6) { animation-delay: 100ms; }
+.item-list.is-staggering .item-row:nth-child(7) { animation-delay: 120ms; }
+.item-list.is-staggering .item-row:nth-child(8) { animation-delay: 140ms; }
+.item-list.is-staggering .item-row:nth-child(9) { animation-delay: 160ms; }
+.item-list.is-staggering .item-row:nth-child(n+10) { animation-delay: 180ms; }
 
 @keyframes row-in { from { opacity: 0; } to { opacity: 1; } }
 
+/* a new, restored or edited row: holds the accent for the first 35%, then fades */
+.item-row.is-landed { animation: wash 1.6s linear; }
+@keyframes wash { 0%, 35% { background: var(--accent-soft); } 100% { background: transparent; } }
+
 @media (prefers-reduced-motion: reduce) {
-  .view.entering, .item-list .item-row { animation: none; }
+  /* the wash stays: it is colour, not movement */
+  .view.entering, .item-list.is-staggering .item-row { animation: none; }
 }

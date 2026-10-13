@@ -247,6 +247,8 @@ window.Voisr = window.Voisr || {};
      to throw and take the whole pane down with it, leaving a blank screen
      and no message. Each section is guarded on its own null; the try/catch
      is the backstop for anything that still manages to throw. */
+  let knownIds = null;  // every history id at the last render (see below)
+
   async function render() {
     const $ = V.ui.$;
     try {
@@ -279,8 +281,21 @@ window.Voisr = window.Voisr || {};
 
       if (history) {
         const recent = history.slice(0, 5);
-        $("#recent-list").replaceChildren(
-          ...recent.map((item) => V.ui.itemRow(item, { onCopy, onDelete })));
+        /* Keyed, so a refresh moves only what changed (js/lists.js). The
+           whole history decides each row's story: an id still in it just
+           fell out of the top five (fades under the card edge) or slid into
+           it (fills from below); an id that was never seen is new or
+           restored (lands with the wash); one that is gone was deleted. */
+        const all = new Set(history.map((item) => item.id));
+        const known = knownIds;
+        knownIds = all;
+        V.lists.sync($("#recent-list"), recent.map((item) => ({
+          key: item.id, sig: item.id,
+          build: () => V.ui.itemRow(item, { onCopy, onDelete }),
+        })), {
+          stillExists: (id) => all.has(id),
+          wasKnown: (id) => !!known && known.has(id),
+        });
         $("#recent-empty").hidden = recent.length > 0;
       }
     } catch (e) {

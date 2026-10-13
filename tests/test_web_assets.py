@@ -4,7 +4,7 @@ from pathlib import Path
 WEB = Path(__file__).resolve().parent.parent / "voisr" / "web"
 INDEX = WEB / "index.html"
 
-JS_FILES = ["js/api.js", "js/ui.js", "js/palette.js",
+JS_FILES = ["js/api.js", "js/ui.js", "js/lists.js", "js/palette.js",
             "js/meter.js", "js/dock-meter.js", "js/views/home.js", "js/views/history.js",
             "js/views/dictionary.js", "js/views/settings.js", "js/main.js"]
 CSS_FILES = ["css/tokens.css", "css/base.css",
@@ -446,7 +446,9 @@ def test_view_transition_class_exists_and_respects_reduced_motion():
     assert rule, "expected an 'animation: none' rule inside the reduced-motion block"
     disabled_selectors = rule.group(1)
     assert ".view.entering" in disabled_selectors
-    assert ".item-list .item-row" in disabled_selectors
+    assert ".item-list.is-staggering .item-row" in disabled_selectors
+    # the landing wash is colour, not movement: reduced motion keeps it
+    assert ".item-row.is-landed" not in disabled_selectors
 
 
 def test_show_applies_the_entering_class():

@@ -4,7 +4,7 @@ import { loadVoisr } from "./load.mjs";
 import { makeNode } from "./dom.mjs";
 
 /* ui.js first: both views call V.ui.el / V.ui.$ at module scope. */
-const { V } = loadVoisr(["js/ui.js", "js/views/home.js", "js/views/history.js"]);
+const { V } = loadVoisr(["js/ui.js", "js/lists.js", "js/views/home.js", "js/views/history.js"]);
 
 /* ---------- home: trendBars + weekDelta ---------- */
 
@@ -163,7 +163,7 @@ const NODE_IDS = ["history-search", "history-empty", "history-more",
    the mock's. t.mock restores them when the test ends. */
 async function mountHistory(t) {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const env = loadVoisr(["js/ui.js", "js/api.js", "js/views/history.js"]);
+  const env = loadVoisr(["js/ui.js", "js/lists.js", "js/api.js", "js/views/history.js"]);
   // js/api.js resolves the bridge lazily as `window.pywebview.api`, so
   // stubbing the property is enough -- no need to replace V.api itself.
   env.window.pywebview = { api: { get_history: async () => HISTORY.map((i) => ({ ...i })) } };
@@ -265,7 +265,7 @@ const UNDO_IDS = [...NODE_IDS, "toast"];
 
 async function mountHistoryWithToast(t, api) {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const env = loadVoisr(["js/ui.js", "js/api.js", "js/views/history.js"]);
+  const env = loadVoisr(["js/ui.js", "js/lists.js", "js/api.js", "js/views/history.js"]);
   let live = HISTORY.map((i) => ({ ...i }));
   const restoreCalls = [];
   env.window.pywebview = { api: {
@@ -398,7 +398,7 @@ test("a failed delete does not offer an Undo for something still present", async
 
 test("history render surfaces a bridge failure rather than blanking the pane", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const env = loadVoisr(["js/ui.js", "js/api.js", "js/views/history.js"]);
+  const env = loadVoisr(["js/ui.js", "js/lists.js", "js/api.js", "js/views/history.js"]);
   let calls = 0;
   env.window.pywebview = { api: { get_history: async () => {
     calls++;

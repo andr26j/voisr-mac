@@ -92,15 +92,15 @@ window.Voisr = window.Voisr || {};
 
   /* One data source, so the same rule as history's render(): on a failed
      load keep the last good list rather than blanking the pane. */
-  async function render() {
+  async function render({ animate } = {}) {
     try {
-      await renderInner();
+      await renderInner(animate);
     } catch (e) {
       V.ui.toast("Dictionary failed to load");
     }
   }
 
-  async function renderInner() {
+  async function renderInner(animate) {
     const cfg = await V.ui.tryApi(V.api().get_config(), "Load dictionary");
     if (!cfg) return;
     const all = Object.entries(cfg.dictionary || {});
@@ -116,8 +116,11 @@ window.Voisr = window.Voisr || {};
     const shown = all.filter(([s, w]) =>
       !filter || s.toLowerCase().includes(filter) || w.toLowerCase().includes(filter));
     document.getElementById("dict-empty").hidden = shown.length > 0;
-    document.getElementById("dict-list")
-      .replaceChildren(...shown.map(([s, w]) => entryRow(s, w)));
+    // keyed: an add, edit or removal moves only that row (js/lists.js);
+    // a filter keystroke applies instantly
+    V.lists.sync(document.getElementById("dict-list"), shown.map(([s, w]) => ({
+      key: s, sig: w, build: () => entryRow(s, w),
+    })), { animate: animate !== false });
   }
 
   async function addEntry(e) {
@@ -143,7 +146,7 @@ window.Voisr = window.Voisr || {};
   function initSearch() {
     document.getElementById("dict-search").addEventListener("input", (e) => {
       filter = e.target.value.trim().toLowerCase();
-      render();
+      render({ animate: false });
     });
   }
 

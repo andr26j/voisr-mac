@@ -44,6 +44,9 @@ window.Voisr = window.Voisr || {};
     target.addEventListener("animationend", finishEntering, { once: true, signal: controller.signal });
     target.addEventListener("animationcancel", finishEntering, { once: true, signal: controller.signal });
 
+    // opening a page replays the row stagger on what is already there
+    if (V.lists) target.querySelectorAll(".item-list").forEach((list) => V.lists.stagger(list));
+
     if (view === "home") V.views.home.render();
     if (view === "history") V.views.history.render();
     if (view === "dictionary") V.views.dictionary.render();

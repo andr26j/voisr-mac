@@ -54,7 +54,7 @@ const OK_API = {
    would then have to mock away for no benefit. Same shape either way --
    `V.api()` returns the bridge object. */
 function mountHome(api) {
-  const env = loadVoisr(["js/ui.js", "js/views/home.js"]);
+  const env = loadVoisr(["js/ui.js", "js/lists.js", "js/views/home.js"]);
   const nodes = {};
   for (const id of HOME_IDS) {
     nodes[id] = makeNode(id === "recent-list" ? "ul" : "div");

@@ -105,7 +105,14 @@ window.Voisr = window.Voisr || {};
      This is what a search keystroke drives (via applyQuery); it must never
      hit the API, or every keystroke would re-read and re-sort the entire
      JSONL in Python for a filter that's cheap to do in JS. */
-  function renderList() {
+  let knownIds = null;      // every loaded id at the last data render
+
+  /* Rebuilds from the already-loaded `items` array. Keyed (js/lists.js):
+     day groups by label, rows by id, so a refresh moves only what changed.
+     `animate` is set by render() -- a real data change. A search keystroke
+     or "Load more" applies instantly. Runs serialised, so a refresh that
+     lands mid-animation waits its turn. */
+  function renderList({ animate = false } = {}) {
     const visible = items.filter(matches);
     flat = visible.slice(0, shown);
     document.getElementById("history-empty").hidden = visible.length > 0;
@@ -117,22 +124,10 @@ window.Voisr = window.Voisr || {};
       if (!groups.has(day)) groups.set(day, []);
       groups.get(day).push(item);
     }
-
-    const container = document.getElementById("history-groups");
-    container.replaceChildren(...[...groups.entries()].map(([day, rows]) =>
-      V.ui.el("div", { class: "day-group" },
-        V.ui.el("div", { class: "day-label", text: day }),
-        V.ui.el("div", { class: "card" },
-          V.ui.el("ul", { class: "item-list" },
-            ...rows.map((item) => {
-              const row = V.ui.itemRow(item, {
-                onCopy: onCopy, onDelete: onDelete,
-              });
-              const txt = row.querySelector(".txt");
-              txt.replaceChildren(...highlighted(item.text, query));
-              row.addEventListener("click", () => row.classList.toggle("expanded"));
-              return row;
-            }))))));
+    const known = knownIds;
+    knownIds = new Set(items.map((item) => item.id));
+    const ids = knownIds;
+    const q = query;
 
     // `flat` was just rebuilt (delete / Load more / search / background
     // refresh can all land here) and row indices may have shifted, so any
@@ -142,6 +137,83 @@ window.Voisr = window.Voisr || {};
     // user must arrow again to re-select, and `selectedItem()` above
     // refuses to act on anything until they do.
     cursor = -1;
+
+    return V.lists.serial(document.getElementById("history-groups"),
+                          () => syncGroups(groups, { animate, known, ids, q }));
+  }
+
+  function buildRow(item, q) {
+    const row = V.ui.itemRow(item, { onCopy: onCopy, onDelete: onDelete });
+    row.querySelector(".txt").replaceChildren(...highlighted(item.text, q));
+    row.addEventListener("click", () => row.classList.toggle("expanded"));
+    return row;
+  }
+
+  /* Returns a promise only when it animates (see V.lists.serial). */
+  function syncGroups(groups, opts) {
+    const container = document.getElementById("history-groups");
+    const wasEmpty = container.children.length === 0;
+    const motion = opts.animate && !wasEmpty && V.lists.canAnimate(container);
+    if (!motion) {
+      applyGroups(container, groups, opts);
+      if (wasEmpty && opts.animate) {
+        for (const group of Array.from(container.children)) V.lists.stagger(group.querySelector(".item-list"));
+      }
+      return undefined;
+    }
+    return animateGroups(container, groups, opts);
+  }
+
+  async function animateGroups(container, groups, opts) {
+    const L = V.lists;
+    const { ids } = opts;
+    const listOf = (group) => group.querySelector(".item-list");
+
+    // deleted rows leave first; a day that empties leaves as a whole
+    const leaving = [];
+    for (const group of Array.from(container.children)) {
+      if (!groups.has(group.dataset.key)) { leaving.push(group); continue; }
+      for (const row of Array.from(listOf(group).children)) {
+        if (!ids.has(row.dataset.key)) leaving.push(row);
+      }
+    }
+    if (leaving.length) await L.leave(leaving);
+
+    const before = !L.reduced()
+      ? L.measure(Array.from(container.children).flatMap((group) =>
+          [group.querySelector(".day-label"), ...Array.from(listOf(group).children)]))
+      : new Map();
+
+    const { fresh, enteredRows } = applyGroups(container, groups, opts);
+    L.play(before);
+    // a new day rises in as one piece; its rows only take the wash
+    for (const group of fresh) L.enter(group, "group");
+    for (const [row, kind, inFreshGroup] of enteredRows) {
+      if (inFreshGroup) { if (kind === "landed") L.wash(row); }
+      else L.enter(row, kind);
+    }
+  }
+
+  /* Keyed, motion-free: day groups by label, rows by id. */
+  function applyGroups(container, groups, { known, q }) {
+    const L = V.lists;
+    const listOf = (group) => group.querySelector(".item-list");
+    const { entered: newGroups } = L.apply(container, [...groups.keys()].map((day) => ({
+      key: day, sig: day,
+      build: () => V.ui.el("div", { class: "day-group" },
+        V.ui.el("div", { class: "day-label", text: day }),
+        V.ui.el("div", { class: "card" }, V.ui.el("ul", { class: "item-list" }))),
+    })));
+    const fresh = new Set(newGroups.map(([group]) => group));
+    const enteredRows = [];
+    for (const group of Array.from(container.children)) {
+      const rows = groups.get(group.dataset.key) || [];
+      const { entered } = L.apply(listOf(group), rows.map((item) => ({
+        key: item.id, sig: q, build: () => buildRow(item, q),
+      })), { wasKnown: (id) => !!known && known.has(id) });
+      for (const [row, kind] of entered) enteredRows.push([row, kind, fresh.has(group)]);
+    }
+    return { fresh, enteredRows };
   }
 
   /* Genuine data-changing entry point: refetches from Python then rebuilds.
@@ -159,7 +231,7 @@ window.Voisr = window.Voisr || {};
       const loaded = await V.ui.tryApi(V.api().get_history(), "Load history");
       if (!loaded) return;
       items = loaded;
-      renderList();
+      await renderList({ animate: true });
     } catch (e) {
       V.ui.toast("History failed to load");
     }
