@@ -126,9 +126,10 @@ window.Voisr = window.Voisr || {};
 
   /* Rebuilds from the already-loaded `items` array. Keyed (js/lists.js):
      day groups by label, rows by id, so a refresh moves only what changed.
-     `animate` is set by render() -- a real data change. A search keystroke
-     or "Load more" applies instantly. Runs serialised, so a refresh that
-     lands mid-animation waits its turn. */
+     `animate` is set by render() -- a real data change, and "Load more"
+     too, which refetches through render(): its new rows rise in as fill.
+     A search keystroke applies instantly. Runs serialised, so a refresh
+     that lands mid-animation waits its turn. */
   function renderList({ animate = false } = {}) {
     const visible = items.filter(matches);
     flat = visible.slice(0, shown);
