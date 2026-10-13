@@ -1,4 +1,8 @@
-"""Minimal listen-only keyboard tap.
+"""Minimal keyboard tap: listen-only, or active pass-through.
+
+An "active" tap (kCGEventTapOptionDefault) needs only Accessibility; a
+listen-only tap needs Input Monitoring. The active tap returns every event
+unchanged — it observes exactly like the listen-only one.
 
 Why not pynput's Listener: it reads the keyboard layout via Text Input
 Services on its own listener thread (keycode_context in _run). TIS is a
@@ -11,10 +15,13 @@ keycodes, so this tap skips character translation entirely.
 It also re-enables the tap if macOS disables it by timeout — a pynput
 weakness (a disabled tap stays dead there).
 """
+import importlib
 import os
 import threading
 
 _OWN_PID = os.getpid()
+
+TAP_MODES = ("listen", "active")
 
 
 class QuartzKeyListener:
@@ -24,18 +31,30 @@ class QuartzKeyListener:
           "flags" (modifier edges: Fn, Option, Command, ...)
     """
 
-    def __init__(self, handler):
+    def __init__(self, handler, mode="listen", quartz=None):
+        if mode not in TAP_MODES:
+            raise ValueError(f"unknown tap mode: {mode!r}")
         self._handler = handler
+        self._mode = mode
+        self._quartz = quartz
         self._loop = None
         self._thread = None
+        self._started = threading.Event()
         self.running = False
+        self.state = "starting"
+
+    def wait_started(self, timeout: float) -> str:
+        """Block until the tap is running or has failed; return state."""
+        self._started.wait(timeout)
+        return self.state
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def _run(self) -> None:
-        import Quartz
+        Quartz = self._quartz if self._quartz is not None \
+            else importlib.import_module("Quartz")
 
         mask = (Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown)
                 | Quartz.CGEventMaskBit(Quartz.kCGEventKeyUp)
@@ -67,11 +86,17 @@ class QuartzKeyListener:
                 pass  # a callback error must never take down the tap
             return event
 
+        option = (Quartz.kCGEventTapOptionDefault if self._mode == "active"
+                  else Quartz.kCGEventTapOptionListenOnly)
         tap = Quartz.CGEventTapCreate(
             Quartz.kCGSessionEventTap, Quartz.kCGHeadInsertEventTap,
-            Quartz.kCGEventTapOptionListenOnly, mask, callback, None)
+            option, mask, callback, None)
         if tap is None:
-            return  # no Input Monitoring permission yet; caller respawns later
+            # listen: no Input Monitoring; active: no Accessibility — or a
+            # grant macOS lists but no longer honours. Caller decides which.
+            self.state = "failed"
+            self._started.set()
+            return
         tap_holder["tap"] = tap
         source = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
         self._loop = Quartz.CFRunLoopGetCurrent()
@@ -79,14 +104,18 @@ class QuartzKeyListener:
                                   Quartz.kCFRunLoopDefaultMode)
         Quartz.CGEventTapEnable(tap, True)
         self.running = True
+        self.state = "running"
+        self._started.set()
         try:
             Quartz.CFRunLoopRun()
         finally:
             self.running = False
+            self.state = "stopped"
             self._loop = None
 
     def stop(self) -> None:
-        import Quartz
+        Quartz = self._quartz if self._quartz is not None \
+            else importlib.import_module("Quartz")
         loop, self._loop = self._loop, None
         if loop is not None:
             try:
