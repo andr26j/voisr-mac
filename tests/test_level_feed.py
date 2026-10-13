@@ -419,3 +419,25 @@ def test_panel_leaves_room_for_the_entrance_rise():
     headroom or the first frames are clipped."""
     from voisr.ui import RecordingWidget
     assert RecordingWidget.HEIGHT - 44 >= 12
+
+
+# ---------- the dashboard dock reads the same level ----------
+
+def test_get_level_is_the_dock_bridge_to_the_live_level(tmp_path):
+    from voisr.history import HistoryStore
+    from voisr.ui import Api, BRIDGE_METHODS
+    assert "get_level" in BRIDGE_METHODS
+    api = Api(config_path=tmp_path / "config.json",
+              history=HistoryStore(tmp_path / "h.jsonl"),
+              recorder_factory=lambda: MeteredRecorder(0.3),
+              transcribe_fn=lambda wav: "hello",
+              clock=lambda: 1.0,
+              paste_fn=lambda text: True,
+              clipboard_fn=lambda text: None)
+    try:
+        assert api.get_level() is None
+        api.start_recording()
+        assert api.get_level() == 0.3
+        api.stop_recording()
+    finally:
+        api.close()

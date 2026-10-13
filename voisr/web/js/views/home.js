@@ -302,6 +302,17 @@ window.Voisr = window.Voisr || {};
   let tickTimer = null;
   let doneTimer = null;
   let elapsed = 0;
+  let dockMeter = null;
+
+  /* The dock's bars follow the live mic level (js/dock-meter.js), polled
+     only while this dock records. Absent in tests that don't load it. */
+  function wave() {
+    if (!dockMeter && V.dockMeter) {
+      const el = V.ui.$("#dock-wave");
+      if (el) dockMeter = V.dockMeter.create({ wave: el, readLevel: () => V.api().get_level() });
+    }
+    return dockMeter;
+  }
 
   function stopTick() {
     clearInterval(tickTimer);
@@ -347,6 +358,7 @@ window.Voisr = window.Voisr || {};
       elapsed = 0;
       showElapsed();
       setDockState("recording", "Listening — click again to finish");
+      if (wave()) wave().start();
       btn.setAttribute("aria-label", "Stop recording");
       stopTick();
       tickTimer = setInterval(() => { elapsed += 1; showElapsed(); }, 1000);
@@ -358,6 +370,7 @@ window.Voisr = window.Voisr || {};
     recState = "processing";
     stopTick();
     setDockState("processing", "Transcribing on this Mac…");
+    if (wave()) wave().settle();
     // Reset the button state before anything can return: a bridge throw here
     // used to leave recState stuck on "processing", which killed the record
     // button for the rest of the session.
@@ -366,6 +379,7 @@ window.Voisr = window.Voisr || {};
     recState = "idle";
     renderListener().catch(() => {});
 
+    if (wave()) wave().idle();
     if (!res) {
       setDockState(null, "Click to record here instead");
       errEl.textContent = "Transcription failed.";

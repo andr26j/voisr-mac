@@ -1052,6 +1052,11 @@ class Api:
         Read by the pill's 30 Hz feed; deliberately not a bridge method."""
         return self._recordings.active_level()
 
+    def get_level(self):
+        """The dock's 30 Hz poll while it records: the live mic level
+        (0..1), or None when nothing is metered. Bridge method."""
+        return self.current_level()
+
     def note_user_typing(self):
         """Record manual typing without blocking the event-tap callback."""
         with self._paste_state_lock:
@@ -1653,7 +1658,7 @@ def install_dock_reopen(on_reopen, delegate_cls=None) -> bool:
 BRIDGE_METHODS = (
     "capture_hotkey", "clear_history", "copy_text", "delete_history_item",
     "export_history", "get_config", "get_history", "get_hotkey_status",
-    "get_models", "get_permissions", "get_pill_themes", "get_stats",
+    "get_level", "get_models", "get_permissions", "get_pill_themes", "get_stats",
     "hotkey_display", "open_settings_pane", "restore_history_item",
     "save_text_file", "set_appearance", "set_config", "set_launch_at_login",
     "start_recording", "stop_recording", "take_config_notice",
