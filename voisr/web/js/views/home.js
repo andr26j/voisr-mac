@@ -360,7 +360,9 @@ window.Voisr = window.Voisr || {};
         })), {
           stillExists: (id) => all.has(id),
           wasKnown: (id) => !!known && known.has(id),
-        });
+        // Not awaited, so the stats never wait on a row's exit. An animated
+        // update can fail after render's try/catch has returned: catch it here.
+        }).catch(() => V.ui.toast("Recent dictations failed to update"));
         $("#recent-empty").hidden = recent.length > 0;
       }
     } catch (e) {

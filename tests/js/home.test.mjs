@@ -576,3 +576,19 @@ test("an empty day keeps its 2 px stub now that bars scale instead of resize", a
   // scaleY ignores min-height, so the floor is 2 px of the 34 px trend
   assert.equal(zero.style.getPropertyValue("--h"), (2 / 34).toFixed(3));
 });
+
+test("a recent-list refresh that fails mid-animation says so instead of an unhandled rejection", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const api = {};
+  const h = mountHome(api);
+  h["recent-list"].animate = () => ({ finished: Promise.resolve() });  // lists.js animates it
+  await h.V.views.home.render({ entering: true });
+
+  api.get_history = async () => [{ id: "new", ts: 1_760_000_000, text: "fresh", words: 1, duration_s: 1 }, ...HISTORY];
+  h.V.ui.itemRow = () => { throw new Error("bad row"); };
+  await h.V.views.home.render();
+  await settle();
+
+  const toastText = h.toast.children.map((c) => c.textContent).join("");
+  assert.match(toastText, /Recent dictations failed to update/);
+});
