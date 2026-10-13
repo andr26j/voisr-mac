@@ -217,12 +217,7 @@
   const isScanner = () => theme === "scanner";
   const restScale = () => (theme === "breathe" ? .4 : .3);
 
-  /* scaleY squashes the rounded ends; pre-stretch the vertical radius so
-     the caps stay round at every height */
-  function paintBar(b, scale) {
-    b.style.transform = `scaleY(${scale.toFixed(3)})`;
-    b.style.borderRadius = `2px / ${(2 / scale).toFixed(2)}px`;
-  }
+  const paintBar = window.Voisr.meter.paintBar;  // scaleY with round caps
 
   function clearBars() {
     for (const b of bars) {
@@ -252,8 +247,7 @@
       const b = bars[i];
       if (isScanner()) { b.style.opacity = (.18 + .82 * x).toFixed(3); return; }
       if (reduced.matches) {
-        b.style.transform = "scaleY(.5)";
-        b.style.borderRadius = "2px / 4px";
+        paintBar(b, .5);
         b.style.opacity = (.35 + .65 * x).toFixed(3);
         return;
       }
@@ -318,7 +312,7 @@
         b.style.opacity = "";
         if (next === "processing") {
           b.style.transition = still ? "none" : "transform 180ms var(--ease)";
-          if (!isScanner()) { b.style.transform = "scaleY(.5)"; b.style.borderRadius = "2px / 4px"; }
+          if (!isScanner()) paintBar(b, .5);
         } else {
           // done folds the bars into the centre; error just lets them go
           const fold = next === "done" && !still;

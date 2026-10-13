@@ -33,11 +33,7 @@ window.Voisr.dockMeter = (function () {
 
     let poll = 0, frameId = 0, last = 0, inFlight = false, session = 0;
 
-    /* scaleY squashes the rounded ends; pre-stretch the vertical radius */
-    function paint(b, scale) {
-      b.style.transform = `scaleY(${scale.toFixed(3)})`;
-      b.style.borderRadius = `2px / ${(2 / scale).toFixed(2)}px`;
-    }
+    const paint = window.Voisr.meter.paintBar;
 
     function stopAll() {
       if (poll) stopEvery(poll);

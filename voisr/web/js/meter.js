@@ -3,8 +3,9 @@ window.Voisr = window.Voisr || {};
 
 /* Voice meter: turns the 30 Hz mic level Python pushes (0..1, already in
    dB space, see stream_recorder.level_from_int16) into per-bar heights, once
-   per display frame. Pure maths, no DOM: the pill (widget.html) and the
-   dashboard dock draw from the same numbers so both recorders move alike.
+   per display frame. Pure maths, plus the one style write every scaled bar
+   shares (paintBar): the pill (widget.html) and the dashboard dock draw from
+   the same numbers the same way, so both recorders move alike.
 
    Each theme shapes the same real signal instead of replaying its own loop:
      classic  centre-weighted, each bar varies +-16% so the shape is never stamped
@@ -33,6 +34,13 @@ window.Voisr.meter = (function () {
   function step(env, target, dt, attack, release) {
     const tau = target > env ? attack : release;
     return env + (target - env) * (1 - Math.exp(-dt / tau));
+  }
+
+  /* scaleY squashes the rounded ends; pre-stretch the vertical radius so
+     the 2 px caps stay round at every height */
+  function paintBar(el, scale) {
+    el.style.transform = `scaleY(${scale.toFixed(3)})`;
+    el.style.borderRadius = `2px / ${(2 / scale).toFixed(2)}px`;
   }
 
   function weights(n) {
@@ -89,5 +97,5 @@ window.Voisr.meter = (function () {
     };
   }
 
-  return { gate, step, weights, create };
+  return { gate, step, weights, create, paintBar };
 })();

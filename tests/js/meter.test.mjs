@@ -102,3 +102,10 @@ test("reset puts the envelope back at rest", () => {
   meter.setLevel(0);
   assert.deepEqual(meter.frame(16, 10), [0, 0, 0, 0, 0, 0, 0]);
 });
+
+test("paintBar scales a bar and pre-stretches its caps, for the pill and the dock alike", () => {
+  const style = {};
+  M.paintBar({ style }, 0.5);
+  assert.equal(style.transform, "scaleY(0.500)");
+  assert.equal(style.borderRadius, "2px / 4.00px", "2 px caps survive a half-height scale");
+});
