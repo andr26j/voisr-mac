@@ -5,12 +5,35 @@ raises — callers get None for "unknown". Unknown must never be presented as gr
 green chip is how someone spends twenty minutes debugging a dead hotkey.
 """
 
-_PREFIX = "x-apple.systempreferences:com.apple.preference.security?"
+_LEGACY = "x-apple.systempreferences:com.apple.preference.security?"
+_MODERN = "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?"
+_ANCHORS = {"microphone": "Privacy_Microphone",
+            "input_monitoring": "Privacy_ListenEvent",
+            "accessibility": "Privacy_Accessibility"}
+
+
+def _macos_major() -> int:
+    import platform
+    try:
+        return int(platform.mac_ver()[0].split(".")[0])
+    except (ValueError, IndexError):
+        return 0
+
+
+def settings_url(key: str, macos_major=None):
+    """Deep link to a key's Privacy & Security pane. macOS 26 moved the pane
+    to the Settings extension id; older releases keep the preference pane."""
+    anchor = _ANCHORS.get(key)
+    if anchor is None:
+        return None
+    major = _macos_major() if macos_major is None else macos_major
+    return (_MODERN if major >= 26 else _LEGACY) + anchor
+
 
 PANES = {
-    "microphone": ("Microphone", _PREFIX + "Privacy_Microphone"),
-    "input_monitoring": ("Input Monitoring", _PREFIX + "Privacy_ListenEvent"),
-    "accessibility": ("Accessibility", _PREFIX + "Privacy_Accessibility"),
+    "microphone": ("Microphone", settings_url("microphone")),
+    "input_monitoring": ("Input Monitoring", settings_url("input_monitoring")),
+    "accessibility": ("Accessibility", settings_url("accessibility")),
 }
 
 ORDER = ["microphone", "input_monitoring", "accessibility"]
@@ -122,11 +145,6 @@ def reset_grant(key: str, bundle_id=None, runner=None) -> dict:
     if code != 0:
         return {"ok": False, "error": f"tccutil exited with {code}"}
     return {"ok": True}
-
-
-def settings_url(key: str):
-    pane = PANES.get(key)
-    return pane[1] if pane else None
 
 
 def open_pane(key: str, opener=None) -> bool:

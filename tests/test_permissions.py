@@ -140,3 +140,14 @@ def test_reset_reports_a_runner_that_raises():
 
 def test_input_monitoring_maps_to_listen_event():
     assert permissions.TCC_SERVICES["input_monitoring"] == "ListenEvent"
+
+
+def test_macos_26_uses_the_settings_extension_pane():
+    assert permissions.settings_url("accessibility", macos_major=26) == (
+        "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension"
+        "?Privacy_Accessibility")
+
+
+def test_older_macos_keeps_the_preference_pane():
+    assert permissions.settings_url("microphone", macos_major=15) == (
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
