@@ -81,6 +81,49 @@ def states(probes=None, mode: str = "listen") -> list[dict]:
     return out
 
 
+# tccutil service names for each pane key.
+TCC_SERVICES = {"microphone": "Microphone", "input_monitoring": "ListenEvent",
+                "accessibility": "Accessibility"}
+
+# CFBundleIdentifier written by scripts/install_app.sh. Resetting anything
+# else (python, Terminal) would wipe grants that belong to other apps.
+OWN_BUNDLE_ID = "com.local.voisr"
+
+
+def own_bundle_id():
+    try:
+        import Foundation
+        return Foundation.NSBundle.mainBundle().bundleIdentifier()
+    except Exception:
+        return None
+
+
+def _run_tccutil(argv) -> int:
+    import subprocess
+    return subprocess.run(argv, capture_output=True, timeout=10).returncode
+
+
+def reset_grant(key: str, bundle_id=None, runner=None) -> dict:
+    """Clear Voisr's own TCC entry for one pane so the user can grant it
+    afresh -- the fix for a switch that shows ON while macOS refuses."""
+    service = TCC_SERVICES.get(key)
+    if service is None:
+        return {"ok": False, "error": "unknown permission"}
+    if bundle_id is None:
+        bundle_id = own_bundle_id()
+    if bundle_id != OWN_BUNDLE_ID:
+        return {"ok": False,
+                "error": "reset only works in the installed Voisr app"}
+    runner = runner or _run_tccutil
+    try:
+        code = runner(["/usr/bin/tccutil", "reset", service, bundle_id])
+    except Exception as error:
+        return {"ok": False, "error": str(error)[:200]}
+    if code != 0:
+        return {"ok": False, "error": f"tccutil exited with {code}"}
+    return {"ok": True}
+
+
 def settings_url(key: str):
     pane = PANES.get(key)
     return pane[1] if pane else None

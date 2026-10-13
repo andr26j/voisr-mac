@@ -98,3 +98,45 @@ def test_active_mode_drops_input_monitoring_and_marks_accessibility_as_the_hotke
 def test_hotkey_key_per_mode():
     assert permissions.hotkey_key("listen") == "input_monitoring"
     assert permissions.hotkey_key("active") == "accessibility"
+
+
+def test_reset_runs_tccutil_for_voisrs_own_bundle_only():
+    ran = []
+    result = permissions.reset_grant("accessibility", bundle_id="com.local.voisr",
+                                     runner=lambda argv: ran.append(argv) or 0)
+    assert result == {"ok": True}
+    assert ran == [["/usr/bin/tccutil", "reset", "Accessibility", "com.local.voisr"]]
+
+
+@pytest.mark.parametrize("bundle_id", [None, "org.python.python", "com.apple.Terminal"])
+def test_reset_refuses_when_not_running_as_voisr_app(bundle_id):
+    # `python -m voisr.ui` must never reset Python's or Terminal's grants
+    ran = []
+    result = permissions.reset_grant("accessibility", bundle_id=bundle_id or "",
+                                     runner=lambda argv: ran.append(argv) or 0)
+    assert result["ok"] is False and ran == []
+
+
+def test_reset_rejects_unknown_keys():
+    ran = []
+    assert permissions.reset_grant("camera", bundle_id="com.local.voisr",
+                                   runner=lambda a: ran.append(a) or 0)["ok"] is False
+    assert ran == []
+
+
+def test_reset_reports_a_failing_tccutil():
+    result = permissions.reset_grant("input_monitoring", bundle_id="com.local.voisr",
+                                     runner=lambda argv: 1)
+    assert result["ok"] is False and "1" in result["error"]
+
+
+def test_reset_reports_a_runner_that_raises():
+    def boom(argv):
+        raise OSError("no tccutil")
+    result = permissions.reset_grant("microphone", bundle_id="com.local.voisr",
+                                     runner=boom)
+    assert result["ok"] is False and "no tccutil" in result["error"]
+
+
+def test_input_monitoring_maps_to_listen_event():
+    assert permissions.TCC_SERVICES["input_monitoring"] == "ListenEvent"

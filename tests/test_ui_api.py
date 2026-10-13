@@ -1199,3 +1199,112 @@ def test_get_config_returns_a_private_copy(tmp_path):
     cfg = api.get_config()
     cfg["dictionary"]["zzz"] = "mutated"
     assert "zzz" not in api.get_config()["dictionary"]
+
+
+def test_reset_permission_opens_the_pane_only_after_a_good_reset(tmp_path, monkeypatch):
+    from voisr import permissions
+    opened = []
+    monkeypatch.setattr(permissions, "reset_grant",
+                        lambda key: {"ok": True})
+    monkeypatch.setattr(permissions, "open_pane",
+                        lambda key: opened.append(key) or True)
+    api = make_api(tmp_path)
+    assert api.reset_permission("accessibility") == {"ok": True}
+    assert opened == ["accessibility"]
+
+
+def test_reset_permission_does_not_open_the_pane_on_failure(tmp_path, monkeypatch):
+    from voisr import permissions
+    opened = []
+    monkeypatch.setattr(permissions, "reset_grant",
+                        lambda key: {"ok": False, "error": "nope"})
+    monkeypatch.setattr(permissions, "open_pane",
+                        lambda key: opened.append(key) or True)
+    api = make_api(tmp_path)
+    assert api.reset_permission("accessibility") == {"ok": False, "error": "nope"}
+    assert opened == []
+
+
+def test_reset_permission_never_runs_tccutil_unbundled(tmp_path, monkeypatch):
+    # Under pytest the main bundle is not com.local.voisr; nothing may run.
+    import subprocess
+    from voisr import permissions
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **k: pytest.fail("tccutil must not run"))
+    monkeypatch.setattr(permissions, "open_pane",
+                        lambda key: pytest.fail("pane must not open"))
+    assert make_api(tmp_path).reset_permission("accessibility")["ok"] is False
+
+
+class FakeWindow:
+    def __init__(self):
+        self.destroyed = False
+
+    def destroy(self):
+        self.destroyed = True
+
+
+def _fake_bundle(monkeypatch, path, bundle_id="com.local.voisr"):
+    import Foundation
+
+    class Bundle:
+        def bundlePath(self):
+            return path
+
+        def bundleIdentifier(self):
+            return bundle_id
+
+    class NSBundle:
+        @staticmethod
+        def mainBundle():
+            return Bundle()
+
+    monkeypatch.setattr(Foundation, "NSBundle", NSBundle)
+
+
+def test_relaunch_app_refuses_outside_an_app_bundle(tmp_path, monkeypatch):
+    import subprocess
+    _fake_bundle(monkeypatch, "/usr/local/bin/python3")
+    monkeypatch.setattr(subprocess, "Popen",
+                        lambda *a, **k: pytest.fail("must not spawn"))
+    api = make_api(tmp_path)
+    api.attach_window(FakeWindow())
+    assert api.relaunch_app()["ok"] is False
+    assert api._window.destroyed is False
+
+
+def test_relaunch_app_refuses_python_app_bundle(tmp_path, monkeypatch):
+    # `python -m voisr.ui` runs inside Python.app, which also ends in ".app"
+    import subprocess
+    _fake_bundle(monkeypatch, "/Library/Frameworks/Python.app",
+                 bundle_id="org.python.python")
+    monkeypatch.setattr(subprocess, "Popen",
+                        lambda *a, **k: pytest.fail("must not spawn"))
+    api = make_api(tmp_path)
+    api.attach_window(FakeWindow())
+    assert api.relaunch_app()["ok"] is False
+    assert api._window.destroyed is False
+
+
+def test_relaunch_app_refuses_without_a_window(tmp_path, monkeypatch):
+    import subprocess
+    _fake_bundle(monkeypatch, "/Users/x/Applications/Voisr.app")
+    monkeypatch.setattr(subprocess, "Popen",
+                        lambda *a, **k: pytest.fail("must not spawn"))
+    assert make_api(tmp_path).relaunch_app()["ok"] is False
+
+
+def test_relaunch_app_reopens_the_bundle_then_quits(tmp_path, monkeypatch):
+    import subprocess
+    _fake_bundle(monkeypatch, "/Users/x/Applications/Voisr.app")
+    spawned = []
+    monkeypatch.setattr(subprocess, "Popen",
+                        lambda argv, **kw: spawned.append((argv, kw)))
+    api = make_api(tmp_path)
+    window = FakeWindow()
+    api.attach_window(window)
+    assert api.relaunch_app() == {"ok": True}
+    assert window.destroyed is True
+    argv, kw = spawned[0]
+    assert argv[-1] == "/Users/x/Applications/Voisr.app"
+    assert "/usr/bin/open" in argv[2] and kw["start_new_session"] is True

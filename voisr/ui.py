@@ -1558,6 +1558,35 @@ class Api:
     def open_settings_pane(self, key):
         return {"ok": permissions.open_pane(key)}
 
+    def reset_permission(self, key):
+        """Bridge: reset Voisr's own grant, then open the pane to re-grant.
+        The hotkey watcher notices the new grant and respawns the tap."""
+        result = permissions.reset_grant(key)
+        if result.get("ok"):
+            permissions.open_pane(key)
+        return result
+
+    def relaunch_app(self):
+        """Bridge: reopen Voisr.app a second after this process quits."""
+        try:
+            import subprocess
+            import Foundation
+            path = str(Foundation.NSBundle.mainBundle().bundlePath())
+        except Exception:
+            return {"ok": False, "error": "not running as an app"}
+        # Python.app (from `python -m voisr.ui`) also ends in ".app"; only
+        # relaunch the installed Voisr bundle.
+        if (not path.endswith(".app") or self._window is None
+                or permissions.own_bundle_id() != permissions.OWN_BUNDLE_ID):
+            return {"ok": False, "error": "not running as an app"}
+        subprocess.Popen(["/bin/sh", "-c", 'sleep 1; /usr/bin/open "$0"', path],
+                         start_new_session=True)
+        try:
+            self._window.destroy()  # same exit path as the menu-bar Quit
+        except Exception:
+            return {"ok": False, "error": "couldn't quit"}
+        return {"ok": True}
+
     def restore_history_item(self, item):
         try:
             self._history.restore(item)
