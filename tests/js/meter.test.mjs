@@ -109,3 +109,14 @@ test("paintBar scales a bar and pre-stretches its caps, for the pill and the doc
   assert.equal(style.transform, "scaleY(0.500)");
   assert.equal(style.borderRadius, "2px / 4.00px", "2 px caps survive a half-height scale");
 });
+
+test("atRest: true in silence, false while a voice is in the envelope, true once it has fallen", () => {
+  const m = M.create(7, "classic");
+  assert.ok(m.atRest(), "a fresh meter is at rest");
+  run(m, 0.8, 200);
+  assert.ok(!m.atRest());
+  const { t } = run(m, 0, 200, 200);
+  assert.ok(!m.atRest(), "still falling 200 ms into the pause");
+  run(m, 0, 3000, t);
+  assert.ok(m.atRest(), "settled after the release");
+});

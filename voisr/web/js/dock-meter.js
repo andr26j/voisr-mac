@@ -57,7 +57,8 @@ window.Voisr.dockMeter = (function () {
           paint(b, REST + (1 - REST) * x);
         }
       });
-      frameId = raf(frame);
+      // parked in silence; the next reading's read() starts frames again
+      if (!meter.atRest()) frameId = raf(frame);
     }
 
     function read(my) {

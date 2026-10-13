@@ -253,7 +253,8 @@
       }
       paintBar(b, rest + (1 - rest) * x);
     });
-    raf = requestAnimationFrame(frame);
+    // parked in silence; the next setLevel starts frames again
+    if (!meter.atRest()) raf = requestAnimationFrame(frame);
   }
 
   function startFrames() {

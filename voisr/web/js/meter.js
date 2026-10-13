@@ -93,6 +93,9 @@ window.Voisr.meter = (function () {
     return {
       setLevel(raw) { target = gate(raw); },
       frame,
+      /* silent and settled: every frame from here paints rest, so a
+         painter can stop asking for frames until the next setLevel */
+      atRest: () => target === 0 && env.every((e) => e < 1e-4),
       reset() { env.fill(0); target = 0; for (const f of flicker) { f.value = 1; f.target = 1; f.next = 0; } },
     };
   }

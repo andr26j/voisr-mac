@@ -130,3 +130,18 @@ test("reduced motion holds the bars at half height and shows the level as bright
   r.dock.settle();
   assert.equal(r.bars[0].style.transition, "none");
 });
+
+test("silence parks the frame loop until a level rises again", async () => {
+  const r = rig({ levels: [...Array(10).fill(0.8), ...Array(200).fill(0)] });
+  r.dock.start();
+  let t = 0;
+  for (let i = 0; i < 10; i++) { await r.poll(); t += 16; r.frame(t); }
+  // fall silent for three seconds: far longer than the 220 ms release
+  for (let i = 0; i < 190 && r.timers.frame; i++) { await r.poll(); t += 16; if (r.timers.frame) r.frame(t); }
+  assert.equal(r.timers.frame, null, "a settled meter requests no more frames");
+  for (const b of r.bars) assert.ok(Math.abs(scaleOf(b) - 3 / 18) < 1e-3, "and its bars stand at rest");
+
+  await r.poll();                      // another silent reading: one frame, then parked again
+  t += 16; r.frame(t);
+  assert.equal(r.timers.frame, null);
+});
