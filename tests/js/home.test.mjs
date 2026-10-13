@@ -670,3 +670,107 @@ test("Reset and Relaunch call the bridge, and surface a failure as a toast", asy
   assert.match(toastText(), /no bundle/);
   assert.deepEqual(calls, [["reset", "accessibility"], ["relaunch"]]);
 });
+
+/* ---------- Task 7 fix round 1 ---------- */
+
+const hotkeyPane = (granted, effective) => ({ panes: [
+  { key: "microphone", label: "Microphone", granted: true, hotkey: false, effective: true },
+  { key: "accessibility", label: "Accessibility", granted, hotkey: true, effective },
+]});
+
+for (const [granted, label] of [[null, "unknown"], [false, "denied"]]) {
+  test(`a ${label} hotkey pane with effective:false is not called "switched on, not working"`, async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+    const h = mountHome({ get_permissions: async () => hotkeyPane(granted, false) });
+    await h.V.views.home.render();
+    assert.equal(h["perm-strip"].dataset.state, "attention");
+    const text = allText(h["perm-strip"]);
+    assert.doesNotMatch(text, /isn't honouring/);
+    assert.doesNotMatch(text, /Reset /);
+    assert.doesNotMatch(text, /switched on, not working/);
+    assert.match(text, /Open Accessibility/);
+  });
+}
+
+test("polling stops once permissions flip to all granted", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let fixed = false;
+  let calls = 0;
+  const h = mountHome({ get_permissions: async () => {
+    calls += 1;
+    return hotkeyPane(true, fixed);
+  } });
+  await h.V.views.home.render();
+  fixed = true;
+  t.mock.timers.tick(1000);
+  await settle();
+  assert.equal(h["perm-strip"].dataset.state, "ok");
+  const after = calls;
+  t.mock.timers.tick(5000);
+  await settle();
+  assert.equal(calls, after, "no get_permissions calls once nothing is blocked");
+});
+
+test("repeated renders while blocked don't stack poll intervals", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let calls = 0;
+  const h = mountHome({ get_permissions: async () => {
+    calls += 1;
+    return hotkeyPane(true, false);
+  } });
+  await h.V.views.home.render();
+  await h.V.views.home.render();
+  await h.V.views.home.renderPermissions();
+  const before = calls;
+  t.mock.timers.tick(1000);
+  await settle();
+  assert.equal(calls - before, 1, "one tick, one poll");
+});
+
+test("the poll tick does nothing while Home is hidden", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let calls = 0;
+  const h = mountHome({ get_permissions: async () => {
+    calls += 1;
+    return hotkeyPane(true, false);
+  } });
+  await h.V.views.home.render();
+  h["view-home"].hidden = true;
+  const before = calls;
+  t.mock.timers.tick(3000);
+  await settle();
+  assert.equal(calls, before);
+});
+
+test("a failing bridge doesn't toast every second from the poll", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let broken = false;
+  const h = mountHome({
+    get_permissions: async () => {
+      if (broken) throw new Error("bridge down");
+      return hotkeyPane(true, false);
+    },
+    get_hotkey_status: async () => {
+      if (broken) throw new Error("bridge down");
+      return { state: "listening" };
+    },
+  });
+  await h.V.views.home.render();
+  broken = true;
+  t.mock.timers.tick(3000);
+  await settle();
+  assert.equal(h.toast.children.map((c) => c.textContent).join(""), "",
+    "the poll is quiet; user-initiated renders still toast");
+  await h.V.views.home.renderPermissions();
+  assert.match(h.toast.children.map((c) => c.textContent).join(""), /bridge down/);
+});
+
+test("Reset without an error string still says it couldn't", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const h = mountHome({ ...STALE_API, reset_permission: async () => ({ ok: false }) });
+  await h.V.views.home.render();
+  const actions = h["perm-strip"].children[0].children.find((c) => c.className === "perm-actions");
+  actions.children[0].dispatch("click", { target: actions.children[0] });
+  await settle();
+  assert.match(h.toast.children.map((c) => c.textContent).join(""), /Couldn't reset Accessibility/);
+});

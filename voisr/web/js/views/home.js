@@ -30,8 +30,10 @@ window.Voisr = window.Voisr || {};
      So it never blocks — holding the key is how the user gets asked. */
   const micPending = (p) => p.key === "microphone" && p.granted === null;
   /* Granted in System Settings, yet macOS still refuses it (the hotkey
-     pane's `effective` is false) — the stale grant an update leaves behind. */
-  const stale = (p) => p.effective === false;
+     pane's `effective` is false) — the stale grant an update leaves behind.
+     Only a grant known to be on counts: an unknown or denied pane keeps its
+     own wording, so unknown is never dressed up as "switched on". */
+  const stale = (p) => p.effective === false && p.granted === true;
   const blocking = (panes) =>
     panes.filter((p) => stale(p) || (p.granted !== true && !micPending(p)));
 
@@ -75,7 +77,7 @@ window.Voisr = window.Voisr || {};
             const res = await V.ui.tryApi(V.api().reset_permission(lead.key),
                                           `Reset ${lead.label}`);
             if (res && res.ok) V.ui.toast(`Reset — switch Voisr on under ${lead.label}`);
-            else if (res && res.error) V.ui.toast(res.error);
+            else if (res && res.ok === false) V.ui.toast(`Couldn't reset ${lead.label}`);
           } } }),
         V.ui.el("button", { type: "button", class: "btn-secondary",
           text: "Relaunch Voisr", on: { click: async () => {
@@ -127,10 +129,23 @@ window.Voisr = window.Voisr || {};
 
   let permPoll = null;
 
-  async function renderPermissions() {
+  /* A bridge call that, when `quiet`, swallows its failure instead of
+     toasting it: the 1 s poll would otherwise toast twice a second for as
+     long as the bridge stayed broken. User-initiated renders keep toasting. */
+  async function callApi(call, label, quiet) {
+    if (!quiet) return V.ui.tryApi(call(), label);
+    try {
+      const res = await call();
+      return res && res.error ? null : res;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function renderPermissions(opts = {}) {
     const strip = V.ui.$("#perm-strip");
     const ptt = V.ui.$("#ptt-bar");
-    const res = await V.ui.tryApi(V.api().get_permissions(), "Load permissions");
+    const res = await callApi(() => V.api().get_permissions(), "Load permissions", opts.quiet);
     // Leave whatever the strip last showed rather than wiping it: a stale
     // strip beside a toast explaining the staleness beats an empty one.
     if (!res || !res.panes) return;
@@ -142,8 +157,8 @@ window.Voisr = window.Voisr || {};
     if (bad.length > 0 && permPoll === null) {
       permPoll = setInterval(() => {
         if (document.getElementById("view-home").hidden) return;
-        renderPermissions().catch(() => {});
-        renderListener().catch(() => {});
+        renderPermissions({ quiet: true }).catch(() => {});
+        renderListener({ quiet: true }).catch(() => {});
       }, 1000);
     } else if (bad.length === 0 && permPoll !== null) {
       clearInterval(permPoll);
@@ -242,8 +257,8 @@ window.Voisr = window.Voisr || {};
     unknown: "Listener status unknown",
   };
 
-  async function renderListener() {
-    const res = await V.ui.tryApi(V.api().get_hotkey_status(), "Load shortcut status");
+  async function renderListener(opts = {}) {
+    const res = await callApi(() => V.api().get_hotkey_status(), "Load shortcut status", opts.quiet);
     const state = res && LISTENER_LABELS[res.state] ? res.state : "unknown";
     V.ui.$("#ptt-state").dataset.state = state;
     V.ui.$("#ptt-state-label").textContent = LISTENER_LABELS[state];
