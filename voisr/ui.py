@@ -958,6 +958,7 @@ class HotkeyService:
         # May block up to 0.5 s in wait_started: only start() and the poll
         # thread call this, never the tap callback.
         pane = permissions.PANES[permissions.hotkey_key(self.tap_mode)][0]
+        before = self.status
         granted = self._permissions_check()
         tap = self._tap_state(granted)
         if self._stopped:
@@ -980,7 +981,8 @@ class HotkeyService:
                      if self.tap_mode == "listen" else "Accessibility")
             self.status = ("waiting for permission — open System Settings → "
                            f"Privacy & Security and switch Voisr ON under {panes}")
-        print(f"Voisr hotkey: {self.status}", flush=True)
+        if self.status != before:  # the poll re-derives this every interval
+            print(f"Voisr hotkey: {self.status}", flush=True)
 
     def _watch(self) -> None:
         if self._watcher is not None:
@@ -997,14 +999,15 @@ class HotkeyService:
                 if self._stopped or self._watcher is not me:
                     return
                 listener = self._listener
-                if getattr(listener, "state", None) in ("starting", "running"):
-                    # coming up (or just came up): respawning would stop a
-                    # live tap, so only re-read its state
-                    self._refresh_status()
-                elif self._permissions_check():
+                state = getattr(listener, "state", None)
+                if state not in ("starting", "running") \
+                        and self._permissions_check():
                     # granted (or re-granted after a reset): try for a LIVE tap
                     self._spawn_listener()
-                    self._refresh_status()
+                # otherwise the tap is coming up (or just came up) and
+                # respawning would stop a live tap, or nothing is granted:
+                # either way just re-derive health from the tap's state
+                self._refresh_status()
 
         self._watcher = threading.Thread(target=poll, daemon=True)
         self._watcher.start()
@@ -1545,7 +1548,7 @@ class Api:
         mode = self.get_config().get("event_tap", "listen")
         panes = permissions.states(mode=mode)
         svc = self._hotkey_service
-        if (svc is not None and svc.running
+        if (svc is not None and getattr(svc, "running", False)
                 and getattr(svc, "health", None) == "not_effective"):
             for pane in panes:
                 if pane["hotkey"]:

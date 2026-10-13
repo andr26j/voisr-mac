@@ -239,10 +239,14 @@ class SeqListener:
         self.stopped = True
 
 
-def seq_service(states, **kw):
+def seq_service(states, gate=None, **kw):
+    """gate: an Event the respawn (every factory call after the first) waits
+    for, so a test can look at the state before the poll moves it on."""
     made = []
 
     def factory(handler, mode):
+        if gate is not None and made:
+            gate.wait(5)
         lst = states[min(len(made), len(states) - 1)]
         made.append(lst)
         return lst
@@ -283,9 +287,11 @@ def test_slow_tap_is_starting_not_not_effective_and_is_not_respawned(monkeypatch
 def test_failed_tap_recovers_when_a_respawn_runs(monkeypatch):
     monkeypatch.setattr("voisr.ui.request_permissions", lambda mode="listen": None)
     first, second = SeqListener("failed"), SeqListener("running")
-    svc, made = seq_service([first, second])
+    gate = threading.Event()
+    svc, made = seq_service([first, second], gate=gate)
     svc.start()
-    assert svc.health == "not_effective"
+    assert svc.health == "not_effective"  # the respawn is held at the gate
+    gate.set()
     watcher = svc._watcher
     assert wait_until(lambda: svc.health == "active")
     assert made == [first, second] and first.stopped
@@ -328,3 +334,23 @@ def test_get_permissions_flags_only_a_running_service_that_is_not_effective(tmp_
     assert hotkey_effective("not_effective", True) is False
     assert hotkey_effective("not_effective", False) is True
     assert hotkey_effective("starting", True) is True
+
+
+def test_starting_then_failed_without_permission_ends_up_waiting(monkeypatch):
+    monkeypatch.setattr("voisr.ui.request_permissions", lambda mode="listen": None)
+    lst = SeqListener("starting")
+    made = []
+
+    def factory(handler, mode):
+        made.append(lst)
+        return lst
+
+    svc = HotkeyService(ConfigApi(event_tap="active"), permissions_check=lambda: False,
+                        listener_factory=factory, poll_interval=0.05)
+    svc.start()
+    assert svc.health == "starting"
+    lst.state = "failed"  # macOS refused: no grant, and the tap is dead
+    assert wait_until(lambda: svc.health == "waiting")
+    assert svc.status.startswith("waiting for permission")
+    assert made == [lst]
+    svc.stop()
