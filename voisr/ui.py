@@ -60,14 +60,14 @@ def default_recorder():
         return Recorder()
 
 
-def request_permissions() -> None:
+def request_permissions(mode: str = "listen") -> None:
     """Register Voisr with TCC and prompt for the grants it needs, so the app
     APPEARS in System Settings → Privacy & Security under each pane:
-      • Input Monitoring — CGRequestListenEventAccess + the event tap itself
-      • Accessibility    — AXIsProcessTrustedWithOptions(prompt) posts events"""
+      • Input Monitoring — listen-only tap only (mode "listen")
+      • Accessibility    — posting Cmd-V, and the active tap (mode "active")"""
     try:
         import Quartz
-        if not Quartz.CGPreflightListenEventAccess():
+        if mode == "listen" and not Quartz.CGPreflightListenEventAccess():
             Quartz.CGRequestListenEventAccess()
         if not Quartz.CGPreflightPostEventAccess():
             Quartz.CGRequestPostEventAccess()
@@ -574,20 +574,22 @@ class RecordingWidget:
             pass
 
 
-def input_permissions_ok() -> bool:
-    """True when Voisr may listen for global keys (and post events)."""
+def input_permissions_ok(mode: str = "listen") -> bool:
+    """True when Voisr may install its key tap in this mode."""
     try:
         import Quartz
+        if mode == "active":
+            return bool(Quartz.CGPreflightPostEventAccess())
         return bool(Quartz.CGPreflightListenEventAccess())
     except Exception:
         return True  # non-pyobjc environments (tests, other platforms)
 
 
-def _quartz_listener_factory(handler):
+def _quartz_listener_factory(handler, mode="listen"):
     """Create and start the global key tap (see voisr.keytap for why this
     replaces pynput's listener, which crashes the process via TIS)."""
     from voisr.keytap import QuartzKeyListener
-    listener = QuartzKeyListener(handler)
+    listener = QuartzKeyListener(handler, mode=mode)
     listener.start()
     return listener
 
@@ -596,12 +598,14 @@ class HotkeyService:
     """Global push-to-talk listener driving the shared Api record path."""
 
     def __init__(self, api, widget=None, hide_delay=1.2,
-                 permissions_check=input_permissions_ok, poll_interval=3.0,
+                 permissions_check=None, poll_interval=3.0,
                  listener_factory=None):
         self._api = api
         self._widget = widget
         self._hide_delay = hide_delay
-        self._permissions_check = permissions_check
+        self.tap_mode = "listen"
+        self._permissions_check = permissions_check or (
+            lambda: input_permissions_ok(self.tap_mode))
         self._poll_interval = poll_interval
         self._listener_factory = listener_factory or _quartz_listener_factory
         self._listener = None
@@ -849,7 +853,8 @@ class HotkeyService:
         # the prompt. An untrusted tap is null (pynput returns cleanly) — it
         # does not crash — so this is safe. request_permissions() also fires
         # the Accessibility prompt so Voisr appears in that pane too.
-        request_permissions()
+        self.tap_mode = self._api.get_config().get("event_tap", "listen")
+        request_permissions(self.tap_mode)
         self._start_worker()
         self._spawn_listener()
         self._refresh_status()
@@ -927,7 +932,10 @@ class HotkeyService:
             except Exception:
                 pass
         try:
-            self._listener = self._listener_factory(handler)
+            try:
+                self._listener = self._listener_factory(handler, self.tap_mode)
+            except TypeError:
+                self._listener = self._listener_factory(handler)  # 1-arg test doubles
         except Exception as e:
             print(f"Voisr hotkey: listener start failed: {e}", flush=True)
 
@@ -1433,10 +1441,13 @@ class Api:
         if errors:
             return {"error": "; ".join(errors)}
         with self._config_lock:
-            old_hotkey = self.get_config().get("hotkey")
+            old_cfg = self.get_config()
+            old_hotkey = old_cfg.get("hotkey")
+            old_tap = old_cfg.get("event_tap")
             cfg = self._update_config(updates)
         new_hotkey = cfg.get("hotkey")
-        if self._hotkey_service and new_hotkey != old_hotkey:
+        if self._hotkey_service and (
+                new_hotkey != old_hotkey or cfg.get("event_tap") != old_tap):
             self._hotkey_service.restart(new_hotkey)
         return cfg
 
