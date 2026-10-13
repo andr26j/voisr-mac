@@ -169,7 +169,7 @@ def test_hotkey_state_listening_while_the_key_itself_records(tmp_path):
 
 def test_hotkey_service_reports_running_and_holding(tmp_path):
     from voisr.ui import HotkeyService
-    svc = HotkeyService(make_api(tmp_path), listener_factory=lambda h: None,
+    svc = HotkeyService(make_api(tmp_path), listener_factory=lambda h, mode="listen": None,
                         permissions_check=lambda: True)
     assert svc.running is False and svc.holding is False
     svc.start("alt_r")

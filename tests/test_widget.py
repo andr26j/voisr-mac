@@ -573,7 +573,7 @@ class FakeListener:
 def _counting_factory():
     made = []
 
-    def factory(handler):
+    def factory(handler, mode="listen"):
         listener = FakeListener()
         listener.handler = handler
         made.append(listener)

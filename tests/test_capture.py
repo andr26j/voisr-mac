@@ -39,7 +39,7 @@ class CallbackListener:
 
 def cb_factory():
     made = []
-    def factory(handler):
+    def factory(handler, mode="listen"):
         l = CallbackListener(handler)
         made.append(l)
         return l

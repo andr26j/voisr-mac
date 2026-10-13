@@ -9,6 +9,7 @@ from voisr.app import config_errors, load_config
 from voisr.cleanup import clean
 from voisr.history import HistoryStore
 from voisr.inject import paste_at_cursor, set_clipboard
+from voisr.keytap import TAP_MODES
 from voisr.pasteboard import PasteDeliveryError
 from voisr.recorder import Recorder
 from voisr.recording_queue import (
@@ -853,7 +854,9 @@ class HotkeyService:
         # the prompt. An untrusted tap is null (pynput returns cleanly) — it
         # does not crash — so this is safe. request_permissions() also fires
         # the Accessibility prompt so Voisr appears in that pane too.
-        self.tap_mode = self._api.get_config().get("event_tap", "listen")
+        mode = self._api.get_config().get("event_tap", "listen")
+        # a hand-edited config must not leave the service with no listener
+        self.tap_mode = mode if mode in TAP_MODES else "listen"
         request_permissions(self.tap_mode)
         self._start_worker()
         self._spawn_listener()
@@ -932,10 +935,7 @@ class HotkeyService:
             except Exception:
                 pass
         try:
-            try:
-                self._listener = self._listener_factory(handler, self.tap_mode)
-            except TypeError:
-                self._listener = self._listener_factory(handler)  # 1-arg test doubles
+            self._listener = self._listener_factory(handler, self.tap_mode)
         except Exception as e:
             print(f"Voisr hotkey: listener start failed: {e}", flush=True)
 
