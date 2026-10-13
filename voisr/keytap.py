@@ -53,56 +53,67 @@ class QuartzKeyListener:
         self._thread.start()
 
     def _run(self) -> None:
-        Quartz = self._quartz if self._quartz is not None \
-            else importlib.import_module("Quartz")
+        try:
+            Quartz = self._quartz if self._quartz is not None \
+                else importlib.import_module("Quartz")
 
-        mask = (Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown)
-                | Quartz.CGEventMaskBit(Quartz.kCGEventKeyUp)
-                | Quartz.CGEventMaskBit(Quartz.kCGEventFlagsChanged))
-        tap_holder = {}
+            mask = (Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown)
+                    | Quartz.CGEventMaskBit(Quartz.kCGEventKeyUp)
+                    | Quartz.CGEventMaskBit(Quartz.kCGEventFlagsChanged))
+            tap_holder = {}
 
-        def callback(_proxy, etype, event, _refcon):
-            try:
-                if etype in (Quartz.kCGEventTapDisabledByTimeout,
-                             Quartz.kCGEventTapDisabledByUserInput):
-                    tap = tap_holder.get("tap")
-                    if tap is not None:
-                        Quartz.CGEventTapEnable(tap, True)
-                    return event
-                src_pid = Quartz.CGEventGetIntegerValueField(
-                    event, Quartz.kCGEventSourceUnixProcessID)
-                if src_pid == _OWN_PID:
-                    return event  # our own posted Cmd-V, not user input
-                vk = Quartz.CGEventGetIntegerValueField(
-                    event, Quartz.kCGKeyboardEventKeycode)
-                if etype == Quartz.kCGEventKeyDown:
-                    kind = "down"
-                elif etype == Quartz.kCGEventKeyUp:
-                    kind = "up"
-                else:
-                    kind = "flags"
-                self._handler(int(vk), kind, int(Quartz.CGEventGetFlags(event)))
-            except Exception:
-                pass  # a callback error must never take down the tap
-            return event
+            def callback(_proxy, etype, event, _refcon):
+                try:
+                    if etype in (Quartz.kCGEventTapDisabledByTimeout,
+                                 Quartz.kCGEventTapDisabledByUserInput):
+                        tap = tap_holder.get("tap")
+                        if tap is not None:
+                            Quartz.CGEventTapEnable(tap, True)
+                        return event
+                    src_pid = Quartz.CGEventGetIntegerValueField(
+                        event, Quartz.kCGEventSourceUnixProcessID)
+                    if src_pid == _OWN_PID:
+                        return event  # our own posted Cmd-V, not user input
+                    vk = Quartz.CGEventGetIntegerValueField(
+                        event, Quartz.kCGKeyboardEventKeycode)
+                    if etype == Quartz.kCGEventKeyDown:
+                        kind = "down"
+                    elif etype == Quartz.kCGEventKeyUp:
+                        kind = "up"
+                    else:
+                        kind = "flags"
+                    self._handler(int(vk), kind,
+                                  int(Quartz.CGEventGetFlags(event)))
+                except Exception:
+                    pass  # a callback error must never take down the tap
+                return event
 
-        option = (Quartz.kCGEventTapOptionDefault if self._mode == "active"
-                  else Quartz.kCGEventTapOptionListenOnly)
-        tap = Quartz.CGEventTapCreate(
-            Quartz.kCGSessionEventTap, Quartz.kCGHeadInsertEventTap,
-            option, mask, callback, None)
-        if tap is None:
-            # listen: no Input Monitoring; active: no Accessibility — or a
-            # grant macOS lists but no longer honours. Caller decides which.
+            option = (Quartz.kCGEventTapOptionDefault if self._mode == "active"
+                      else Quartz.kCGEventTapOptionListenOnly)
+            tap = Quartz.CGEventTapCreate(
+                Quartz.kCGSessionEventTap, Quartz.kCGHeadInsertEventTap,
+                option, mask, callback, None)
+            if tap is None:
+                # listen: no Input Monitoring; active: no Accessibility — or a
+                # grant macOS lists but no longer honours. Caller decides which.
+                self.state = "failed"
+                self._started.set()
+                return
+            tap_holder["tap"] = tap
+            source = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
+            self._loop = Quartz.CFRunLoopGetCurrent()
+            Quartz.CFRunLoopAddSource(self._loop, source,
+                                      Quartz.kCFRunLoopDefaultMode)
+            Quartz.CGEventTapEnable(tap, True)
+        except Exception as e:
+            # Any setup error must still release wait_started(); otherwise
+            # the state stays "starting" and the caller waits out the timeout.
+            self._loop = None
+            self.running = False
             self.state = "failed"
+            print(f"Voisr keytap: tap setup failed: {e}", flush=True)
             self._started.set()
             return
-        tap_holder["tap"] = tap
-        source = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
-        self._loop = Quartz.CFRunLoopGetCurrent()
-        Quartz.CFRunLoopAddSource(self._loop, source,
-                                  Quartz.kCFRunLoopDefaultMode)
-        Quartz.CGEventTapEnable(tap, True)
         self.running = True
         self.state = "running"
         self._started.set()
