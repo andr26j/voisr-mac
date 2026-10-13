@@ -153,10 +153,14 @@
 
 .trend { display: flex; align-items: flex-end; gap: 3px; height: 34px; margin: 8px 0 6px; }
 
+/* scaled, not resized, so a refresh grows the bar; --h carries its own
+   2 px floor (home.js renderTrend), since a scaled bar ignores min-height */
 .trend .bar {
   flex: 1;
-  height: calc(var(--h) * 100%);
-  min-height: 2px;
+  height: 100%;
+  transform-origin: bottom;
+  transform: scaleY(var(--h));
+  transition: transform 400ms var(--ease);
   border-radius: 2px;
   background: var(--accent);
   opacity: .30;

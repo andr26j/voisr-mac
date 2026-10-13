@@ -58,9 +58,21 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 .brand-name { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
 
-.nav { display: flex; flex-direction: column; gap: 2px; }
+.nav { position: relative; display: flex; flex-direction: column; gap: 2px; }
+
+/* the active item's surface: one element that glides between items
+   (main.js glideTo), transitions on only after its first placement */
+.nav-glide {
+  position: absolute; top: 0; left: 0; right: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  pointer-events: none;
+}
+.nav-glide.is-live { transition: transform 180ms var(--ease); }
 
 .nav-item {
+  position: relative;  /* paints above .nav-glide */
   display: flex;
   align-items: center;
   gap: 10px;
@@ -76,7 +88,8 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 .nav-item:hover { background: var(--accent-soft); color: var(--ink); }
 
-.nav-item.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+/* the surface is .nav-glide's; hovering the active item doesn't tint over it */
+.nav-item.active, .nav-item.active:hover { background: transparent; color: var(--ink); }
 
 /* the dock's mic is open (set by views/home.js); visible from every view */
 .nav-item[data-recording="true"]::after {
@@ -144,4 +157,5 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 @media (prefers-reduced-motion: reduce) {
   /* the wash stays: it is colour, not movement */
   .view.entering, .item-list.is-staggering .item-row { animation: none; }
+  .nav-glide.is-live { transition: none; }
 }

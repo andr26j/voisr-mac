@@ -9,9 +9,27 @@ window.Voisr = window.Voisr || {};
   let enteringTarget = null;
   let enteringController = null;
 
+  /* One highlight glides behind the sidebar to the active item (180 ms,
+     base.css) instead of each item painting its own. The first placement
+     happens with the transition off, so the first paint doesn't glide in;
+     reduced motion snaps in CSS. */
+  function glideTo(view) {
+    const glide = document.getElementById("nav-glide");
+    const item = Array.from(document.querySelectorAll(".nav-item"))
+      .find((b) => b.dataset.view === view);
+    if (!glide || !item) return;
+    glide.style.height = `${item.offsetHeight}px`;
+    glide.style.transform = `translateY(${item.offsetTop}px)`;
+    if (!glide.classList.contains("is-live")) {
+      void glide.offsetWidth;  // commit the first position before transitions switch on
+      glide.classList.add("is-live");
+    }
+  }
+
   function show(view) {
     document.querySelectorAll(".view").forEach((v) => { v.hidden = v.id !== `view-${view}`; });
     document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
+    glideTo(view);
     const target = document.getElementById(`view-${view}`);
 
     // .main is the one scroll container for every view, so its offset
@@ -47,7 +65,7 @@ window.Voisr = window.Voisr || {};
     // opening a page replays the row stagger on what is already there
     if (V.lists) target.querySelectorAll(".item-list").forEach((list) => V.lists.stagger(list));
 
-    if (view === "home") V.views.home.render();
+    if (view === "home") V.views.home.render({ entering: true });
     if (view === "history") V.views.history.render();
     if (view === "dictionary") V.views.dictionary.render();
     if (view === "settings") V.views.settings.render();

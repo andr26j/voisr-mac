@@ -216,17 +216,77 @@ window.Voisr = window.Voisr || {};
     return Math.round(((curr - prev) / prev) * 100);
   }
 
+  /* Bars scale from the floor (views.css) rather than resize, so a refresh
+     grows them in place: the nodes are kept whenever the day count holds,
+     or there would be nothing to transition from. A scaled bar ignores
+     min-height, so the 2 px stub every day keeps is a floor on --h: 2 px
+     of the 34 px .trend. */
+  const BAR_FLOOR = 2 / 34;
+
   function renderTrend(sel, daily, key) {
     const node = V.ui.$(sel);
     const bars = trendBars(daily, key);
     const last = bars.length - 1;
-    node.replaceChildren(...bars.map((h, i) => {
-      const bar = V.ui.el("span", {
-        class: `bar${h === 0 ? " zero" : ""}${i === last ? " today" : ""}`,
-      });
-      bar.style.setProperty("--h", h.toFixed(3));
-      return bar;
-    }));
+    if (node.children.length !== bars.length) {
+      node.replaceChildren(...bars.map(() => V.ui.el("span")));
+    }
+    bars.forEach((h, i) => {
+      const bar = node.children[i];
+      bar.className = `bar${h === 0 ? " zero" : ""}${i === last ? " today" : ""}`;
+      bar.style.setProperty("--h", Math.max(h, BAR_FLOOR).toFixed(3));
+    });
+  }
+
+  /* ---------- stats count up ----------
+
+     A stat that changes while Home is on screen tweens from the old value
+     to the new over 600 ms on --ease. Opening Home shows the numbers as
+     they are, never a count from zero, and so does reduced motion. A new
+     value mid-count carries on from whatever is on screen. */
+  const COUNT_MS = 600;
+
+  /* cubic-bezier(.2, .8, .2, 1), the --ease token: solve x(t) = p by
+     Newton's method (x' never reaches zero on this curve), answer y(t). */
+  const ease = (() => {
+    const [x1, y1, x2, y2] = [0.2, 0.8, 0.2, 1];
+    const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx;
+    const cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
+    return (p) => {
+      let t = p;
+      for (let i = 0; i < 8; i++) {
+        const err = ((ax * t + bx) * t + cx) * t - p;
+        if (Math.abs(err) < 1e-6) break;
+        t -= err / ((3 * ax * t + 2 * bx) * t + cx);
+      }
+      t = Math.min(1, Math.max(0, t));
+      return ((ay * t + by) * t + cy) * t;
+    };
+  })();
+
+  const counters = new Map();  // node -> { value } on screen, one per count
+
+  function countTo(node, to, format, animate) {
+    const prev = counters.get(node);
+    const from = prev ? prev.value : to;
+    const state = { value: from };
+    counters.set(node, state);
+    const canTween = animate && from !== to && typeof window.requestAnimationFrame === "function"
+      && !(V.lists && V.lists.reduced());
+    if (!canTween) {
+      state.value = to;
+      node.textContent = format(to);
+      return;
+    }
+    let start = null;
+    const frame = (now) => {
+      if (counters.get(node) !== state) return;  // a newer count took over
+      if (start === null) start = now;
+      const p = Math.min(1, (now - start) / COUNT_MS);
+      state.value = p === 1 ? to : from + (to - from) * ease(p);
+      node.textContent = format(state.value);
+      if (p < 1) window.requestAnimationFrame(frame);
+    };
+    window.requestAnimationFrame(frame);
   }
 
   function renderStreakDots(sel, daily) {
@@ -249,7 +309,9 @@ window.Voisr = window.Voisr || {};
      is the backstop for anything that still manages to throw. */
   let knownIds = null;  // every history id at the last render (see below)
 
-  async function render() {
+  /* opts.entering: Home is just being opened (main.js show()), so its
+     numbers appear as they are rather than counting. */
+  async function render(opts = {}) {
     const $ = V.ui.$;
     try {
       $("#greeting").textContent = greeting();
@@ -267,8 +329,11 @@ window.Voisr = window.Voisr || {};
       ]);
 
       if (stats) {
-        $("#stat-saved").textContent = V.ui.formatDuration(stats.time_saved_seconds);
-        $("#stat-words").textContent = (stats.total_words || 0).toLocaleString();
+        const animate = !opts.entering;
+        countTo($("#stat-saved"), stats.time_saved_seconds || 0,
+                (s) => V.ui.formatDuration(s), animate);
+        countTo($("#stat-words"), stats.total_words || 0,
+                (n) => Math.round(n).toLocaleString(), animate);
         $("#stat-streak").textContent = (stats.streak_days || 0).toLocaleString();
 
         // each tile compares and draws its own series
