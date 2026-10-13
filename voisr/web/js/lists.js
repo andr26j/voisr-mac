@@ -104,7 +104,12 @@ window.Voisr.lists = (function () {
     node.classList.remove("is-landed");
     void node.offsetWidth;
     node.classList.add("is-landed");
-    node.addEventListener("animationend", () => node.classList.remove("is-landed"), { once: true });
+    // only the wash's own end: the row-in stagger, or any animation in the
+    // row bubbling up, used to strip it early
+    if (!node._washEnd) {
+      node._washEnd = (e) => { if (e.animationName === "wash") node.classList.remove("is-landed"); };
+      node.addEventListener("animationend", node._washEnd);
+    }
   }
 
   function enter(node, kind) {

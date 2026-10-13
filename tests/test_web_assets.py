@@ -607,3 +607,14 @@ def test_dock_offset_derives_from_the_main_padding():
     base = (WEB / "css" / "base.css").read_text()
     assert "var(--main-pad-b)" in views and "-44px" not in views
     assert "--main-pad-b:" in base
+
+
+def test_landed_wash_outranks_the_row_stagger():
+    """Opening a page replays the stagger (.is-staggering) while a refresh
+    lands new rows. The stagger's `animation` (specificity 0,3,0) used to
+    beat the wash's (0,2,0), so a row that arrived while you were away never
+    showed where it went -- and under reduced motion, the stagger's
+    `animation: none` erased it too."""
+    css = re.sub(r"/\*.*?\*/", "", (WEB / "css" / "base.css").read_text(), flags=re.S)
+    assert re.search(
+        r"\.item-list\.is-staggering \.item-row\.is-landed[^{]*\{[^}]*animation:\s*wash", css)

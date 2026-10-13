@@ -146,3 +146,16 @@ test("a row pushed out and wanted back mid-fade comes back as a new row, not the
   assert.deepEqual(t.keys(), ["a", "b", "c", "d", "e"], "e is still listed once its old node's fade ends");
   assert.ok(!t.list.children.includes(fading), "the fading node finished leaving");
 });
+
+test("the wash ends on its own animationend, not on the stagger's or a child's", () => {
+  const t = setup();
+  const row = makeNode("li");
+  t.L.wash(row);
+  row.dispatch("animationend", { animationName: "row-in" });
+  assert.ok(row.classList.contains("is-landed"), "the row-in stagger ending must not cut the wash short");
+  row.dispatch("animationend", { animationName: "wash" });
+  assert.ok(!row.classList.contains("is-landed"));
+  t.L.wash(row);
+  row.dispatch("animationend", { animationName: "wash" });
+  assert.equal(row._listeners.animationend.length, 1, "washing a row again adds no second listener");
+});
