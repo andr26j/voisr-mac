@@ -180,6 +180,9 @@ def test_gui_shutdown_stops_listener_then_closes_api(monkeypatch):
     events = []
 
     class FakeApi:
+        def __init__(self, **kwargs):
+            pass
+
         def current_level(self):
             return None
 
@@ -239,6 +242,9 @@ def test_gui_stop_failure_still_closes_api(monkeypatch):
     events = []
 
     class FakeApi:
+        def __init__(self, **kwargs):
+            pass
+
         def current_level(self):
             return None
 
@@ -296,6 +302,9 @@ def test_gui_service_constructor_failure_closes_api(monkeypatch):
     events = []
 
     class FakeApi:
+        def __init__(self, **kwargs):
+            pass
+
         def current_level(self):
             return None
 
@@ -327,6 +336,9 @@ def test_gui_window_constructor_failure_stops_listener_and_closes_api(monkeypatc
     events = []
 
     class FakeApi:
+        def __init__(self, **kwargs):
+            pass
+
         def current_level(self):
             return None
 

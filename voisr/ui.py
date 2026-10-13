@@ -598,6 +598,8 @@ def _quartz_listener_factory(handler, mode="listen"):
 class HotkeyService:
     """Global push-to-talk listener driving the shared Api record path."""
 
+    PANE_REOPEN_S = 60  # a refused permission's pane opens at most this often
+
     def __init__(self, api, widget=None, hide_delay=1.2,
                  permissions_check=None, poll_interval=3.0,
                  listener_factory=None):
@@ -609,6 +611,9 @@ class HotkeyService:
             lambda: input_permissions_ok(self.tap_mode))
         self._poll_interval = poll_interval
         self._listener_factory = listener_factory or _quartz_listener_factory
+        self._pane_opener = permissions.open_pane
+        self._clock = time.monotonic
+        self._pane_opened_at = None
         self._listener = None
         self._watcher = None
         self._wake = threading.Event()  # set by stop() to end a sleeping poll
@@ -725,6 +730,8 @@ class HotkeyService:
                 self._latched = False
             raise
         finish = None
+        pane = None
+        refused = False
         with self._state_lock:
             self._starting = False
             released, cancelled = self._start_released, self._start_cancelled
@@ -737,26 +744,48 @@ class HotkeyService:
                     self._flash_error()
                 # a key already let go needs no guard against its repeats
                 self._rejected = not released
-                return
-            self._rejected = False
-            self._epoch += 1
-            epoch = self._epoch
-            if cancelled:
-                # still hide: the new epoch orphans an older pill's own hide
-                self._drop_chord(epoch)
+                pane = self._claim_pane_open(result.get("permission"))
+                refused = True
             else:
-                cfg = self._api.get_config()
-                if self._widget is not None and bool(cfg.get("show_widget", True)):
-                    self._widget_action(
-                        "show_recording", epoch,
-                        theme=sanitize_pill_theme(cfg.get("pill_theme")),
-                        color=sanitize_pill_color(cfg.get("pill_color")))
-                if released:
-                    finish = self._end_recording()
+                self._rejected = False
+                self._epoch += 1
+                epoch = self._epoch
+                if cancelled:
+                    # still hide: the new epoch orphans an older pill's own hide
+                    self._drop_chord(epoch)
+                else:
+                    cfg = self._api.get_config()
+                    if self._widget is not None and bool(cfg.get("show_widget", True)):
+                        self._widget_action(
+                            "show_recording", epoch,
+                            theme=sanitize_pill_theme(cfg.get("pill_theme")),
+                            color=sanitize_pill_color(cfg.get("pill_color")))
+                    if released:
+                        finish = self._end_recording()
+        if refused:
+            # outside _state_lock: the opener dispatches to AppKit
+            if pane is not None:
+                try:
+                    self._pane_opener(pane)
+                except Exception:
+                    pass
+            return
         if cancelled:
             self._api._cancel_recording()
         if finish is not None:
             self._spawn_finish(*finish)
+
+    def _claim_pane_open(self, key):
+        """Open a refused permission's pane at most once a minute; caller
+        holds _state_lock."""
+        if not key:
+            return None
+        now = self._clock()
+        if (self._pane_opened_at is not None
+                and now - self._pane_opened_at < self.PANE_REOPEN_S):
+            return None
+        self._pane_opened_at = now
+        return key
 
     def _flash_error(self) -> None:
         """Error pill, then hide; caller holds _state_lock."""
@@ -1049,7 +1078,8 @@ class Api:
                  fallback_recorder_factory=Recorder,
                  capture_fn=capture_next_key,
                  paste_fn=paste_at_cursor,
-                 clipboard_fn=set_clipboard):
+                 clipboard_fn=set_clipboard,
+                 mic_check=None):
         self._config_path = Path(config_path)
         self._history = history or HistoryStore(ROOT / "data" / "history.jsonl")
         self._transcribe_fn = transcribe_fn
@@ -1058,6 +1088,8 @@ class Api:
         self._capture_fn = capture_fn
         self._paste_fn = paste_fn
         self._clipboard_fn = clipboard_fn
+        # None = no check, so tests never probe the runner's real TCC state
+        self._mic_check = mic_check
         self._last_paste_text = None
         self._last_paste_ts = None
         self._typing_generation = 0
@@ -1305,6 +1337,14 @@ class Api:
         return SessionResult.success(session.sequence, **fields)
 
     def start_recording(self):
+        if self._mic_check is not None:
+            try:
+                mic = self._mic_check()
+            except Exception:
+                mic = None  # unknown never blocks
+            if mic is False:
+                return {"error": "Microphone is switched off for Voisr",
+                        "permission": "microphone"}
         try:
             session = self._recordings.start()
         except RecordingQueueError as error:
@@ -1803,7 +1843,7 @@ def main():
     api = None
     service = None
     try:
-        api = Api()
+        api = Api(mic_check=permissions.microphone_granted)
         widget = RecordingWidget(level_source=api.current_level)
         service = HotkeyService(api, widget=widget)
         api.attach_hotkey_service(service)

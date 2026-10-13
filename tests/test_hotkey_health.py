@@ -354,3 +354,46 @@ def test_starting_then_failed_without_permission_ends_up_waiting(monkeypatch):
     assert svc.status.startswith("waiting for permission")
     assert made == [lst]
     svc.stop()
+
+
+from voisr.history import HistoryStore
+from voisr.ui import Api
+
+
+def _api(tmp_path, mic):
+    return Api(config_path=tmp_path / "config.json",
+               history=HistoryStore(tmp_path / "h.jsonl"),
+               mic_check=lambda: mic)
+
+
+def test_denied_mic_refuses_the_press_and_names_the_permission(tmp_path):
+    result = _api(tmp_path, False).start_recording()
+    assert result["permission"] == "microphone" and "error" in result
+
+
+def test_unasked_mic_does_not_block(tmp_path):
+    # Review Focus 5: None = never asked; recording is what makes macOS ask
+    from types import SimpleNamespace
+    api = _api(tmp_path, None)
+    api._recordings.start = lambda: SimpleNamespace(sequence=1)  # never opens a real mic
+    assert api.start_recording() == {"recording": True, "session_id": 1}
+
+
+def test_settings_opens_at_most_once_a_minute_on_repeated_refusals():
+    # Review Focus 4
+    class RefusingApi(ConfigApi):
+        def start_recording(self):
+            return {"error": "mic off", "permission": "microphone"}
+
+    opened = []
+    svc = HotkeyService(RefusingApi(), permissions_check=lambda: True,
+                        listener_factory=lambda h: h)
+    svc._pane_opener = opened.append
+    clock = [1000.0]
+    svc._clock = lambda: clock[0]
+    for _ in range(5):            # auto-repeat and fresh presses alike
+        svc.press(); svc.release()
+    assert opened == ["microphone"]
+    clock[0] += 61
+    svc.press(); svc.release()
+    assert opened == ["microphone", "microphone"]
