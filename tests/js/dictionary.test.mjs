@@ -12,7 +12,7 @@ const IDS = ["dict-search", "dict-empty", "dict-list", "toast"];
 
 function mountDictionary(t, dictionary) {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const env = loadVoisr(["js/ui.js", "js/api.js", "js/views/dictionary.js"]);
+  const env = loadVoisr(["js/ui.js", "js/lists.js", "js/api.js", "js/views/dictionary.js"]);
   let live = { ...dictionary };
   // Only get_config is exercised below -- these tests drive render() and the
   // search input, never addEntry/removeEntry/commit, so set_config is not

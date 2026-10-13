@@ -4,8 +4,8 @@ from pathlib import Path
 WEB = Path(__file__).resolve().parent.parent / "voisr" / "web"
 INDEX = WEB / "index.html"
 
-JS_FILES = ["js/api.js", "js/ui.js", "js/palette.js",
-            "js/views/home.js", "js/views/history.js",
+JS_FILES = ["js/api.js", "js/ui.js", "js/lists.js", "js/palette.js",
+            "js/meter.js", "js/dock-meter.js", "js/views/home.js", "js/views/history.js",
             "js/views/dictionary.js", "js/views/settings.js", "js/main.js"]
 CSS_FILES = ["css/tokens.css", "css/base.css",
              "css/components.css", "css/views.css"]
@@ -446,7 +446,9 @@ def test_view_transition_class_exists_and_respects_reduced_motion():
     assert rule, "expected an 'animation: none' rule inside the reduced-motion block"
     disabled_selectors = rule.group(1)
     assert ".view.entering" in disabled_selectors
-    assert ".item-list .item-row" in disabled_selectors
+    assert ".item-list.is-staggering .item-row" in disabled_selectors
+    # the landing wash is colour, not movement: reduced motion keeps it
+    assert ".item-row.is-landed" not in disabled_selectors
 
 
 def test_show_applies_the_entering_class():
@@ -605,3 +607,24 @@ def test_dock_offset_derives_from_the_main_padding():
     base = (WEB / "css" / "base.css").read_text()
     assert "var(--main-pad-b)" in views and "-44px" not in views
     assert "--main-pad-b:" in base
+
+
+def test_landed_wash_outranks_the_row_stagger():
+    """Opening a page replays the stagger (.is-staggering) while a refresh
+    lands new rows. The stagger's `animation` (specificity 0,3,0) used to
+    beat the wash's (0,2,0), so a row that arrived while you were away never
+    showed where it went -- and under reduced motion, the stagger's
+    `animation: none` erased it too."""
+    css = re.sub(r"/\*.*?\*/", "", (WEB / "css" / "base.css").read_text(), flags=re.S)
+    assert re.search(
+        r"\.item-list\.is-staggering \.item-row\.is-landed[^{]*\{[^}]*animation:\s*wash", css)
+
+
+def test_trend_bars_keep_round_caps_when_scaled():
+    """Trend bars grow with scaleY, which squashes a plain 2px radius into a
+    flat top. Like the pill and dock bars, the vertical radius is
+    pre-stretched by the inverse of the scale (--h)."""
+    css = re.sub(r"/\*.*?\*/", "", (WEB / "css" / "views.css").read_text(), flags=re.S)
+    rule = re.search(r"\.trend \.bar \{([^}]*)\}", css).group(1)
+    assert "scaleY(var(--h))" in rule
+    assert re.search(r"border-radius:\s*2px\s*/\s*calc\(2px\s*/\s*var\(--h\)\)", rule)

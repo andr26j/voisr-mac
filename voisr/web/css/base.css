@@ -58,9 +58,21 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 .brand-name { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
 
-.nav { display: flex; flex-direction: column; gap: 2px; }
+.nav { position: relative; display: flex; flex-direction: column; gap: 2px; }
+
+/* the active item's surface: one element that glides between items
+   (main.js glideTo), transitions on only after its first placement */
+.nav-glide {
+  position: absolute; top: 0; left: 0; right: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  pointer-events: none;
+}
+.nav-glide.is-live { transition: transform 180ms var(--ease); }
 
 .nav-item {
+  position: relative;  /* paints above .nav-glide */
   display: flex;
   align-items: center;
   gap: 10px;
@@ -76,7 +88,8 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 .nav-item:hover { background: var(--accent-soft); color: var(--ink); }
 
-.nav-item.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+/* the surface is .nav-glide's; hovering the active item doesn't tint over it */
+.nav-item.active, .nav-item.active:hover { background: transparent; color: var(--ink); }
 
 /* the dock's mic is open (set by views/home.js); visible from every view */
 .nav-item[data-recording="true"]::after {
@@ -119,21 +132,33 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   to   { opacity: 1; transform: none; }
 }
 
-.item-list .item-row { animation: row-in var(--base) var(--ease) both; }
+/* The row stagger plays when a page opens or a list first fills
+   (js/lists.js adds .is-staggering), never on a refresh: a refresh moves
+   only the rows that changed. */
+.item-list.is-staggering .item-row { animation: row-in var(--base) var(--ease) both; }
 /* stagger only the first ten rows — a long list must never crawl */
-.item-list .item-row:nth-child(1) { animation-delay: 0ms; }
-.item-list .item-row:nth-child(2) { animation-delay: 20ms; }
-.item-list .item-row:nth-child(3) { animation-delay: 40ms; }
-.item-list .item-row:nth-child(4) { animation-delay: 60ms; }
-.item-list .item-row:nth-child(5) { animation-delay: 80ms; }
-.item-list .item-row:nth-child(6) { animation-delay: 100ms; }
-.item-list .item-row:nth-child(7) { animation-delay: 120ms; }
-.item-list .item-row:nth-child(8) { animation-delay: 140ms; }
-.item-list .item-row:nth-child(9) { animation-delay: 160ms; }
-.item-list .item-row:nth-child(n+10) { animation-delay: 180ms; }
+.item-list.is-staggering .item-row:nth-child(1) { animation-delay: 0ms; }
+.item-list.is-staggering .item-row:nth-child(2) { animation-delay: 20ms; }
+.item-list.is-staggering .item-row:nth-child(3) { animation-delay: 40ms; }
+.item-list.is-staggering .item-row:nth-child(4) { animation-delay: 60ms; }
+.item-list.is-staggering .item-row:nth-child(5) { animation-delay: 80ms; }
+.item-list.is-staggering .item-row:nth-child(6) { animation-delay: 100ms; }
+.item-list.is-staggering .item-row:nth-child(7) { animation-delay: 120ms; }
+.item-list.is-staggering .item-row:nth-child(8) { animation-delay: 140ms; }
+.item-list.is-staggering .item-row:nth-child(9) { animation-delay: 160ms; }
+.item-list.is-staggering .item-row:nth-child(n+10) { animation-delay: 180ms; }
 
 @keyframes row-in { from { opacity: 0; } to { opacity: 1; } }
 
+/* a new, restored or edited row: holds the accent for the first 35%, then
+   fades. It outranks the stagger, including reduced motion's `none` below:
+   a row that lands while a page opens still shows where it went. */
+.item-row.is-landed,
+.item-list.is-staggering .item-row.is-landed { animation: wash 1.6s linear; }
+@keyframes wash { 0%, 35% { background: var(--accent-soft); } 100% { background: transparent; } }
+
 @media (prefers-reduced-motion: reduce) {
-  .view.entering, .item-list .item-row { animation: none; }
+  /* the wash stays: it is colour, not movement */
+  .view.entering, .item-list.is-staggering .item-row { animation: none; }
+  .nav-glide.is-live { transition: none; }
 }

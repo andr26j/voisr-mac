@@ -54,7 +54,7 @@ const OK_API = {
    would then have to mock away for no benefit. Same shape either way --
    `V.api()` returns the bridge object. */
 function mountHome(api) {
-  const env = loadVoisr(["js/ui.js", "js/views/home.js"]);
+  const env = loadVoisr(["js/ui.js", "js/lists.js", "js/views/home.js"]);
   const nodes = {};
   for (const id of HOME_IDS) {
     nodes[id] = makeNode(id === "recent-list" ? "ul" : "div");
@@ -461,4 +461,134 @@ test("'Record from here instead' never stops a dock recording already running", 
   } finally {
     await stopDock(h);
   }
+});
+
+/* ---------- step 5: stats count up, trend bars grow ----------
+
+   The fake window has no requestAnimationFrame, so every update is instant
+   unless a test installs these: frames queue up and the test runs them with
+   the timestamps it wants. */
+function frames(h) {
+  const queue = [];
+  h.window.requestAnimationFrame = (fn) => queue.push(fn);
+  return {
+    run(ts) { queue.splice(0).forEach((fn) => fn(ts)); },
+    get pending() { return queue.length; },
+  };
+}
+
+const num = (s) => Number(String(s).replace(/\D/g, ""));
+const statsWith = (over) => async () => ({ ...(await OK_API.get_stats()), ...over });
+
+test("opening Home shows the stats as they are -- no count from zero", async () => {
+  const h = mountHome({});
+  const f = frames(h);
+  await h.V.views.home.render({ entering: true });
+  assert.equal(h["stat-words"].textContent, (12480).toLocaleString());
+  assert.equal(h["stat-saved"].textContent, "3h 42m");
+  assert.equal(f.pending, 0, "nothing to tween on open");
+});
+
+test("a stat that changes while Home is on screen counts up over 600 ms", async () => {
+  const api = {};
+  const h = mountHome(api);
+  const f = frames(h);
+  await h.V.views.home.render({ entering: true });
+
+  api.get_stats = statsWith({ total_words: 13000, time_saved_seconds: 13920 });
+  await h.V.views.home.render();
+  assert.equal(num(h["stat-words"].textContent), 12480, "starts from the old value");
+
+  f.run(1000);                       // first frame: the clock starts here
+  assert.equal(num(h["stat-words"].textContent), 12480);
+  f.run(1300);                       // halfway in time, well past halfway in value (ease-out)
+  const mid = num(h["stat-words"].textContent);
+  assert.ok(mid > 12740 && mid < 13000, `halfway frame showed ${mid}`);
+  f.run(1600);
+  assert.equal(h["stat-words"].textContent, (13000).toLocaleString());
+  assert.equal(h["stat-saved"].textContent, "3h 52m", "time saved tweens its seconds and lands formatted");
+  assert.equal(f.pending, 0, "the tween stops once it lands");
+});
+
+test("an unchanged stat schedules no frames", async () => {
+  const h = mountHome({});
+  const f = frames(h);
+  await h.V.views.home.render({ entering: true });
+  await h.V.views.home.render();
+  assert.equal(f.pending, 0);
+});
+
+test("a new value mid-count carries on from what is on screen, never jumping back", async () => {
+  const api = {};
+  const h = mountHome(api);
+  const f = frames(h);
+  await h.V.views.home.render({ entering: true });
+  api.get_stats = statsWith({ total_words: 13000 });
+  await h.V.views.home.render();
+  f.run(0);
+  f.run(300);
+  const shown = num(h["stat-words"].textContent);
+
+  api.get_stats = statsWith({ total_words: 14000 });
+  await h.V.views.home.render();
+  f.run(500);
+  assert.equal(num(h["stat-words"].textContent), shown, "the second count starts where the first stood");
+  f.run(1100);
+  assert.equal(h["stat-words"].textContent, (14000).toLocaleString());
+});
+
+test("reduced motion jumps a changed stat straight to its value", async () => {
+  const api = {};
+  const h = mountHome(api);
+  const f = frames(h);
+  h.window.matchMedia = (q) => ({ matches: /reduce/.test(q), addEventListener() {} });
+  await h.V.views.home.render({ entering: true });
+  api.get_stats = statsWith({ total_words: 13000 });
+  await h.V.views.home.render();
+  assert.equal(h["stat-words"].textContent, (13000).toLocaleString());
+  assert.equal(f.pending, 0);
+});
+
+test("a refresh with the same number of days keeps the trend bars, so they can grow", async () => {
+  const api = {};
+  const h = mountHome(api);
+  await h.V.views.home.render({ entering: true });
+  const before = [...h["trend-words"].children];
+
+  // today doubles: every other day halves against the new maximum
+  api.get_stats = statsWith({ daily: Array.from({ length: 14 }, (_, i) => ({
+    date: `d${i}`, words: i === 13 ? 260 : i * 10, saved_seconds: i * 15 })) });
+  await h.V.views.home.render();
+
+  const after = h["trend-words"].children;
+  assert.equal(after.length, 14);
+  assert.ok(after.every((bar, i) => bar === before[i]), "the same nodes, restyled in place");
+  assert.equal(after[13].style.getPropertyValue("--h"), "1.000");
+  assert.equal(after[12].style.getPropertyValue("--h"), "0.462");
+  assert.equal(after[13].className, "bar today");
+});
+
+test("an empty day keeps its 2 px stub now that bars scale instead of resize", async () => {
+  const h = mountHome({});
+  await h.V.views.home.render({ entering: true });
+  const zero = h["trend-words"].children[0];
+  assert.equal(zero.className, "bar zero");
+  // scaleY ignores min-height, so the floor is 2 px of the 34 px trend
+  assert.equal(zero.style.getPropertyValue("--h"), (2 / 34).toFixed(3));
+});
+
+test("a recent-list refresh that fails mid-animation says so instead of an unhandled rejection", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const api = {};
+  const h = mountHome(api);
+  h["recent-list"].animate = () => ({ finished: Promise.resolve() });  // lists.js animates it
+  await h.V.views.home.render({ entering: true });
+
+  api.get_history = async () => [{ id: "new", ts: 1_760_000_000, text: "fresh", words: 1, duration_s: 1 }, ...HISTORY];
+  h.V.ui.itemRow = () => { throw new Error("bad row"); };
+  await h.V.views.home.render();
+  await settle();
+
+  const toastText = h.toast.children.map((c) => c.textContent).join("");
+  assert.match(toastText, /Recent dictations failed to update/);
 });

@@ -113,6 +113,14 @@ window.Voisr = window.Voisr || {};
         { value: "scanner", label: "Scanner" },
       ],
       start_recording: async () => { recording = true; return { recording: true }; },
+      // mirrors Api.get_level(): a simulated voice (syllables and pauses)
+      // while recording, null otherwise
+      get_level: async () => {
+        if (!recording) return null;
+        const t = Date.now() / 1000;
+        const syllable = Math.max(0, Math.sin(t * 9.5)) * (Math.sin(t * 1.3) > -0.6 ? 1 : 0);
+        return 0.03 + 0.85 * syllable * (0.75 + 0.25 * Math.sin(t * 3.1));
+      },
       stop_recording: async () => {
         if (!recording) return { error: "not recording" };
         recording = false;

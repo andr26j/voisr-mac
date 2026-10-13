@@ -3,7 +3,7 @@ window.Voisr = window.Voisr || {};
 (function (V) {
   const PAGE = 200;
   const SEARCH_DEBOUNCE_MS = 120;
-  let query = "", shown = PAGE, items = [], flat = [], cursor = -1;
+  let query = "", shown = PAGE, items = [], flat = [];
   let searchDebounceTimer = null;
 
   async function onCopy(item) {
@@ -37,7 +37,6 @@ window.Voisr = window.Voisr || {};
   function applyQuery(q) {
     query = q || "";
     shown = PAGE;
-    cursor = -1;
     renderList();
   }
 
@@ -81,31 +80,57 @@ window.Voisr = window.Voisr || {};
     return out;
   }
 
-  function moveCursor(delta) {
-    if (!flat.length) return;
-    cursor = Math.max(0, Math.min(cursor + delta, flat.length - 1));
-    const rows = document.querySelectorAll("#history-groups .item-row");
-    rows.forEach((r, i) => r.classList.toggle("selected", i === cursor));
-    if (rows[cursor]) rows[cursor].scrollIntoView({ block: "nearest" });
+  /* The keyboard selection lives on the rows on screen, never on an index
+     into `flat`: rows are kept across refreshes (js/lists.js), and a deleted
+     row (or a whole day) stays in the DOM while it fades out, by which time
+     `flat` is already the new list. Rows on their way out can't be reached. */
+  function liveRows() {
+    return Array.from(document.getElementById("history-groups").querySelectorAll(".item-row"))
+      .filter((r) => !r.closest(".is-leaving"));
   }
 
-  /* The single source of truth for "is there a selected item right now".
-     Never trust `cursor`/`flat` alone — always confirm a row actually
-     carries `.selected` in the live DOM before acting on it. This is what
-     keeps a stale cursor from ever deleting a row the user didn't pick. */
+  function selectedRow() {
+    return liveRows().find((r) => r.classList.contains("selected")) || null;
+  }
+
+  function clearSelection() {
+    for (const r of document.getElementById("history-groups").querySelectorAll(".item-row")) {
+      r.classList.remove("selected");
+    }
+  }
+
+  function moveCursor(delta) {
+    const rows = liveRows();
+    if (!rows.length) return;
+    const at = rows.findIndex((r) => r.classList.contains("selected"));
+    const next = Math.max(0, Math.min(at + delta, rows.length - 1));
+    rows.forEach((r, i) => r.classList.toggle("selected", i === next));
+    rows[next].scrollIntoView({ block: "nearest" });
+  }
+
+  /* The single source of truth for "is there a selected item right now":
+     the highlighted row, resolved to its item by id. A row whose item is no
+     longer listed answers null, so Backspace can only ever delete the row
+     the user can see highlighted. */
   function selectedItem() {
-    if (cursor < 0 || cursor >= flat.length) return null;
-    const rows = document.querySelectorAll("#history-groups .item-row");
-    const row = rows[cursor];
-    if (!row || !row.classList.contains("selected")) return null;
-    return flat[cursor];
+    const row = selectedRow();
+    if (!row) return null;
+    return flat.find((item) => item.id === row.dataset.key) || null;
   }
 
   /* Pure re-render from the already-loaded `items` array -- no bridge call.
      This is what a search keystroke drives (via applyQuery); it must never
      hit the API, or every keystroke would re-read and re-sort the entire
      JSONL in Python for a filter that's cheap to do in JS. */
-  function renderList() {
+  let knownIds = null;      // every loaded id at the last data render
+
+  /* Rebuilds from the already-loaded `items` array. Keyed (js/lists.js):
+     day groups by label, rows by id, so a refresh moves only what changed.
+     `animate` is set by render() -- a real data change, and "Load more"
+     too, which refetches through render(): its new rows rise in as fill.
+     A search keystroke applies instantly. Runs serialised, so a refresh
+     that lands mid-animation waits its turn. */
+  function renderList({ animate = false } = {}) {
     const visible = items.filter(matches);
     flat = visible.slice(0, shown);
     document.getElementById("history-empty").hidden = visible.length > 0;
@@ -117,31 +142,93 @@ window.Voisr = window.Voisr || {};
       if (!groups.has(day)) groups.set(day, []);
       groups.get(day).push(item);
     }
-
-    const container = document.getElementById("history-groups");
-    container.replaceChildren(...[...groups.entries()].map(([day, rows]) =>
-      V.ui.el("div", { class: "day-group" },
-        V.ui.el("div", { class: "day-label", text: day }),
-        V.ui.el("div", { class: "card" },
-          V.ui.el("ul", { class: "item-list" },
-            ...rows.map((item) => {
-              const row = V.ui.itemRow(item, {
-                onCopy: onCopy, onDelete: onDelete,
-              });
-              const txt = row.querySelector(".txt");
-              txt.replaceChildren(...highlighted(item.text, query));
-              row.addEventListener("click", () => row.classList.toggle("expanded"));
-              return row;
-            }))))));
+    const known = knownIds;
+    knownIds = new Set(items.map((item) => item.id));
+    const ids = knownIds;
+    const q = query;
 
     // `flat` was just rebuilt (delete / Load more / search / background
-    // refresh can all land here) and row indices may have shifted, so any
-    // previous `cursor` position is no longer trustworthy. Clear it rather
-    // than try to remap it — a stale index reapplied to new rows is exactly
-    // how a Backspace can delete something the user never selected. The
-    // user must arrow again to re-select, and `selectedItem()` above
-    // refuses to act on anything until they do.
-    cursor = -1;
+    // refresh can all land here), so drop the keyboard selection: the user
+    // arrows again to re-select, and selectedItem() refuses to act until
+    // they do. Kept rows would otherwise stay highlighted.
+    clearSelection();
+
+    return V.lists.serial(document.getElementById("history-groups"),
+                          () => syncGroups(groups, { animate, known, ids, q }));
+  }
+
+  function buildRow(item, q) {
+    const row = V.ui.itemRow(item, { onCopy: onCopy, onDelete: onDelete });
+    row.querySelector(".txt").replaceChildren(...highlighted(item.text, q));
+    row.addEventListener("click", () => row.classList.toggle("expanded"));
+    return row;
+  }
+
+  /* Returns a promise only when it animates (see V.lists.serial). */
+  function syncGroups(groups, opts) {
+    const container = document.getElementById("history-groups");
+    const wasEmpty = container.children.length === 0;
+    const motion = opts.animate && !wasEmpty && V.lists.canAnimate(container);
+    if (!motion) {
+      applyGroups(container, groups, opts);
+      if (wasEmpty && opts.animate) {
+        for (const group of Array.from(container.children)) V.lists.stagger(group.querySelector(".item-list"));
+      }
+      return undefined;
+    }
+    return animateGroups(container, groups, opts);
+  }
+
+  async function animateGroups(container, groups, opts) {
+    const L = V.lists;
+    const { ids } = opts;
+    const listOf = (group) => group.querySelector(".item-list");
+
+    // deleted rows leave first; a day that empties leaves as a whole
+    const leaving = [];
+    for (const group of Array.from(container.children)) {
+      if (!groups.has(group.dataset.key)) { leaving.push(group); continue; }
+      for (const row of Array.from(listOf(group).children)) {
+        if (!ids.has(row.dataset.key)) leaving.push(row);
+      }
+    }
+    if (leaving.length) await L.leave(leaving);
+
+    const before = !L.reduced()
+      ? L.measure(Array.from(container.children).flatMap((group) =>
+          [group.querySelector(".day-label"), ...Array.from(listOf(group).children)]))
+      : new Map();
+
+    const { fresh, enteredRows } = applyGroups(container, groups, opts);
+    L.play(before);
+    // a new day rises in as one piece; its rows only take the wash
+    for (const group of fresh) L.enter(group, "group");
+    for (const [row, kind, inFreshGroup] of enteredRows) {
+      if (inFreshGroup) { if (kind === "landed") L.wash(row); }
+      else L.enter(row, kind);
+    }
+  }
+
+  /* Keyed, motion-free: day groups by label, rows by id. */
+  function applyGroups(container, groups, { known, q }) {
+    const L = V.lists;
+    const listOf = (group) => group.querySelector(".item-list");
+    const { entered: newGroups } = L.apply(container, [...groups.keys()].map((day) => ({
+      key: day, sig: day,
+      build: () => V.ui.el("div", { class: "day-group" },
+        V.ui.el("div", { class: "day-label", text: day }),
+        V.ui.el("div", { class: "card" }, V.ui.el("ul", { class: "item-list" }))),
+    })));
+    const fresh = new Set(newGroups.map(([group]) => group));
+    const enteredRows = [];
+    for (const group of Array.from(container.children)) {
+      const rows = groups.get(group.dataset.key) || [];
+      const { entered } = L.apply(listOf(group), rows.map((item) => ({
+        key: item.id, sig: q, build: () => buildRow(item, q),
+      })), { wasKnown: (id) => !!known && known.has(id) });
+      for (const [row, kind] of entered) enteredRows.push([row, kind, fresh.has(group)]);
+    }
+    return { fresh, enteredRows };
   }
 
   /* Genuine data-changing entry point: refetches from Python then rebuilds.
@@ -159,7 +246,7 @@ window.Voisr = window.Voisr || {};
       const loaded = await V.ui.tryApi(V.api().get_history(), "Load history");
       if (!loaded) return;
       items = loaded;
-      renderList();
+      await renderList({ animate: true });
     } catch (e) {
       V.ui.toast("History failed to load");
     }
@@ -245,18 +332,16 @@ window.Voisr = window.Voisr || {};
       if (e.key === "ArrowDown") { e.preventDefault(); moveCursor(1); }
       else if (e.key === "ArrowUp") { e.preventDefault(); moveCursor(-1); }
       else if (e.key === "Enter") {
-        const item = selectedItem();
-        if (!item) return;
+        if (!selectedItem()) return;
         e.preventDefault();
-        document.querySelectorAll("#history-groups .item-row")[cursor]
-          .classList.toggle("expanded");
+        selectedRow().classList.toggle("expanded");
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
         const item = selectedItem();
         if (!item) return;
         e.preventDefault(); onCopy(item);
       } else if (e.key === "Backspace") {
         // Deliberately re-derive the item from the live DOM selection
-        // instead of trusting `flat[cursor]` — see selectedItem()'s
+        // instead of trusting an index into `flat` — see selectedItem()'s
         // comment. If nothing is visibly selected, Backspace is a no-op.
         const item = selectedItem();
         if (!item) return;

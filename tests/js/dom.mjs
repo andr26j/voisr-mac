@@ -187,6 +187,28 @@ export function makeNode(tag = "div") {
       node._adopt(k);
       return k;
     },
+    /* Moves `k` before `ref` (or to the end for a null ref), detaching it
+       from wherever it was -- the real DOM moves, never duplicates. Keyed
+       list updates (js/lists.js) reorder survivors with this. */
+    insertBefore(k, ref) {
+      if (k && typeof k === "object" && k.parent) {
+        const siblings = k.parent.children;
+        const i = siblings.indexOf(k);
+        if (i !== -1) siblings.splice(i, 1);
+      }
+      const at = ref ? node.children.indexOf(ref) : -1;
+      if (at === -1) node.children.push(k);
+      else node.children.splice(at, 0, k);
+      if (k && typeof k === "object") k.parent = node;
+      return k;
+    },
+    remove() {
+      if (!node.parent) return;
+      const siblings = node.parent.children;
+      const i = siblings.indexOf(node);
+      if (i !== -1) siblings.splice(i, 1);
+      node.parent = null;
+    },
     // Detaches every outgoing child (parent = null) before adopting the new
     // ones, so a node that got replaced out of the tree can never satisfy a
     // later contains()/closest() through a stale parent link.
