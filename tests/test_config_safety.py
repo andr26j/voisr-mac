@@ -74,7 +74,7 @@ def test_wrongly_typed_values_fall_back_to_defaults_and_keep_the_rest(tmp_path):
 def test_a_string_hotkey_vk_does_not_stop_the_listener_starting(tmp_path):
     (tmp_path / "config.json").write_text(json.dumps({"hotkey_vk": "F13"}))
     svc = HotkeyService(make_api(tmp_path), permissions_check=lambda: True,
-                        listener_factory=lambda handler, mode="listen": None)
+                        listener_factory=lambda handler, mode="listen": handler)
     svc.start()
     assert svc.status.startswith("active on")
     svc.stop()

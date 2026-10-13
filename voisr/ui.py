@@ -636,6 +636,8 @@ class HotkeyService:
         self._ops = None
         self._ops_thread = None
         self.status = "not started"
+        # active | waiting | not_effective | off -- see _refresh_status
+        self.health = "off"
 
     _OPS_STOP = object()
 
@@ -939,13 +941,36 @@ class HotkeyService:
         except Exception as e:
             print(f"Voisr hotkey: listener start failed: {e}", flush=True)
 
+    def _tap_state(self) -> str:
+        """What macOS actually gave us. A listener without wait_started is a
+        test double (a bare handler, not a tap): it counts as running only
+        if the permission check says so."""
+        listener = self._listener
+        if listener is None:
+            return "failed"
+        wait = getattr(listener, "wait_started", None)
+        if wait is None:
+            return "running" if self._permissions_check() else "failed"
+        return wait(0.5)
+
     def _refresh_status(self) -> None:
-        if self._permissions_check():
+        # May block up to 0.5 s in wait_started: only start() and the poll
+        # thread call this, never the tap callback.
+        pane = permissions.PANES[permissions.hotkey_key(self.tap_mode)][0]
+        if self._tap_state() == "running":
+            self.health = "active"
             self.status = f"active on {self._key_name}"
+        elif self._permissions_check():
+            # macOS says yes, the tap says no: a stale TCC entry
+            self.health = "not_effective"
+            self.status = (f"{pane} is switched on for Voisr but macOS isn't "
+                           "honouring it — reset it from Home")
         else:
+            self.health = "waiting"
+            panes = ("BOTH Input Monitoring and Accessibility"
+                     if self.tap_mode == "listen" else "Accessibility")
             self.status = ("waiting for permission — open System Settings → "
-                           "Privacy & Security and switch Voisr ON under BOTH "
-                           "Input Monitoring and Accessibility")
+                           f"Privacy & Security and switch Voisr ON under {panes}")
         print(f"Voisr hotkey: {self.status}", flush=True)
 
     def _watch(self) -> None:
@@ -954,24 +979,22 @@ class HotkeyService:
         self._wake.clear()
 
         def poll():
-            was_granted = self._permissions_check()
-            while not self._stopped:
-                granted = self._permissions_check()
-                if granted and not was_granted:
-                    # permission just landed → respawn to get a LIVE tap
-                    # (the untrusted listener spawned at start() exited)
+            while not self._stopped and self.health != "active":
+                # wait, not sleep: stop() wakes this immediately
+                if self._wake.wait(self._poll_interval):
+                    return
+                if self._stopped:
+                    return
+                if self._permissions_check():
+                    # granted (or re-granted after a reset): try for a LIVE tap
                     self._spawn_listener()
                     self._refresh_status()
-                was_granted = granted
-                if granted:
-                    break
-                # wait, not sleep: stop() wakes this immediately
-                self._wake.wait(self._poll_interval)
 
         self._watcher = threading.Thread(target=poll, daemon=True)
         self._watcher.start()
 
     def stop(self) -> None:
+        self.health = "off"
         self._stopped = True
         self._stop_worker()
         # Wake and join the poll so a following start() never races a
@@ -1487,7 +1510,8 @@ class Api:
         drops the key) or "off"."""
         svc = self._hotkey_service
         if svc is None:
-            return {"status": "push-to-talk not running", "state": "off"}
+            return {"status": "push-to-talk not running", "state": "off",
+                    "health": "off"}
         status = svc.status
         if not (svc.running and status.startswith("active")):
             state = "off"
@@ -1498,11 +1522,18 @@ class Api:
         if status.startswith("active") and self.get_config().get("paste"):
             status += " · paste ready" if paste_ready() \
                 else " · grant Accessibility to auto-paste"
-        return {"status": status, "state": state}
+        return {"status": status, "state": state,
+                "health": getattr(svc, "health", "off")}
 
     def get_permissions(self):
         mode = self.get_config().get("event_tap", "listen")
-        return {"panes": permissions.states(mode=mode)}
+        panes = permissions.states(mode=mode)
+        svc = self._hotkey_service
+        if svc is not None and getattr(svc, "health", None) == "not_effective":
+            for pane in panes:
+                if pane["hotkey"]:
+                    pane["effective"] = False
+        return {"panes": panes}
 
     def open_settings_pane(self, key):
         return {"ok": permissions.open_pane(key)}

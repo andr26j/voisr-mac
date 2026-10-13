@@ -121,3 +121,92 @@ def test_unknown_event_tap_value_falls_back_to_listen(monkeypatch):
     svc.start()
     assert svc.tap_mode == "listen" and made == ["listen"]
     svc.stop()
+
+
+def test_running_tap_is_active(monkeypatch):
+    monkeypatch.setattr("voisr.ui.request_permissions", lambda mode="listen": None)
+    svc, _ = make(ConfigApi(event_tap="active"), granted=True, tap_state="running")
+    svc.start()
+    assert svc.health == "active" and svc.status.startswith("active on ")
+    svc.stop()
+
+
+def test_no_grant_and_no_tap_is_waiting(monkeypatch):
+    monkeypatch.setattr("voisr.ui.request_permissions", lambda mode="listen": None)
+    svc, _ = make(ConfigApi(event_tap="active"), granted=False, tap_state="failed")
+    svc.start()
+    assert svc.health == "waiting"
+    assert "Accessibility" in svc.status and "Input Monitoring" not in svc.status
+    svc.stop()
+
+
+def test_granted_but_tap_refused_is_not_effective(monkeypatch):
+    # Review Focus 3: the stale-grant case must not read "waiting for permission"
+    monkeypatch.setattr("voisr.ui.request_permissions", lambda mode="listen": None)
+    svc, _ = make(ConfigApi(event_tap="active"), granted=True, tap_state="failed")
+    svc.start()
+    assert svc.health == "not_effective"
+    assert not svc.status.startswith("waiting")
+    svc.stop()
+
+
+def test_get_permissions_flags_the_hotkey_pane_when_not_effective(tmp_path, monkeypatch):
+    from voisr import permissions
+    from voisr.history import HistoryStore
+    from voisr.ui import Api
+
+    monkeypatch.setattr(permissions, "DEFAULT_PROBES", {
+        "microphone": lambda: True, "input_monitoring": lambda: True,
+        "accessibility": lambda: True})
+
+    class Svc:
+        health = "not_effective"
+
+    api = Api(config_path=tmp_path / "config.json",
+              history=HistoryStore(tmp_path / "h.jsonl"))
+    api.set_config({"event_tap": "active"})
+    api.attach_hotkey_service(Svc())
+    panes = {p["key"]: p for p in api.get_permissions()["panes"]}
+    assert panes["accessibility"]["effective"] is False
+    assert panes["microphone"]["effective"] is True
+
+
+def test_listener_without_wait_started_follows_the_permission_check(monkeypatch):
+    # a bare handler (test double) has no tap state: it is running only if the
+    # permission check says so, so a denied check still reads "waiting"
+    monkeypatch.setattr("voisr.ui.request_permissions", lambda mode="listen": None)
+    for granted, health in ((True, "active"), (False, "waiting")):
+        svc = HotkeyService(ConfigApi(), permissions_check=lambda g=granted: g,
+                            listener_factory=lambda handler, mode="listen": handler,
+                            poll_interval=60)
+        svc.start()
+        assert svc.health == health
+        svc.stop()
+
+
+def test_stop_sets_health_off_and_status_reports_it(monkeypatch):
+    monkeypatch.setattr("voisr.ui.request_permissions", lambda mode="listen": None)
+    svc, _ = make(ConfigApi(), granted=True, tap_state="running")
+    assert svc.health == "off"
+    svc.start()
+    assert svc.health == "active"
+    svc.stop()
+    assert svc.health == "off"
+
+
+def test_get_hotkey_status_reports_health(tmp_path):
+    from voisr.history import HistoryStore
+    from voisr.ui import Api
+
+    api = Api(config_path=tmp_path / "config.json",
+              history=HistoryStore(tmp_path / "h.jsonl"))
+    assert api.get_hotkey_status()["health"] == "off"
+
+    class Svc:
+        health = "not_effective"
+        status = "Accessibility is switched on for Voisr but macOS isn't honouring it"
+        running = True
+        holding = False
+
+    api.attach_hotkey_service(Svc())
+    assert api.get_hotkey_status()["health"] == "not_effective"
