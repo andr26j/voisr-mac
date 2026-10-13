@@ -123,6 +123,7 @@ window.Voisr.lists = (function () {
   function leave(nodes) {
     const still = reduced();
     return Promise.all(nodes.map((n) => {
+      n.classList.add("is-leaving");  // out of reach: History's keyboard skips it
       n.style.pointerEvents = "none";
       if (!canAnimate(n)) return Promise.resolve();
       const frames = still
@@ -135,6 +136,7 @@ window.Voisr.lists = (function () {
   /* Rows pushed past the end: fade under the edge, then go. */
   function fadeAway(nodes) {
     for (const n of nodes) {
+      n.classList.add("is-leaving");
       n.style.pointerEvents = "none";
       const anim = canAnimate(n) ? n.animate([{ opacity: 1 }, { opacity: 0 }], { duration: LEAVE_MS, fill: "forwards" }) : null;
       finished(anim).then(() => n.remove());

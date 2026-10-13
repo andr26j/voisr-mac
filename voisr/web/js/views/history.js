@@ -3,7 +3,7 @@ window.Voisr = window.Voisr || {};
 (function (V) {
   const PAGE = 200;
   const SEARCH_DEBOUNCE_MS = 120;
-  let query = "", shown = PAGE, items = [], flat = [], cursor = -1;
+  let query = "", shown = PAGE, items = [], flat = [];
   let searchDebounceTimer = null;
 
   async function onCopy(item) {
@@ -37,7 +37,6 @@ window.Voisr = window.Voisr || {};
   function applyQuery(q) {
     query = q || "";
     shown = PAGE;
-    cursor = -1;
     renderList();
   }
 
@@ -81,24 +80,42 @@ window.Voisr = window.Voisr || {};
     return out;
   }
 
-  function moveCursor(delta) {
-    if (!flat.length) return;
-    cursor = Math.max(0, Math.min(cursor + delta, flat.length - 1));
-    const rows = document.querySelectorAll("#history-groups .item-row");
-    rows.forEach((r, i) => r.classList.toggle("selected", i === cursor));
-    if (rows[cursor]) rows[cursor].scrollIntoView({ block: "nearest" });
+  /* The keyboard selection lives on the rows on screen, never on an index
+     into `flat`: rows are kept across refreshes (js/lists.js), and a deleted
+     row (or a whole day) stays in the DOM while it fades out, by which time
+     `flat` is already the new list. Rows on their way out can't be reached. */
+  function liveRows() {
+    return Array.from(document.getElementById("history-groups").querySelectorAll(".item-row"))
+      .filter((r) => !r.closest(".is-leaving"));
   }
 
-  /* The single source of truth for "is there a selected item right now".
-     Never trust `cursor`/`flat` alone — always confirm a row actually
-     carries `.selected` in the live DOM before acting on it. This is what
-     keeps a stale cursor from ever deleting a row the user didn't pick. */
+  function selectedRow() {
+    return liveRows().find((r) => r.classList.contains("selected")) || null;
+  }
+
+  function clearSelection() {
+    for (const r of document.getElementById("history-groups").querySelectorAll(".item-row")) {
+      r.classList.remove("selected");
+    }
+  }
+
+  function moveCursor(delta) {
+    const rows = liveRows();
+    if (!rows.length) return;
+    const at = rows.findIndex((r) => r.classList.contains("selected"));
+    const next = Math.max(0, Math.min(at + delta, rows.length - 1));
+    rows.forEach((r, i) => r.classList.toggle("selected", i === next));
+    rows[next].scrollIntoView({ block: "nearest" });
+  }
+
+  /* The single source of truth for "is there a selected item right now":
+     the highlighted row, resolved to its item by id. A row whose item is no
+     longer listed answers null, so Backspace can only ever delete the row
+     the user can see highlighted. */
   function selectedItem() {
-    if (cursor < 0 || cursor >= flat.length) return null;
-    const rows = document.querySelectorAll("#history-groups .item-row");
-    const row = rows[cursor];
-    if (!row || !row.classList.contains("selected")) return null;
-    return flat[cursor];
+    const row = selectedRow();
+    if (!row) return null;
+    return flat.find((item) => item.id === row.dataset.key) || null;
   }
 
   /* Pure re-render from the already-loaded `items` array -- no bridge call.
@@ -130,13 +147,10 @@ window.Voisr = window.Voisr || {};
     const q = query;
 
     // `flat` was just rebuilt (delete / Load more / search / background
-    // refresh can all land here) and row indices may have shifted, so any
-    // previous `cursor` position is no longer trustworthy. Clear it rather
-    // than try to remap it — a stale index reapplied to new rows is exactly
-    // how a Backspace can delete something the user never selected. The
-    // user must arrow again to re-select, and `selectedItem()` above
-    // refuses to act on anything until they do.
-    cursor = -1;
+    // refresh can all land here), so drop the keyboard selection: the user
+    // arrows again to re-select, and selectedItem() refuses to act until
+    // they do. Kept rows would otherwise stay highlighted.
+    clearSelection();
 
     return V.lists.serial(document.getElementById("history-groups"),
                           () => syncGroups(groups, { animate, known, ids, q }));
@@ -317,18 +331,16 @@ window.Voisr = window.Voisr || {};
       if (e.key === "ArrowDown") { e.preventDefault(); moveCursor(1); }
       else if (e.key === "ArrowUp") { e.preventDefault(); moveCursor(-1); }
       else if (e.key === "Enter") {
-        const item = selectedItem();
-        if (!item) return;
+        if (!selectedItem()) return;
         e.preventDefault();
-        document.querySelectorAll("#history-groups .item-row")[cursor]
-          .classList.toggle("expanded");
+        selectedRow().classList.toggle("expanded");
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
         const item = selectedItem();
         if (!item) return;
         e.preventDefault(); onCopy(item);
       } else if (e.key === "Backspace") {
         // Deliberately re-derive the item from the live DOM selection
-        // instead of trusting `flat[cursor]` — see selectedItem()'s
+        // instead of trusting an index into `flat` — see selectedItem()'s
         // comment. If nothing is visibly selected, Backspace is a no-op.
         const item = selectedItem();
         if (!item) return;
