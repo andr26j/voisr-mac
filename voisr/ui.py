@@ -941,26 +941,35 @@ class HotkeyService:
         except Exception as e:
             print(f"Voisr hotkey: listener start failed: {e}", flush=True)
 
-    def _tap_state(self) -> str:
-        """What macOS actually gave us. A listener without wait_started is a
-        test double (a bare handler, not a tap): it counts as running only
-        if the permission check says so."""
+    def _tap_state(self, granted: bool) -> str:
+        """What macOS actually gave us: "running", "starting" (not decided
+        yet) or "failed". A listener without wait_started is a test double
+        (a bare handler, not a tap): it counts as running only if the
+        permission check passed."""
         listener = self._listener
         if listener is None:
             return "failed"
         wait = getattr(listener, "wait_started", None)
         if wait is None:
-            return "running" if self._permissions_check() else "failed"
+            return "running" if granted else "failed"
         return wait(0.5)
 
     def _refresh_status(self) -> None:
         # May block up to 0.5 s in wait_started: only start() and the poll
         # thread call this, never the tap callback.
         pane = permissions.PANES[permissions.hotkey_key(self.tap_mode)][0]
-        if self._tap_state() == "running":
+        granted = self._permissions_check()
+        tap = self._tap_state(granted)
+        if self._stopped:
+            return  # stop() already ran: health stays "off"
+        if tap == "running":
             self.health = "active"
             self.status = f"active on {self._key_name}"
-        elif self._permissions_check():
+        elif tap == "starting":
+            # a slow tap is undecided, not broken: no reset advice yet
+            self.health = "starting"
+            self.status = f"starting push-to-talk on {self._key_name}…"
+        elif granted:
             # macOS says yes, the tap says no: a stale TCC entry
             self.health = "not_effective"
             self.status = (f"{pane} is switched on for Voisr but macOS isn't "
@@ -979,13 +988,20 @@ class HotkeyService:
         self._wake.clear()
 
         def poll():
-            while not self._stopped and self.health != "active":
+            me = threading.current_thread()
+            while (not self._stopped and self._watcher is me
+                   and self.health != "active"):
                 # wait, not sleep: stop() wakes this immediately
                 if self._wake.wait(self._poll_interval):
                     return
-                if self._stopped:
+                if self._stopped or self._watcher is not me:
                     return
-                if self._permissions_check():
+                listener = self._listener
+                if getattr(listener, "state", None) in ("starting", "running"):
+                    # coming up (or just came up): respawning would stop a
+                    # live tap, so only re-read its state
+                    self._refresh_status()
+                elif self._permissions_check():
                     # granted (or re-granted after a reset): try for a LIVE tap
                     self._spawn_listener()
                     self._refresh_status()
@@ -994,7 +1010,6 @@ class HotkeyService:
         self._watcher.start()
 
     def stop(self) -> None:
-        self.health = "off"
         self._stopped = True
         self._stop_worker()
         # Wake and join the poll so a following start() never races a
@@ -1005,12 +1020,13 @@ class HotkeyService:
             self._wake.set()
             watcher.join(timeout=2.0)
         listener, self._listener = self._listener, None
-        if listener is None:
-            return
-        try:
-            listener.stop()
-        except Exception:
-            pass  # a dead listener's run loop teardown must not crash the app
+        if listener is not None:
+            try:
+                listener.stop()
+            except Exception:
+                pass  # a dead listener's run loop teardown must not crash the app
+        # last, so a poll that was mid-refresh can't leave a stale health
+        self.health = "off"
 
     def restart(self, key_name=None) -> None:
         self.stop()
@@ -1529,7 +1545,8 @@ class Api:
         mode = self.get_config().get("event_tap", "listen")
         panes = permissions.states(mode=mode)
         svc = self._hotkey_service
-        if svc is not None and getattr(svc, "health", None) == "not_effective":
+        if (svc is not None and svc.running
+                and getattr(svc, "health", None) == "not_effective"):
             for pane in panes:
                 if pane["hotkey"]:
                     pane["effective"] = False

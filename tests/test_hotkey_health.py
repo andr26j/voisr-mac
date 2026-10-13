@@ -161,6 +161,7 @@ def test_get_permissions_flags_the_hotkey_pane_when_not_effective(tmp_path, monk
 
     class Svc:
         health = "not_effective"
+        running = True
 
     api = Api(config_path=tmp_path / "config.json",
               history=HistoryStore(tmp_path / "h.jsonl"))
@@ -210,3 +211,120 @@ def test_get_hotkey_status_reports_health(tmp_path):
 
     api.attach_hotkey_service(Svc())
     assert api.get_hotkey_status()["health"] == "not_effective"
+
+
+# --- fix round 1 ---------------------------------------------------------
+
+import threading
+import time
+
+
+class SeqListener:
+    """A listener whose state the test controls; wait_started reports it."""
+
+    def __init__(self, state, block=None, entered=None):
+        self.state = state
+        self.stopped = False
+        self._block = block
+        self._entered = entered
+
+    def wait_started(self, timeout):
+        if self._entered is not None:
+            self._entered.set()
+        if self._block is not None:
+            self._block.wait(5)
+        return self.state
+
+    def stop(self):
+        self.stopped = True
+
+
+def seq_service(states, **kw):
+    made = []
+
+    def factory(handler, mode):
+        lst = states[min(len(made), len(states) - 1)]
+        made.append(lst)
+        return lst
+
+    svc = HotkeyService(ConfigApi(event_tap="active"),
+                        permissions_check=lambda: True,
+                        listener_factory=factory, poll_interval=0.05, **kw)
+    return svc, made
+
+
+def wait_until(pred, timeout=3.0):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if pred():
+            return True
+        time.sleep(0.01)
+    return pred()
+
+
+def test_slow_tap_is_starting_not_not_effective_and_is_not_respawned(monkeypatch):
+    monkeypatch.setattr("voisr.ui.request_permissions", lambda mode="listen": None)
+    slow = SeqListener("starting")
+    svc, made = seq_service([slow])
+    svc.start()
+    assert svc.health == "starting"
+    assert svc.status.startswith("starting push-to-talk on ")
+    assert "reset" not in svc.status and not svc.status.startswith("waiting")
+    time.sleep(0.3)  # several polls while the tap is still coming up
+    assert made == [slow] and not slow.stopped and svc.health == "starting"
+    slow.state = "running"
+    assert wait_until(lambda: svc.health == "active")
+    assert made == [slow]
+    watcher = svc._watcher
+    assert wait_until(lambda: not watcher.is_alive())
+    svc.stop()
+
+
+def test_failed_tap_recovers_when_a_respawn_runs(monkeypatch):
+    monkeypatch.setattr("voisr.ui.request_permissions", lambda mode="listen": None)
+    first, second = SeqListener("failed"), SeqListener("running")
+    svc, made = seq_service([first, second])
+    svc.start()
+    assert svc.health == "not_effective"
+    watcher = svc._watcher
+    assert wait_until(lambda: svc.health == "active")
+    assert made == [first, second] and first.stopped
+    assert wait_until(lambda: not watcher.is_alive())
+    svc.stop()
+
+
+def test_health_stays_off_after_stop_even_if_a_refresh_races(monkeypatch):
+    monkeypatch.setattr("voisr.ui.request_permissions", lambda mode="listen": None)
+    release, entered = threading.Event(), threading.Event()
+    svc, made = seq_service([SeqListener("failed"),
+                             SeqListener("running", block=release, entered=entered)])
+    svc.start()
+    assert svc.health == "not_effective"
+    assert entered.wait(3)  # the poll is now blocked inside wait_started
+    threading.Timer(0.1, release.set).start()
+    svc.stop()
+    assert svc.health == "off"
+    time.sleep(0.1)
+    assert svc.health == "off"
+
+
+def test_get_permissions_flags_only_a_running_service_that_is_not_effective(tmp_path, monkeypatch):
+    from voisr import permissions
+    from voisr.history import HistoryStore
+    from voisr.ui import Api
+
+    monkeypatch.setattr(permissions, "DEFAULT_PROBES", {
+        "microphone": lambda: True, "input_monitoring": lambda: True,
+        "accessibility": lambda: True})
+    api = Api(config_path=tmp_path / "config.json",
+              history=HistoryStore(tmp_path / "h.jsonl"))
+    api.set_config({"event_tap": "active"})
+
+    def hotkey_effective(health, running):
+        svc = types.SimpleNamespace(health=health, running=running)
+        api.attach_hotkey_service(svc)
+        return {p["key"]: p for p in api.get_permissions()["panes"]}["accessibility"]["effective"]
+
+    assert hotkey_effective("not_effective", True) is False
+    assert hotkey_effective("not_effective", False) is True
+    assert hotkey_effective("starting", True) is True
