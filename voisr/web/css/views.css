@@ -154,14 +154,16 @@
 .trend { display: flex; align-items: flex-end; gap: 3px; height: 34px; margin: 8px 0 6px; }
 
 /* scaled, not resized, so a refresh grows the bar; --h carries its own
-   2 px floor (home.js renderTrend), since a scaled bar ignores min-height */
+   2 px floor (home.js renderTrend), since a scaled bar ignores min-height.
+   scaleY squashes the caps, so the vertical radius is pre-stretched by
+   1 / --h, as the pill and dock bars do. */
 .trend .bar {
   flex: 1;
   height: 100%;
   transform-origin: bottom;
   transform: scaleY(var(--h));
-  transition: transform 400ms var(--ease);
-  border-radius: 2px;
+  border-radius: 2px / calc(2px / var(--h));
+  transition: transform 400ms var(--ease), border-radius 400ms var(--ease);
   background: var(--accent);
   opacity: .30;
 }

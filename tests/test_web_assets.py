@@ -618,3 +618,13 @@ def test_landed_wash_outranks_the_row_stagger():
     css = re.sub(r"/\*.*?\*/", "", (WEB / "css" / "base.css").read_text(), flags=re.S)
     assert re.search(
         r"\.item-list\.is-staggering \.item-row\.is-landed[^{]*\{[^}]*animation:\s*wash", css)
+
+
+def test_trend_bars_keep_round_caps_when_scaled():
+    """Trend bars grow with scaleY, which squashes a plain 2px radius into a
+    flat top. Like the pill and dock bars, the vertical radius is
+    pre-stretched by the inverse of the scale (--h)."""
+    css = re.sub(r"/\*.*?\*/", "", (WEB / "css" / "views.css").read_text(), flags=re.S)
+    rule = re.search(r"\.trend \.bar \{([^}]*)\}", css).group(1)
+    assert "scaleY(var(--h))" in rule
+    assert re.search(r"border-radius:\s*2px\s*/\s*calc\(2px\s*/\s*var\(--h\)\)", rule)
