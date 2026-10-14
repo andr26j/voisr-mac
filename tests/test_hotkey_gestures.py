@@ -392,6 +392,33 @@ def test_a_key_after_a_second_of_dictation_is_typing():
     assert rig.api.log == ["start", "stop"]
 
 
+def test_a_chord_during_the_second_press_cancels():
+    # an accidental tap, then ⌥e straight after: a shortcut, not hands-free
+    rig = Rig()
+    rig.down(0.0)
+    rig.up(0.15)
+    rig.down(0.35)
+    rig.other(E_VK, 0.45)
+    assert rig.api.log == ["start", "cancel"]
+    rig.up(0.5)  # a quick release must not arm a hidden hands-free recording
+    assert rig.api.log == ["start", "cancel"]
+    assert not rig.svc.holding
+    rig.down(3.0)  # the next press is a fresh dictation
+    rig.up(4.0)
+    assert rig.api.log == ["start", "cancel", "start", "stop"]
+
+
+def test_a_key_late_in_a_held_second_press_is_typing():
+    rig = Rig()
+    rig.down(0.0)
+    rig.up(0.15)
+    rig.down(0.35)
+    rig.other(E_VK, 1.5)
+    assert rig.api.log == ["start"]
+    rig.up(3.0)
+    assert rig.api.log == ["start", "stop"]
+
+
 # ---- Esc ----------------------------------------------------------------------
 
 def test_esc_cancels_a_held_dictation_after_the_chord_window():

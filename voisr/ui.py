@@ -1099,10 +1099,13 @@ class HotkeyService:
         CHORD_WINDOW_S of the press it's a shortcut (⌥e for é with Right
         Option), not a dictation: cancel. Held longer, the person is
         dictating and the key is theirs. A hands-free dictation isn't held,
-        so typing during it is left alone; a quick tap then typing is dropped."""
+        so typing during it is left alone; a quick tap then typing is dropped.
+        A double-tap's second press is still held until it is let go (the
+        latch is provisional), so it counts as held here."""
         at = self._clock() if at is None else at
         with self._state_lock:
-            if not self._pressed or self._latched:
+            if not self._pressed or (self._latched
+                                     and self._latch_press_at is None):
                 return
             was_held = self._pending is None
             if self._pending is not None:
