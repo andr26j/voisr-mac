@@ -932,6 +932,11 @@ class HotkeyService:
 
         def handler(vk, kind, flags):
             # Never raise: a callback error must not kill the tap.
+            # Stopped: the worker is gone, so _submit would run press() and
+            # friends inline on the tap thread -- a late event between
+            # _stop_worker() and listener.stop(), or from a winding-down tap.
+            if self._stopped:
+                return
             try:
                 if vk != target_vk:
                     if kind == "down":

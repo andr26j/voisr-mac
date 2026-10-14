@@ -397,3 +397,31 @@ def test_settings_opens_at_most_once_a_minute_on_repeated_refusals():
     clock[0] += 61
     svc.press(); svc.release()
     assert opened == ["microphone", "microphone"]
+
+
+def test_a_late_event_after_stop_runs_nothing_on_the_tap_thread(monkeypatch):
+    # Between _stop_worker() and listener.stop() -- or from a tap that has
+    # not wound down yet -- _submit has no worker and would run press()
+    # inline on the tap thread.
+    monkeypatch.setattr("voisr.ui.request_permissions", lambda mode="listen": None)
+    handlers = []
+    typed = []
+
+    class TypingApi(ConfigApi):
+        def note_user_typing(self):
+            typed.append(True)
+
+    svc = HotkeyService(TypingApi(), permissions_check=lambda: True,
+                        listener_factory=lambda h, mode: handlers.append(h)
+                        or FakeListener("running"), poll_interval=60)
+    ran = []
+    svc.press = lambda *a, **k: ran.append("press")
+    svc.release = lambda *a, **k: ran.append("release")
+    svc.cancel_chord = lambda *a, **k: ran.append("chord")
+    svc.start()
+    svc.stop()
+    handler = handlers[-1]
+    handler(61, "down", 0)      # the hotkey (Right Option)
+    handler(61, "up", 0)
+    handler(14, "down", 0)      # any other key
+    assert ran == [] and typed == []
