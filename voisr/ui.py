@@ -1331,8 +1331,9 @@ class Api:
             # [BLANK_AUDIO] hallucinations and less audio to decode.
             try:
                 speech_gate.trim_wav(wav, span.start, span.end)
-            except Exception:
-                pass  # an untrimmed clip still transcribes
+            except Exception as error:
+                # an untrimmed clip still transcribes
+                print(f"Voisr audio: trim failed: {error}", flush=True)
         try:
             raw = self._transcribe_audio(wav, cfg)
             text = clean(raw, dictionary=cfg.get("dictionary", {}))

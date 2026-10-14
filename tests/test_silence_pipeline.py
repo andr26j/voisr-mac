@@ -96,7 +96,7 @@ def test_a_wav_the_gate_cannot_read_is_still_transcribed(tmp_path):
     assert len(heard) == 1
 
 
-def test_a_failed_trim_still_transcribes(tmp_path, monkeypatch):
+def test_a_failed_trim_still_transcribes(tmp_path, monkeypatch, capsys):
     def broken(*_args):
         raise OSError("disk full")
 
@@ -106,3 +106,4 @@ def test_a_failed_trim_still_transcribes(tmp_path, monkeypatch):
     res = dictate(api)
     assert res["text"] == "Hello there"
     assert heard[0] > 2.0  # untrimmed
+    assert "Voisr audio: trim failed: disk full" in capsys.readouterr().out
