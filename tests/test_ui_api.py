@@ -566,7 +566,15 @@ import json as _json
 from voisr import launch_agent
 
 
-def test_get_permissions_returns_three_panes(tmp_path):
+def test_get_permissions_defaults_to_microphone_and_accessibility(tmp_path):
+    api = make_api(tmp_path)
+    panes = api.get_permissions()["panes"]
+    assert [p["key"] for p in panes] == ["microphone", "accessibility"]
+    assert [p["key"] for p in panes if p["hotkey"]] == ["accessibility"]
+
+
+def test_get_permissions_returns_three_panes_in_listen_mode(tmp_path):
+    (tmp_path / "config.json").write_text('{"event_tap": "listen"}')
     api = make_api(tmp_path)
     panes = api.get_permissions()["panes"]
     assert [p["key"] for p in panes] == [

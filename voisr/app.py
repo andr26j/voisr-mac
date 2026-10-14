@@ -14,7 +14,7 @@ from voisr.transcriber import transcribe
 DEFAULT_CONFIG = {"hotkey": "alt_r", "paste": True, "device": ":0", "dictionary": {},
                   "show_widget": True, "pill_theme": "classic", "pill_color": None,
                   "appearance": "system", "launch_at_login": False, "model": None,
-                  "event_tap": "listen"}
+                  "event_tap": "active"}
 
 
 def _is_str(v):

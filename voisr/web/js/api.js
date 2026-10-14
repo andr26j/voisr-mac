@@ -28,10 +28,8 @@ window.Voisr = window.Voisr || {};
       get_permissions: async () => ({ panes: [
         { key: "microphone", label: "Microphone", granted: true,
           settings_url: "x-apple.systempreferences:", hotkey: false, effective: true },
-        { key: "input_monitoring", label: "Input Monitoring", granted: false,
+        { key: "accessibility", label: "Accessibility", granted: false,
           settings_url: "x-apple.systempreferences:", hotkey: true, effective: true },
-        { key: "accessibility", label: "Accessibility", granted: null,
-          settings_url: "x-apple.systempreferences:", hotkey: false, effective: true },
       ]}),
       reset_permission: async () => ({ ok: true }),
       relaunch_app: async () => ({ ok: false, error: "dev mode" }),

@@ -184,5 +184,5 @@ def test_hotkey_service_reports_running_and_holding(tmp_path):
 def test_changing_event_tap_restarts_the_service(tmp_path):
     svc = FakeHotkeyService()
     api = make_api(tmp_path, service=svc)
-    api.set_config({"event_tap": "active"})
+    api.set_config({"event_tap": "listen"})
     assert svc.restarted_with is not None

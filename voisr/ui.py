@@ -885,9 +885,9 @@ class HotkeyService:
         # the prompt. An untrusted tap is null (pynput returns cleanly) — it
         # does not crash — so this is safe. request_permissions() also fires
         # the Accessibility prompt so Voisr appears in that pane too.
-        mode = self._api.get_config().get("event_tap", "listen")
+        mode = self._api.get_config().get("event_tap", "active")
         # a hand-edited config must not leave the service with no listener
-        self.tap_mode = mode if mode in TAP_MODES else "listen"
+        self.tap_mode = mode if mode in TAP_MODES else "active"
         request_permissions(self.tap_mode)
         self._start_worker()
         self._spawn_listener()
@@ -1227,9 +1227,9 @@ class Api:
         svc = self._hotkey_service
         # capture with the same tap kind the hotkey uses: an active-tap user
         # may not have granted Input Monitoring at all
-        mode = self.get_config().get("event_tap", "listen")
+        mode = self.get_config().get("event_tap", "active")
         if mode not in TAP_MODES:
-            mode = "listen"
+            mode = "active"
         if svc is not None:
             svc.stop()
         try:
@@ -1598,7 +1598,7 @@ class Api:
                 "health": getattr(svc, "health", "off")}
 
     def get_permissions(self):
-        mode = self.get_config().get("event_tap", "listen")
+        mode = self.get_config().get("event_tap", "active")
         panes = permissions.states(mode=mode)
         svc = self._hotkey_service
         if (svc is not None and getattr(svc, "running", False)

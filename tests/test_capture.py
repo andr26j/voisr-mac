@@ -210,7 +210,7 @@ def test_capture_hotkey_timeout_restores_service(tmp_path):
 
 
 @pytest.mark.parametrize("configured, expected", [
-    (None, "listen"), ("listen", "listen"), ("active", "active"), ("grab", "listen"),
+    (None, "active"), ("listen", "listen"), ("active", "active"), ("grab", "active"),
 ])
 def test_capture_hotkey_captures_with_the_configured_tap_mode(tmp_path, configured, expected):
     # An active-tap user may have no Input Monitoring: a listen-only capture

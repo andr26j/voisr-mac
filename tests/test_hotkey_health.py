@@ -41,8 +41,8 @@ def make(api, *, granted=True, tap_state="running"):
     return svc, made
 
 
-def test_event_tap_defaults_to_listen_and_validates():
-    assert DEFAULT_CONFIG["event_tap"] == "listen"
+def test_event_tap_defaults_to_active_and_validates():
+    assert DEFAULT_CONFIG["event_tap"] == "active"
     assert config_errors({"event_tap": "active"}) == []
     assert config_errors({"event_tap": "grab"}) == ["invalid value for event_tap"]
 
@@ -55,11 +55,11 @@ def test_start_uses_the_configured_tap_mode(monkeypatch):
     svc.stop()
 
 
-def test_missing_key_means_listen(monkeypatch):
+def test_missing_key_means_active(monkeypatch):
     monkeypatch.setattr("voisr.ui.request_permissions", lambda mode="listen": None)
     svc, made = make(ConfigApi())
     svc.start()
-    assert made == ["listen"]
+    assert made == ["active"]
     svc.stop()
 
 
@@ -115,11 +115,11 @@ def test_default_permissions_check_follows_tap_mode(monkeypatch):
     assert calls == ["preflight_listen", "preflight_post"]
 
 
-def test_unknown_event_tap_value_falls_back_to_listen(monkeypatch):
+def test_unknown_event_tap_value_falls_back_to_active(monkeypatch):
     monkeypatch.setattr("voisr.ui.request_permissions", lambda mode="listen": None)
     svc, made = make(ConfigApi(event_tap="grab"))
     svc.start()
-    assert svc.tap_mode == "listen" and made == ["listen"]
+    assert svc.tap_mode == "active" and made == ["active"]
     svc.stop()
 
 
