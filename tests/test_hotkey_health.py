@@ -1,6 +1,7 @@
 """HotkeyService picks its tap mode from config, probes the permission that
 mode needs, and reports health from the tap macOS actually gave it."""
 import sys
+import time
 import types
 
 from voisr.app import DEFAULT_CONFIG, config_errors
@@ -525,6 +526,29 @@ def test_a_failed_fallback_reports_the_accessibility_problem(monkeypatch):
     assert svc.health == "not_effective" and not svc.on_fallback
     assert "Accessibility" in svc.status
     svc.stop()
+
+
+def test_a_failed_fallback_is_not_retried_on_every_poll(monkeypatch, capsys):
+    # Both taps refused: the poll keeps retrying the ACTIVE tap (a fixed grant
+    # must be picked up) but must not rebuild the listen tap, or log the
+    # fallback line, every interval.
+    no_prompts(monkeypatch)
+    made = []
+
+    def factory(handler, mode):
+        made.append(mode)
+        return FakeListener("failed")
+
+    svc = HotkeyService(ConfigApi(event_tap="active"),
+                        permissions_check=lambda: True,
+                        listener_factory=factory, poll_interval=0.02,
+                        fallback_check=lambda: True)
+    svc.start()
+    time.sleep(0.3)
+    svc.stop()
+    assert made.count("listen") == 1
+    assert made.count("active") >= 2
+    assert capsys.readouterr().out.count("using the Input Monitoring tap") == 1
 
 
 def test_no_fallback_when_accessibility_is_off(monkeypatch):

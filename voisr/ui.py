@@ -614,6 +614,9 @@ class HotkeyService:
         # and the CLI never probe real TCC state.
         self._fallback_check = fallback_check
         self.tap_fallback = False  # the live tap is the listen-only fallback
+        # The listen tap was refused too during this start(): don't rebuild it
+        # (and log it) on every poll; the poll still retries the active tap.
+        self._fallback_failed = False
         self._pane_opener = permissions.open_pane
         self._clock = time.monotonic
         self._pane_opened_at = None
@@ -666,7 +669,7 @@ class HotkeyService:
         Monitoring is known to be granted: a listen tap without it would put
         the Input Monitoring prompt back. An error is unknown, not a grant."""
         if (self.tap_mode != "active" or self.tap_fallback
-                or self._fallback_check is None):
+                or self._fallback_failed or self._fallback_check is None):
             return False
         try:
             return self._fallback_check() is True
@@ -899,6 +902,7 @@ class HotkeyService:
     def start(self, key_name=None) -> None:
         self._stopped = False
         self.tap_fallback = False
+        self._fallback_failed = False
         vk, label = self._resolve_target(key_name)
         self._target_vk = vk
         self._key_name = label
@@ -1029,6 +1033,10 @@ class HotkeyService:
             print("Voisr hotkey: the Accessibility key tap failed — using "
                   "the Input Monitoring tap instead", flush=True)
             tap = self._tap_state(True)
+        if self.tap_fallback and tap == "failed" and not self._fallback_failed:
+            self._fallback_failed = True
+            print("Voisr hotkey: the Input Monitoring tap failed too",
+                  flush=True)
         if self._stopped:
             return  # stop() already ran: health stays "off"
         if tap == "running":
