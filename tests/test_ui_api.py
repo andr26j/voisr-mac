@@ -1126,7 +1126,7 @@ def test_concurrent_set_config_calls_keep_every_update(tmp_path, monkeypatch):
 
 def test_capture_hotkey_write_is_atomic(tmp_path, monkeypatch):
     import os
-    api = make_api(tmp_path, capture_fn=lambda timeout: (63, "Fn / Globe"))
+    api = make_api(tmp_path, capture_fn=lambda timeout, mode="listen": (63, "Fn / Globe"))
     api.set_config({"dictionary": {"a": "b"}})
     before = (tmp_path / "config.json").read_bytes()
     monkeypatch.setattr(os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("x")))

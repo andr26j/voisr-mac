@@ -277,3 +277,26 @@ def test_a_stopping_tap_is_not_reenabled_by_a_late_timeout_event():
     q.callback(None, q.kCGEventTapDisabledByTimeout, _event(0), None)
     assert ("TAP", True) not in q.enabled
 
+
+
+def test_capture_next_vk_uses_the_requested_tap_mode(monkeypatch):
+    from voisr import keytap
+    made = []
+
+    class FakeListener:
+        def __init__(self, handler, mode="listen", quartz=None):
+            made.append(mode)
+            self.handler = handler
+
+        def start(self):
+            self.handler(63, "flags", 0)
+
+        def stop(self):
+            made.append("stopped")
+
+    monkeypatch.setattr(keytap, "QuartzKeyListener", FakeListener)
+    assert keytap.capture_next_vk(timeout=1, mode="active") == 63
+    assert made == ["active", "stopped"]
+    made.clear()
+    assert keytap.capture_next_vk(timeout=1) == 63
+    assert made == ["listen", "stopped"]

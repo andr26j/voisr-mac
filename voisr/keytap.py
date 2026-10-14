@@ -192,8 +192,10 @@ class QuartzKeyListener:
                 pass
 
 
-def capture_next_vk(timeout: float = 8.0):
-    """Block until any key event arrives; return its vk or None."""
+def capture_next_vk(timeout: float = 8.0, mode: str = "listen"):
+    """Block until any key event arrives; return its vk or None. `mode` is
+    the configured tap kind: an active-tap user may have no Input
+    Monitoring, so a listen-only capture would never see the key."""
     result = {}
     got = threading.Event()
 
@@ -202,7 +204,7 @@ def capture_next_vk(timeout: float = 8.0):
             result["vk"] = vk
             got.set()
 
-    listener = QuartzKeyListener(handler)
+    listener = QuartzKeyListener(handler, mode=mode)
     listener.start()
     got.wait(timeout)
     listener.stop()

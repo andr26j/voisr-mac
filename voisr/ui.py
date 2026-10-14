@@ -307,10 +307,10 @@ def key_label(vk: int, key=None) -> str:
     return f"Key {vk}"
 
 
-def capture_next_key(timeout: float = 8.0):
+def capture_next_key(timeout: float = 8.0, mode: str = "listen"):
     """Block until the user presses any key; return (vk, label) or None."""
-    from voisr.keytap import capture_next_vk
-    vk = capture_next_vk(timeout)
+    from voisr import keytap
+    vk = keytap.capture_next_vk(timeout, mode=mode)
     if vk is None:
         return None
     return vk, key_label(vk)
@@ -1217,10 +1217,15 @@ class Api:
         key doesn't trigger a dictation), capture the next key — any key,
         including Fn/Globe — persist it, and restart the listener on it."""
         svc = self._hotkey_service
+        # capture with the same tap kind the hotkey uses: an active-tap user
+        # may not have granted Input Monitoring at all
+        mode = self.get_config().get("event_tap", "listen")
+        if mode not in TAP_MODES:
+            mode = "listen"
         if svc is not None:
             svc.stop()
         try:
-            got = self._capture_fn(8.0)
+            got = self._capture_fn(8.0, mode=mode)
             if not got:
                 return {"error": "no key detected — click Change and press a key"}
             vk, label = got
