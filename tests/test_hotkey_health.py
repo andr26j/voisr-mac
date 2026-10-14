@@ -525,3 +525,16 @@ def test_a_failed_fallback_reports_the_accessibility_problem(monkeypatch):
     assert svc.health == "not_effective" and not svc.on_fallback
     assert "Accessibility" in svc.status
     svc.stop()
+
+
+def test_no_fallback_when_accessibility_is_off(monkeypatch):
+    # Accessibility never granted (or just reset): that is "waiting", not a
+    # grant macOS refuses, so the poll must keep running for the real grant.
+    no_prompts(monkeypatch)
+    svc, made = make_modes(ConfigApi(event_tap="active"),
+                           {"active": "failed", "listen": "running"},
+                           granted=False, fallback=lambda: True)
+    svc.start()
+    assert made == ["active"]
+    assert svc.health == "waiting" and not svc.on_fallback
+    svc.stop()

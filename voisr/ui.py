@@ -1009,9 +1009,12 @@ class HotkeyService:
         before = self.status
         granted = self._permissions_check()
         tap = self._tap_state(granted)
-        if tap == "failed" and not self._stopped and self._may_fall_back():
-            # The Accessibility tap was refused but Input Monitoring is
-            # already granted: keep the key working on a listen-only tap.
+        if (tap == "failed" and granted and not self._stopped
+                and self._may_fall_back()):
+            # Accessibility is switched on but macOS isn't honouring it (a
+            # stale grant) and Input Monitoring is already granted: keep the
+            # key working on a listen-only tap. With Accessibility off this
+            # stays "waiting", so a later grant still brings up the real tap.
             self._spawn_listener("listen")
             print("Voisr hotkey: the Accessibility key tap failed — using "
                   "the Input Monitoring tap instead", flush=True)
