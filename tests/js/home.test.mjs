@@ -646,8 +646,10 @@ test("while attention is needed, permissions re-render every second", async (t) 
   } });
   await h.V.views.home.render();
   const before = calls;
-  t.mock.timers.tick(3000);
-  await settle();
+  for (let i = 0; i < 3; i++) {
+    t.mock.timers.tick(1000);
+    await settle();   // each tick's calls finish before the next (see in-flight guard)
+  }
   assert.ok(calls >= before + 3, `expected ≥3 polls, got ${calls - before}`);
 });
 
@@ -842,4 +844,27 @@ test("an unknown (null) hotkey pane gets no Reset", async (t) => {
   assert.match(text, /Open Input Monitoring/);
   assert.doesNotMatch(text, /Reset /);
   assert.equal(findRow(h, "perm-recover"), undefined);
+});
+
+/* ---------- final review: M5 ---------- */
+
+test("a poll tick is skipped while the previous tick's calls are still pending", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let calls = 0;
+  let hang = false;
+  const h = mountHome({ get_permissions: () => {
+    calls += 1;
+    return hang ? new Promise(() => {}) : Promise.resolve(LISTEN_DENIED_HOTKEY);
+  } });
+  await h.V.views.home.render();
+  hang = true;
+  const before = calls;
+  t.mock.timers.tick(1000);
+  await settle();
+  assert.equal(calls, before + 1, "the first tick polls");
+  for (let i = 0; i < 4; i++) {
+    t.mock.timers.tick(1000);
+    await settle();
+  }
+  assert.equal(calls, before + 1, "a slow bridge never gets a second overlapping poll");
 });

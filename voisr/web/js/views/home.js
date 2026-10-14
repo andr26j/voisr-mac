@@ -146,6 +146,9 @@ window.Voisr = window.Voisr || {};
   }
 
   let permPoll = null;
+  // A tick's bridge calls can outlast the 1 s interval on a slow bridge;
+  // overlapping ticks would stack calls. Skip a tick until the last settles.
+  let pollInFlight = false;
 
   /* A bridge call that, when `quiet`, swallows its failure instead of
      toasting it: the 1 s poll would otherwise toast twice a second for as
@@ -175,8 +178,12 @@ window.Voisr = window.Voisr || {};
     if (bad.length > 0 && permPoll === null) {
       permPoll = setInterval(() => {
         if (document.getElementById("view-home").hidden) return;
-        renderPermissions({ quiet: true }).catch(() => {});
-        renderListener({ quiet: true }).catch(() => {});
+        if (pollInFlight) return;
+        pollInFlight = true;
+        Promise.allSettled([
+          renderPermissions({ quiet: true }),
+          renderListener({ quiet: true }),
+        ]).then(() => { pollInFlight = false; });
       }, 1000);
     } else if (bad.length === 0 && permPoll !== null) {
       clearInterval(permPoll);
