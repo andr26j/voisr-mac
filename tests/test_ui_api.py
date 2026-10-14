@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 
 import pytest
@@ -1331,5 +1332,49 @@ def test_relaunch_app_reopens_the_bundle_then_quits(tmp_path, monkeypatch):
     assert api.relaunch_app() == {"ok": True}
     assert window.destroyed is True
     argv, kw = spawned[0]
-    assert argv[-1] == "/Users/x/Applications/Voisr.app"
-    assert "/usr/bin/open" in argv[2] and kw["start_new_session"] is True
+    # waits for THIS process to be gone (shutdown can take seconds), then
+    # opens the bundle: a fixed sleep raced it and just re-activated us
+    assert argv == ["/bin/sh", "-c",
+                    'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; '
+                    '/usr/bin/open "$0"',
+                    "/Users/x/Applications/Voisr.app", str(os.getpid())]
+    assert kw["start_new_session"] is True
+
+
+def test_relaunch_app_reports_a_spawn_failure_and_stays_open(tmp_path, monkeypatch):
+    import subprocess
+    _fake_bundle(monkeypatch, "/Users/x/Applications/Voisr.app")
+
+    def boom(*a, **k):
+        raise OSError("no /bin/sh")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    api = make_api(tmp_path)
+    window = FakeWindow()
+    api.attach_window(window)
+    res = api.relaunch_app()
+    assert res["ok"] is False and "no /bin/sh" in res["error"]
+    assert window.destroyed is False
+
+
+def test_relaunch_app_cancels_the_waiter_if_quitting_fails(tmp_path, monkeypatch):
+    # a waiter left behind would relaunch Voisr whenever it next quits
+    import subprocess
+    _fake_bundle(monkeypatch, "/Users/x/Applications/Voisr.app")
+
+    class Proc:
+        killed = False
+
+        def kill(self):
+            Proc.killed = True
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: Proc())
+
+    class StuckWindow(FakeWindow):
+        def destroy(self):
+            raise RuntimeError("stuck")
+
+    api = make_api(tmp_path)
+    api.attach_window(StuckWindow())
+    assert api.relaunch_app() == {"ok": False, "error": "couldn't quit"}
+    assert Proc.killed is True

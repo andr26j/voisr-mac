@@ -1626,7 +1626,7 @@ class Api:
         return result
 
     def relaunch_app(self):
-        """Bridge: reopen Voisr.app a second after this process quits."""
+        """Bridge: quit, and reopen Voisr.app once this process is gone."""
         try:
             import subprocess
             import Foundation
@@ -1638,11 +1638,28 @@ class Api:
         if (not path.endswith(".app") or self._window is None
                 or permissions.own_bundle_id() != permissions.OWN_BUNDLE_ID):
             return {"ok": False, "error": "not running as an app"}
-        subprocess.Popen(["/bin/sh", "-c", 'sleep 1; /usr/bin/open "$0"', path],
-                         start_new_session=True)
+        # Wait on our own pid, not a fixed delay: shutdown can take seconds
+        # (the hotkey join, pending transcriptions), and `open` on a still
+        # running Voisr only re-activates the dying app.
+        import os
+        try:
+            waiter = subprocess.Popen(
+                ["/bin/sh", "-c",
+                 'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; '
+                 '/usr/bin/open "$0"',
+                 path, str(os.getpid())],
+                start_new_session=True)
+        except OSError as error:
+            return {"ok": False, "error": f"couldn't relaunch: {error}"[:200]}
         try:
             self._window.destroy()  # same exit path as the menu-bar Quit
         except Exception:
+            # still running: a waiter left behind would relaunch Voisr
+            # whenever it next quits
+            try:
+                waiter.kill()
+            except Exception:
+                pass
             return {"ok": False, "error": "couldn't quit"}
         return {"ok": True}
 
