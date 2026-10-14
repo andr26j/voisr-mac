@@ -178,6 +178,7 @@ def test_gui_shutdown_stops_listener_then_closes_api(monkeypatch):
     from voisr import ui
 
     events = []
+    wiring = []
 
     class FakeApi:
         def __init__(self, **kwargs):
@@ -200,7 +201,7 @@ def test_gui_shutdown_stops_listener_then_closes_api(monkeypatch):
 
     class FakeService:
         def __init__(self, api, widget, fallback_check=None):
-            pass
+            wiring.append(fallback_check)
 
         def start(self):
             events.append("service-started")
@@ -234,6 +235,9 @@ def test_gui_shutdown_stops_listener_then_closes_api(monkeypatch):
         ui.main()
 
     assert events[-2:] == ["service-stopped", "api-closed"]
+    # main() must hand the service the real Input Monitoring probe, or the
+    # listen-only fallback silently never happens
+    assert wiring == [ui.listen_tap_granted]
 
 
 def test_gui_stop_failure_still_closes_api(monkeypatch):
