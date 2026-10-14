@@ -426,3 +426,102 @@ def test_a_late_event_after_stop_runs_nothing_on_the_tap_thread(monkeypatch):
     handler(61, "up", 0)
     handler(14, "down", 0)      # any other key
     assert ran == [] and typed == []
+
+
+def make_modes(api, states, *, granted=True, fallback=None):
+    """Listener doubles whose tap state depends on the mode asked for."""
+    made = []
+
+    def factory(handler, mode):
+        made.append(mode)
+        return FakeListener(states[mode])
+
+    svc = HotkeyService(api, permissions_check=lambda: granted,
+                        listener_factory=factory, poll_interval=60,
+                        fallback_check=fallback)
+    return svc, made
+
+
+def no_prompts(monkeypatch):
+    monkeypatch.setattr("voisr.ui.request_permissions", lambda mode="listen": None)
+
+
+def test_a_refused_active_tap_falls_back_to_listen(monkeypatch):
+    no_prompts(monkeypatch)
+    svc, made = make_modes(ConfigApi(event_tap="active"),
+                           {"active": "failed", "listen": "running"},
+                           fallback=lambda: True)
+    svc.start()
+    assert made == ["active", "listen"]
+    assert svc.health == "active" and svc.on_fallback
+    assert svc.status.startswith("active on ") and "Input Monitoring" in svc.status
+    assert svc.tap_mode == "active"  # the configured mode is unchanged
+    svc.stop()
+    assert not svc.on_fallback and not svc.tap_fallback
+
+
+def test_no_fallback_check_keeps_todays_behaviour(monkeypatch):
+    no_prompts(monkeypatch)
+    svc, made = make_modes(ConfigApi(event_tap="active"),
+                           {"active": "failed", "listen": "running"})
+    svc.start()
+    assert made == ["active"] and svc.health == "not_effective"
+    svc.stop()
+
+
+def test_no_fallback_without_input_monitoring(monkeypatch):
+    # a listen tap without the grant would raise the Input Monitoring prompt
+    no_prompts(monkeypatch)
+    svc, made = make_modes(ConfigApi(event_tap="active"),
+                           {"active": "failed", "listen": "running"},
+                           fallback=lambda: False)
+    svc.start()
+    assert made == ["active"] and svc.health == "not_effective"
+    assert not svc.on_fallback
+    svc.stop()
+
+
+def test_a_raising_fallback_check_is_unknown_not_granted(monkeypatch):
+    no_prompts(monkeypatch)
+
+    def boom():
+        raise RuntimeError("Quartz unavailable")
+
+    svc, made = make_modes(ConfigApi(event_tap="active"),
+                           {"active": "failed", "listen": "running"},
+                           fallback=boom)
+    svc.start()
+    assert made == ["active"] and not svc.on_fallback
+    svc.stop()
+
+
+def test_a_slow_active_tap_is_not_abandoned(monkeypatch):
+    no_prompts(monkeypatch)
+    svc, made = make_modes(ConfigApi(event_tap="active"),
+                           {"active": "starting", "listen": "running"},
+                           fallback=lambda: True)
+    svc.start()
+    assert made == ["active"] and svc.health == "starting"
+    svc.stop()
+
+
+def test_listen_mode_never_switches_to_active(monkeypatch):
+    no_prompts(monkeypatch)
+    svc, made = make_modes(ConfigApi(event_tap="listen"),
+                           {"listen": "failed", "active": "running"},
+                           fallback=lambda: True)
+    svc.start()
+    assert made == ["listen"] and not svc.on_fallback
+    svc.stop()
+
+
+def test_a_failed_fallback_reports_the_accessibility_problem(monkeypatch):
+    no_prompts(monkeypatch)
+    svc, made = make_modes(ConfigApi(event_tap="active"),
+                           {"active": "failed", "listen": "failed"},
+                           fallback=lambda: True)
+    svc.start()
+    assert made == ["active", "listen"]
+    assert svc.health == "not_effective" and not svc.on_fallback
+    assert "Accessibility" in svc.status
+    svc.stop()

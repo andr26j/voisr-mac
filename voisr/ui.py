@@ -591,7 +591,7 @@ class HotkeyService:
 
     def __init__(self, api, widget=None, hide_delay=1.2,
                  permissions_check=None, poll_interval=3.0,
-                 listener_factory=None):
+                 listener_factory=None, fallback_check=None):
         self._api = api
         self._widget = widget
         self._hide_delay = hide_delay
@@ -600,6 +600,10 @@ class HotkeyService:
             lambda: input_permissions_ok(self.tap_mode))
         self._poll_interval = poll_interval
         self._listener_factory = listener_factory or _quartz_listener_factory
+        # Opt-in (main() passes it): None means never fall back, so tests
+        # and the CLI never probe real TCC state.
+        self._fallback_check = fallback_check
+        self.tap_fallback = False  # the live tap is the listen-only fallback
         self._pane_opener = permissions.open_pane
         self._clock = time.monotonic
         self._pane_opened_at = None
@@ -640,6 +644,24 @@ class HotkeyService:
         """False while stopped, e.g. for capture_hotkey's 8 s key capture,
         when status still reads "active on ..."."""
         return not self._stopped
+
+    @property
+    def on_fallback(self) -> bool:
+        """The key works, but through the Input Monitoring tap because macOS
+        refused the configured Accessibility tap."""
+        return self.tap_fallback and self.health == "active"
+
+    def _may_fall_back(self) -> bool:
+        """Only active -> listen, only once per attempt, and only when Input
+        Monitoring is known to be granted: a listen tap without it would put
+        the Input Monitoring prompt back. An error is unknown, not a grant."""
+        if (self.tap_mode != "active" or self.tap_fallback
+                or self._fallback_check is None):
+            return False
+        try:
+            return self._fallback_check() is True
+        except Exception:
+            return False
 
     @property
     def holding(self) -> bool:
@@ -866,6 +888,7 @@ class HotkeyService:
 
     def start(self, key_name=None) -> None:
         self._stopped = False
+        self.tap_fallback = False
         vk, label = self._resolve_target(key_name)
         self._target_vk = vk
         self._key_name = label
@@ -916,7 +939,8 @@ class HotkeyService:
         if self._widget_enabled():
             self._widget_action("hide", epoch)
 
-    def _spawn_listener(self) -> None:
+    def _spawn_listener(self, mode=None) -> None:
+        mode = mode or self.tap_mode
         target_vk = self._target_vk
 
         def handler(vk, kind, flags):
@@ -959,8 +983,9 @@ class HotkeyService:
                 old.stop()
             except Exception:
                 pass
+        self.tap_fallback = mode != self.tap_mode
         try:
-            self._listener = self._listener_factory(handler, self.tap_mode)
+            self._listener = self._listener_factory(handler, mode)
         except Exception as e:
             print(f"Voisr hotkey: listener start failed: {e}", flush=True)
 
@@ -984,11 +1009,21 @@ class HotkeyService:
         before = self.status
         granted = self._permissions_check()
         tap = self._tap_state(granted)
+        if tap == "failed" and not self._stopped and self._may_fall_back():
+            # The Accessibility tap was refused but Input Monitoring is
+            # already granted: keep the key working on a listen-only tap.
+            self._spawn_listener("listen")
+            print("Voisr hotkey: the Accessibility key tap failed — using "
+                  "the Input Monitoring tap instead", flush=True)
+            tap = self._tap_state(True)
         if self._stopped:
             return  # stop() already ran: health stays "off"
         if tap == "running":
             self.health = "active"
             self.status = f"active on {self._key_name}"
+            if self.tap_fallback:
+                self.status += (" via Input Monitoring (macOS refused the "
+                                "Accessibility tap)")
         elif tap == "starting":
             # a slow tap is undecided, not broken: no reset advice yet
             self.health = "starting"
@@ -1037,6 +1072,7 @@ class HotkeyService:
 
     def stop(self) -> None:
         self._stopped = True
+        self.tap_fallback = False
         self._stop_worker()
         # Wake and join the poll so a following start() never races a
         # watcher that is still winding down (it would see _watcher set and
