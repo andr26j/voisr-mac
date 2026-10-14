@@ -879,3 +879,31 @@ test("a poll tick is skipped while the previous tick's calls are still pending",
   }
   assert.equal(calls, before + 1, "a slow bridge never gets a second overlapping poll");
 });
+
+/* ---------- Listen-only fallback: the key works, Accessibility is stale ---------- */
+
+const FALLBACK_PANES = [
+  { key: "microphone", label: "Microphone", granted: true, hotkey: false, effective: true },
+  { key: "input_monitoring", label: "Input Monitoring", granted: true, hotkey: true, effective: true },
+  { key: "accessibility", label: "Accessibility", granted: true, hotkey: false, effective: false },
+];
+
+test("on the fallback, a stale Accessibility says the key still works", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const h = mountHome({ get_permissions: async () => ({ panes: FALLBACK_PANES, fallback: true }) });
+  await h.V.views.home.render();
+  const text = allText(h["perm-strip"]);
+  assert.equal(h["perm-strip"].dataset.state, "attention");
+  assert.match(text, /isn't honouring the Accessibility switch/);
+  assert.match(text, /keeps working through Input Monitoring/);
+  assert.match(text, /Reset Accessibility/);
+  assert.match(text, /Relaunch Voisr/);
+  assert.equal(h["ptt-bar"].hidden, false, "the key works, so keep promising it");
+});
+
+test("without the fallback flag, the stale block has no fallback sentence", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const h = mountHome({ get_permissions: async () => ({ panes: FALLBACK_PANES }) });
+  await h.V.views.home.render();
+  assert.doesNotMatch(allText(h["perm-strip"]), /Input Monitoring meanwhile/);
+});

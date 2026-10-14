@@ -575,6 +575,16 @@ def input_permissions_ok(mode: str = "listen") -> bool:
         return True  # non-pyobjc environments (tests, other platforms)
 
 
+def listen_tap_granted() -> bool:
+    """True only when macOS says Input Monitoring is granted: the listen-only
+    fallback must never create a tap that would prompt for it. An error is
+    unknown, and unknown is never a grant."""
+    try:
+        return permissions.input_monitoring_granted()
+    except Exception:
+        return False
+
+
 def _quartz_listener_factory(handler, mode="listen"):
     """Create and start the global key tap (see voisr.keytap for why this
     replaces pynput's listener, which crashes the process via TIS)."""
@@ -1258,6 +1268,9 @@ class Api:
         mode = self.get_config().get("event_tap", "active")
         if mode not in TAP_MODES:
             mode = "active"
+        if svc is not None and getattr(svc, "on_fallback", False):
+            # macOS refused the Accessibility tap; capture through the one that works
+            mode = "listen"
         if svc is not None:
             svc.stop()
         try:
@@ -1635,14 +1648,23 @@ class Api:
 
     def get_permissions(self):
         mode = self.get_config().get("event_tap", "active")
-        panes = permissions.states(mode=mode)
         svc = self._hotkey_service
-        if (svc is not None and getattr(svc, "running", False)
-                and getattr(svc, "health", None) == "not_effective"):
+        running = svc is not None and getattr(svc, "running", False)
+        if running and getattr(svc, "on_fallback", False):
+            # The key runs on the Input Monitoring tap, so show the panes as
+            # listen mode does. Accessibility switched on yet refused for the
+            # tap is the stale grant; denied or unknown keep their own state.
+            panes = permissions.states(mode="listen")
+            for pane in panes:
+                if pane["key"] == "accessibility" and pane["granted"] is True:
+                    pane["effective"] = False
+            return {"panes": panes, "fallback": True}
+        panes = permissions.states(mode=mode)
+        if running and getattr(svc, "health", None) == "not_effective":
             for pane in panes:
                 if pane["hotkey"]:
                     pane["effective"] = False
-        return {"panes": panes}
+        return {"panes": panes, "fallback": False}
 
     def open_settings_pane(self, key):
         return {"ok": permissions.open_pane(key)}
@@ -1918,7 +1940,7 @@ def main():
     try:
         api = Api(mic_check=permissions.microphone_granted)
         widget = RecordingWidget(level_source=api.current_level)
-        service = HotkeyService(api, widget=widget)
+        service = HotkeyService(api, widget=widget, fallback_check=listen_tap_granted)
         api.attach_hotkey_service(service)
         # No js_api: see bridge_functions
         window = webview.create_window("Voisr", str(WEB_DIR / "index.html"),

@@ -538,3 +538,67 @@ def test_no_fallback_when_accessibility_is_off(monkeypatch):
     assert made == ["active"]
     assert svc.health == "waiting" and not svc.on_fallback
     svc.stop()
+
+
+def _fallback_api(tmp_path, monkeypatch, accessibility):
+    from voisr import permissions
+    from voisr.history import HistoryStore
+    from voisr.ui import Api
+
+    monkeypatch.setattr(permissions, "DEFAULT_PROBES", {
+        "microphone": lambda: True, "input_monitoring": lambda: True,
+        "accessibility": accessibility})
+    api = Api(config_path=tmp_path / "config.json",
+              history=HistoryStore(tmp_path / "h.jsonl"))
+    api.set_config({"event_tap": "active"})
+    return api
+
+
+def test_get_permissions_on_fallback_reads_like_listen_mode(tmp_path, monkeypatch):
+    api = _fallback_api(tmp_path, monkeypatch, accessibility=lambda: True)
+    api.attach_hotkey_service(types.SimpleNamespace(
+        health="active", running=True, on_fallback=True))
+    res = api.get_permissions()
+    panes = {p["key"]: p for p in res["panes"]}
+    assert res["fallback"] is True
+    assert list(panes) == ["microphone", "input_monitoring", "accessibility"]
+    assert panes["input_monitoring"]["hotkey"] is True
+    assert panes["accessibility"]["hotkey"] is False
+    assert panes["accessibility"]["effective"] is False  # on, but its tap was refused
+
+
+def test_fallback_never_dresses_a_denied_or_unknown_grant_as_stale(tmp_path, monkeypatch):
+    def unknown():
+        raise RuntimeError("probe failed")
+
+    for probe, granted in ((lambda: False, False), (unknown, None)):
+        api = _fallback_api(tmp_path, monkeypatch, accessibility=probe)
+        api.attach_hotkey_service(types.SimpleNamespace(
+            health="active", running=True, on_fallback=True))
+        pane = {p["key"]: p for p in api.get_permissions()["panes"]}["accessibility"]
+        assert pane["granted"] is granted and pane["effective"] is True
+
+
+def test_get_permissions_without_fallback_is_unchanged(tmp_path, monkeypatch):
+    api = _fallback_api(tmp_path, monkeypatch, accessibility=lambda: True)
+    for svc in (types.SimpleNamespace(health="active", running=True),
+                types.SimpleNamespace(health="active", running=False, on_fallback=True)):
+        api.attach_hotkey_service(svc)
+        res = api.get_permissions()
+        assert res["fallback"] is False
+        assert [p["key"] for p in res["panes"]] == ["microphone", "accessibility"]
+
+
+def test_listen_tap_granted_is_strict(monkeypatch):
+    from voisr.ui import listen_tap_granted
+    fake_quartz(monkeypatch, listen=True)
+    assert listen_tap_granted() is True
+    fake_quartz(monkeypatch, listen=False)
+    assert listen_tap_granted() is False
+
+    def boom():
+        raise RuntimeError("no Quartz")
+
+    monkeypatch.setitem(sys.modules, "Quartz", types.SimpleNamespace(
+        CGPreflightListenEventAccess=boom))
+    assert listen_tap_granted() is False  # unknown is never a grant

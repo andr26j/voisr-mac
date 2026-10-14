@@ -199,7 +199,7 @@ def test_gui_shutdown_stops_listener_then_closes_api(monkeypatch):
             events.append("api-closed")
 
     class FakeService:
-        def __init__(self, api, widget):
+        def __init__(self, api, widget, fallback_check=None):
             pass
 
         def start(self):
@@ -261,7 +261,7 @@ def test_gui_stop_failure_still_closes_api(monkeypatch):
             events.append("api-closed")
 
     class FakeService:
-        def __init__(self, api, widget):
+        def __init__(self, api, widget, fallback_check=None):
             pass
 
         def start(self):
@@ -315,7 +315,7 @@ def test_gui_service_constructor_failure_closes_api(monkeypatch):
             events.append("api-closed")
 
     class FailingService:
-        def __init__(self, api, widget):
+        def __init__(self, api, widget, fallback_check=None):
             raise RuntimeError("listener unavailable")
 
     monkeypatch.setattr(ui, "Api", FakeApi)
@@ -352,7 +352,7 @@ def test_gui_window_constructor_failure_stops_listener_and_closes_api(monkeypatc
             events.append("api-closed")
 
     class FakeService:
-        def __init__(self, api, widget):
+        def __init__(self, api, widget, fallback_check=None):
             pass
 
         def stop(self):

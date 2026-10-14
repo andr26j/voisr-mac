@@ -16,6 +16,11 @@ window.Voisr = window.Voisr || {};
     "Voisr is listed and switched on, but macOS still blocks it — this " +
     "usually happens after an update. Reset clears the stale entry; then " +
     "switch Voisr on again in the pane that opens.";
+  /* The Accessibility tap was refused, so push-to-talk runs on the Input
+     Monitoring tap meanwhile; the next launch tries Accessibility again. */
+  const FALLBACK_NOTE =
+    "Push-to-talk keeps working through Input Monitoring meanwhile — " +
+    "relaunch Voisr once Accessibility is back on.";
 
   const MIC_FIRST_ASK = "asked on your first dictation";
 
@@ -85,7 +90,7 @@ window.Voisr = window.Voisr || {};
   /* The blocking state. A missing grant is not a footnote: without Input
      Monitoring the entire product does nothing when you hold the key, and a
      chip above a hero still saying "hold this key to dictate" was a lie. */
-  function permBlock(panes) {
+  function permBlock(panes, fallback) {
     const bad = blocking(panes);
     // worst first: a stale grant, then a known denial, then a merely unverified null
     const lead = bad.find(stale) || bad.find((p) => p.granted === false) || bad[0];
@@ -93,7 +98,8 @@ window.Voisr = window.Voisr || {};
     const heading = isStale ? `macOS isn't honouring the ${lead.label} switch`
       : lead.hotkey ? "Push-to-talk isn't working"
       : `${lead.label} is switched off`;
-    const body = isStale ? STALE_BREAK
+    const body = isStale
+      ? (fallback && lead.key === "accessibility" ? `${STALE_BREAK} ${FALLBACK_NOTE}` : STALE_BREAK)
       : lead.hotkey ? hotkeyBreak(lead.label)
       : PERM_BREAKS[lead.key] || "";
 
@@ -179,6 +185,7 @@ window.Voisr = window.Voisr || {};
     // strip beside a toast explaining the staleness beats an empty one.
     if (!res || !res.panes) return;
     const panes = res.panes;
+    const fallback = res.fallback === true;
     const bad = blocking(panes);
     // Granting happens in System Settings, so while something is blocked the
     // strip re-checks itself every second. Started and stopped before the
@@ -200,7 +207,7 @@ window.Voisr = window.Voisr || {};
     // #perm-strip is aria-live, and replacing its children makes a screen
     // reader read it again: on every window focus, it re-announced a strip
     // that hadn't changed. Only re-render when a grant actually moved.
-    const sig = JSON.stringify(panes.map((p) => [p.key, p.granted, p.effective]));
+    const sig = JSON.stringify([fallback, panes.map((p) => [p.key, p.granted, p.effective])]);
     if (strip.dataset.sig === sig) return;
     strip.dataset.sig = sig;
 
@@ -228,7 +235,7 @@ window.Voisr = window.Voisr || {};
     }
 
     strip.dataset.state = "attention";
-    strip.replaceChildren(permBlock(panes));
+    strip.replaceChildren(permBlock(panes, fallback));
     // the status line promises a key that does not currently work
     if (ptt) ptt.hidden = bad.some((p) => p.hotkey || p.key === "microphone");
   }
