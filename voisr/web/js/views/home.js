@@ -24,6 +24,14 @@ window.Voisr = window.Voisr || {};
     input_monitoring: "needed for push-to-talk",
     accessibility: "needed to paste for you",
   };
+  /* The pane that carries the push-to-talk key says what it is for. In active
+     mode that is Accessibility, which also pastes; in listen mode it is Input
+     Monitoring. A non-hotkey pane keeps its PERM_WHY text. */
+  const HOTKEY_WHY = {
+    input_monitoring: "needed for push-to-talk",
+    accessibility: "needed for push-to-talk and pasting",
+  };
+  const whyText = (p) => (p.hotkey && HOTKEY_WHY[p.key]) || PERM_WHY[p.key] || "";
 
   /* A null mic is "not asked yet": macOS shows the prompt on the first
      recording, and Voisr isn't even listed in the Microphone pane until then.
@@ -131,7 +139,7 @@ window.Voisr = window.Voisr || {};
         const mark = state === "ok" ? "\u2713" : state === "denied" ? "!" : "?";
         const why = stale(p) ? "switched on, not working"
           : state === "ok" ? "granted"
-          : micPending(p) ? MIC_FIRST_ASK : PERM_WHY[p.key] || "";
+          : micPending(p) ? MIC_FIRST_ASK : whyText(p);
         return V.ui.el("li", { class: `perm-${state}-row` },
           V.ui.el("span", { class: "perm-mark", "aria-hidden": "true", text: mark }),
           V.ui.el("span", { text: p.label }),

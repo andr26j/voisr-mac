@@ -109,7 +109,8 @@ def test_request_permissions_listen_asks_for_input_monitoring(monkeypatch):
 def test_default_permissions_check_follows_tap_mode(monkeypatch):
     calls = fake_quartz(monkeypatch, listen=False, post=True)
     svc = HotkeyService(ConfigApi(), listener_factory=lambda h, m: None)
-    assert svc._permissions_check() is False  # starts in listen mode
+    svc.tap_mode = "listen"
+    assert svc._permissions_check() is False
     svc.tap_mode = "active"
     assert svc._permissions_check() is True
     assert calls == ["preflight_listen", "preflight_post"]

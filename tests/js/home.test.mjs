@@ -846,6 +846,17 @@ test("an unknown (null) hotkey pane gets no Reset", async (t) => {
   assert.equal(findRow(h, "perm-recover"), undefined);
 });
 
+test("a denied hotkey accessibility pane says it is needed for push-to-talk and pasting", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const h = mountHome({ get_permissions: async () => hotkeyPane(false, true) });
+  await h.V.views.home.render();
+  const checks = findRow(h, "perm-checks");
+  const accessRow = checks.children[1];
+  assert.match(accessRow.className, /perm-denied-row/);
+  const why = accessRow.children.find((c) => c.className === "perm-why");
+  assert.equal(why.textContent, "needed for push-to-talk and pasting");
+});
+
 /* ---------- final review: M5 ---------- */
 
 test("a poll tick is skipped while the previous tick's calls are still pending", async (t) => {

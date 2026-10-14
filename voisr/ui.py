@@ -606,7 +606,7 @@ class HotkeyService:
         self._api = api
         self._widget = widget
         self._hide_delay = hide_delay
-        self.tap_mode = "listen"
+        self.tap_mode = "active"
         self._permissions_check = permissions_check or (
             lambda: input_permissions_ok(self.tap_mode))
         self._poll_interval = poll_interval

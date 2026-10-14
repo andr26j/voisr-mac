@@ -76,8 +76,9 @@
 /* ---- permissions ----
 
    All three granted: one quiet line. Anything missing: the canvas, not a
-   chip. Without Input Monitoring the product does nothing when you hold the
-   key, which is not a footnote-sized fact. */
+   chip. Without the push-to-talk permission (Accessibility by default, Input
+   Monitoring in listen mode) the product does nothing when you hold the key,
+   which is not a footnote-sized fact. */
 
 /* "pending": first run, the mic hasn't been asked for yet. Same quiet line. */
 .perm-strip[data-state="ok"],
