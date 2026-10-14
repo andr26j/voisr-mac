@@ -294,3 +294,22 @@ def wait_for(cond, timeout=3.0):
     while not cond() and time.monotonic() < deadline:
         time.sleep(0.02)
     assert cond(), "condition not met before timeout"
+
+
+def test_capture_hotkey_on_fallback_captures_through_the_listen_tap(tmp_path):
+    # the Accessibility tap is the one macOS refuses: an active capture tap
+    # would never see the key and Change hotkey would time out
+    (tmp_path / "config.json").write_text(json.dumps({"event_tap": "active"}))
+
+    class FallbackSvc:
+        on_fallback = True
+        status = "active on Right Option (⌥) via Input Monitoring"
+        def stop(self): self.on_fallback = False  # stop() clears it, as the real one does
+        def start(self, key_name=None): pass
+
+    modes = []
+    api = make_api(tmp_path, hotkey_service=FallbackSvc(),
+                   capture_fn=lambda timeout, mode="listen":
+                   modes.append(mode) or (63, "Fn / Globe"))
+    api.capture_hotkey()
+    assert modes == ["listen"]

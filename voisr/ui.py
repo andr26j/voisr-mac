@@ -4,7 +4,7 @@ import threading
 import time
 from pathlib import Path
 
-from voisr import launch_agent, permissions
+from voisr import launch_agent, permissions, speech_gate
 from voisr.app import config_errors, load_config
 from voisr.cleanup import clean
 from voisr.history import HistoryStore
@@ -152,24 +152,6 @@ def paste_ready() -> bool:
     except Exception:
         return False
 
-def wav_peak(path) -> int:
-    """Peak |amplitude| of a 16-bit WAV, -1 if unparseable (skip the check)."""
-    import array
-    import wave
-    try:
-        with wave.open(str(path), "rb") as w:
-            if w.getsampwidth() != 2:
-                return -1
-            data = w.readframes(w.getnframes())
-        if not data:
-            return 0
-        samples = array.array("h")
-        samples.frombytes(data[:len(data) // 2 * 2])
-        return max(abs(s) for s in samples) if samples else 0
-    except Exception:
-        return -1
-
-
 def wav_seconds(path) -> float:
     """Length of a WAV in seconds, -1 if unparseable (skip the check)."""
     import wave
@@ -183,6 +165,13 @@ def wav_seconds(path) -> float:
 # Shorter than any spoken word: a tap, or a hotkey used as a modifier. The
 # WAV is measured, not the key hold, because the hold includes mic start-up.
 MIN_SPEECH_S = 0.3
+# Exact zeros from start to finish: macOS gives a denied app digital
+# silence, and so does a wedged input device.
+MIC_SILENT_MESSAGE = (
+    "the microphone sent only silence — check that Voisr is on under "
+    "Microphone in System Settings → Privacy & Security, and the input "
+    "device in Sound")
+NO_SPEECH_MESSAGE = "didn't catch that — hold the key and speak"
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -586,6 +575,16 @@ def input_permissions_ok(mode: str = "listen") -> bool:
         return True  # non-pyobjc environments (tests, other platforms)
 
 
+def listen_tap_granted() -> bool:
+    """True only when macOS says Input Monitoring is granted: the listen-only
+    fallback must never create a tap that would prompt for it. An error is
+    unknown, and unknown is never a grant."""
+    try:
+        return permissions.input_monitoring_granted()
+    except Exception:
+        return False
+
+
 def _quartz_listener_factory(handler, mode="listen"):
     """Create and start the global key tap (see voisr.keytap for why this
     replaces pynput's listener, which crashes the process via TIS)."""
@@ -602,7 +601,7 @@ class HotkeyService:
 
     def __init__(self, api, widget=None, hide_delay=1.2,
                  permissions_check=None, poll_interval=3.0,
-                 listener_factory=None):
+                 listener_factory=None, fallback_check=None):
         self._api = api
         self._widget = widget
         self._hide_delay = hide_delay
@@ -611,6 +610,13 @@ class HotkeyService:
             lambda: input_permissions_ok(self.tap_mode))
         self._poll_interval = poll_interval
         self._listener_factory = listener_factory or _quartz_listener_factory
+        # Opt-in (main() passes it): None means never fall back, so tests
+        # and the CLI never probe real TCC state.
+        self._fallback_check = fallback_check
+        self.tap_fallback = False  # the live tap is the listen-only fallback
+        # The listen tap was refused too during this start(): don't rebuild it
+        # (and log it) on every poll; the poll still retries the active tap.
+        self._fallback_failed = False
         self._pane_opener = permissions.open_pane
         self._clock = time.monotonic
         self._pane_opened_at = None
@@ -651,6 +657,24 @@ class HotkeyService:
         """False while stopped, e.g. for capture_hotkey's 8 s key capture,
         when status still reads "active on ..."."""
         return not self._stopped
+
+    @property
+    def on_fallback(self) -> bool:
+        """The key works, but through the Input Monitoring tap because macOS
+        refused the configured Accessibility tap."""
+        return self.tap_fallback and self.health == "active"
+
+    def _may_fall_back(self) -> bool:
+        """Only active -> listen, only once per attempt, and only when Input
+        Monitoring is known to be granted: a listen tap without it would put
+        the Input Monitoring prompt back. An error is unknown, not a grant."""
+        if (self.tap_mode != "active" or self.tap_fallback
+                or self._fallback_failed or self._fallback_check is None):
+            return False
+        try:
+            return self._fallback_check() is True
+        except Exception:
+            return False
 
     @property
     def holding(self) -> bool:
@@ -877,6 +901,8 @@ class HotkeyService:
 
     def start(self, key_name=None) -> None:
         self._stopped = False
+        self.tap_fallback = False
+        self._fallback_failed = False
         vk, label = self._resolve_target(key_name)
         self._target_vk = vk
         self._key_name = label
@@ -927,7 +953,8 @@ class HotkeyService:
         if self._widget_enabled():
             self._widget_action("hide", epoch)
 
-    def _spawn_listener(self) -> None:
+    def _spawn_listener(self, mode=None) -> None:
+        mode = mode or self.tap_mode
         target_vk = self._target_vk
 
         def handler(vk, kind, flags):
@@ -970,8 +997,9 @@ class HotkeyService:
                 old.stop()
             except Exception:
                 pass
+        self.tap_fallback = mode != self.tap_mode
         try:
-            self._listener = self._listener_factory(handler, self.tap_mode)
+            self._listener = self._listener_factory(handler, mode)
         except Exception as e:
             print(f"Voisr hotkey: listener start failed: {e}", flush=True)
 
@@ -995,11 +1023,28 @@ class HotkeyService:
         before = self.status
         granted = self._permissions_check()
         tap = self._tap_state(granted)
+        if (tap == "failed" and granted and not self._stopped
+                and self._may_fall_back()):
+            # Accessibility is switched on but macOS isn't honouring it (a
+            # stale grant) and Input Monitoring is already granted: keep the
+            # key working on a listen-only tap. With Accessibility off this
+            # stays "waiting", so a later grant still brings up the real tap.
+            self._spawn_listener("listen")
+            print("Voisr hotkey: the Accessibility key tap failed — using "
+                  "the Input Monitoring tap instead", flush=True)
+            tap = self._tap_state(True)
+        if self.tap_fallback and tap == "failed" and not self._fallback_failed:
+            self._fallback_failed = True
+            print("Voisr hotkey: the Input Monitoring tap failed too",
+                  flush=True)
         if self._stopped:
             return  # stop() already ran: health stays "off"
         if tap == "running":
             self.health = "active"
             self.status = f"active on {self._key_name}"
+            if self.tap_fallback:
+                self.status += (" via Input Monitoring (macOS refused the "
+                                "Accessibility tap)")
         elif tap == "starting":
             # a slow tap is undecided, not broken: no reset advice yet
             self.health = "starting"
@@ -1048,6 +1093,7 @@ class HotkeyService:
 
     def stop(self) -> None:
         self._stopped = True
+        self.tap_fallback = False
         self._stop_worker()
         # Wake and join the poll so a following start() never races a
         # watcher that is still winding down (it would see _watcher set and
@@ -1230,6 +1276,9 @@ class Api:
         mode = self.get_config().get("event_tap", "active")
         if mode not in TAP_MODES:
             mode = "active"
+        if svc is not None and getattr(svc, "on_fallback", False):
+            # macOS refused the Accessibility tap; capture through the one that works
+            mode = "listen"
         if svc is not None:
             svc.stop()
         try:
@@ -1270,12 +1319,21 @@ class Api:
             return SessionResult.failure(
                 session.sequence, "audio",
                 f"recording failed (mic permission?) {detail}".rstrip())
-        peak = wav_peak(wav)
-        if 0 <= peak < 60:
-            return SessionResult.failure(
-                session.sequence, "audio",
-                "no audio captured — allow Voisr to use the Microphone in "
-                "System Settings → Privacy & Security, then try again")
+        span = speech_gate.gate_wav(wav)  # None: unreadable, skip the gate
+        if span is not None:
+            if span.verdict == "all_zeros":
+                return SessionResult.failure(
+                    session.sequence, "audio", MIC_SILENT_MESSAGE)
+            if span.verdict == "no_speech":
+                return SessionResult.failure(
+                    session.sequence, "audio", NO_SPEECH_MESSAGE)
+            # Leading and trailing non-speech beyond the padding: fewer
+            # [BLANK_AUDIO] hallucinations and less audio to decode.
+            try:
+                speech_gate.trim_wav(wav, span.start, span.end)
+            except Exception as error:
+                # an untrimmed clip still transcribes
+                print(f"Voisr audio: trim failed: {error}", flush=True)
         try:
             raw = self._transcribe_audio(wav, cfg)
             text = clean(raw, dictionary=cfg.get("dictionary", {}))
@@ -1599,14 +1657,23 @@ class Api:
 
     def get_permissions(self):
         mode = self.get_config().get("event_tap", "active")
-        panes = permissions.states(mode=mode)
         svc = self._hotkey_service
-        if (svc is not None and getattr(svc, "running", False)
-                and getattr(svc, "health", None) == "not_effective"):
+        running = svc is not None and getattr(svc, "running", False)
+        if running and getattr(svc, "on_fallback", False):
+            # The key runs on the Input Monitoring tap, so show the panes as
+            # listen mode does. Accessibility switched on yet refused for the
+            # tap is the stale grant; denied or unknown keep their own state.
+            panes = permissions.states(mode="listen")
+            for pane in panes:
+                if pane["key"] == "accessibility" and pane["granted"] is True:
+                    pane["effective"] = False
+            return {"panes": panes, "fallback": True}
+        panes = permissions.states(mode=mode)
+        if running and getattr(svc, "health", None) == "not_effective":
             for pane in panes:
                 if pane["hotkey"]:
                     pane["effective"] = False
-        return {"panes": panes}
+        return {"panes": panes, "fallback": False}
 
     def open_settings_pane(self, key):
         return {"ok": permissions.open_pane(key)}
@@ -1882,7 +1949,7 @@ def main():
     try:
         api = Api(mic_check=permissions.microphone_granted)
         widget = RecordingWidget(level_source=api.current_level)
-        service = HotkeyService(api, widget=widget)
+        service = HotkeyService(api, widget=widget, fallback_check=listen_tap_granted)
         api.attach_hotkey_service(service)
         # No js_api: see bridge_functions
         window = webview.create_window("Voisr", str(WEB_DIR / "index.html"),
