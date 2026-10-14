@@ -597,6 +597,8 @@ def _quartz_listener_factory(handler, mode="listen"):
 
 # Hotkey timing (robustness spec item 3, Wispr's observed values)
 TAP_GATE_S = 0.5  # let go sooner: a tap, unless a second press follows within this
+CHORD_WINDOW_S = 1.0  # another key this soon after the press: a shortcut
+ESC_VK = 53
 
 
 def _daemon_timer(delay, fn):
@@ -1041,21 +1043,39 @@ class HotkeyService:
             finish = self._end_recording()
         self._spawn_finish(*finish)
 
-    def cancel_chord(self) -> None:
-        """Another key went down while the hotkey was held: it's a shortcut
-        (⌥e for é with Right Option), not a dictation. A hands-free
-        dictation isn't held, so typing during it is left alone; a quick
-        tap followed by typing is dropped."""
+    def cancel_chord(self, at=None) -> None:
+        """Another key went down while the hotkey was held. Within
+        CHORD_WINDOW_S of the press it's a shortcut (⌥e for é with Right
+        Option), not a dictation: cancel. Held longer, the person is
+        dictating and the key is theirs. A hands-free dictation isn't held,
+        so typing during it is left alone; a quick tap then typing is dropped."""
+        at = self._clock() if at is None else at
         with self._state_lock:
             if not self._pressed or self._latched:
                 return
             if self._pending is not None:
                 self._clear_pending()
+            elif (self._pressed_at is not None
+                    and at - self._pressed_at >= CHORD_WINDOW_S):
+                return
             elif self._starting:
                 # once let go, a key going down is typing, not a chord
                 if not self._start_released:
                     self._start_cancelled = True
                 return
+            self._drop_chord(self._epoch)
+        self._api._cancel_recording()
+
+    def cancel_escape(self) -> None:
+        """Esc cancels a dictation in progress, however it began: the audio
+        is dropped and nothing is pasted. Esc itself still reaches the app."""
+        with self._state_lock:
+            if not self._pressed:
+                return
+            if self._starting:
+                self._start_cancelled = True
+                return
+            self._clear_pending()
             self._drop_chord(self._epoch)
         self._api._cancel_recording()
 
@@ -1080,14 +1100,18 @@ class HotkeyService:
                 return
             try:
                 # stamped here: the worker may run the op much later, and
-                # the tap gate measures the keyboard's timing, not the worker's
+                # the tap gate and chord window measure the keyboard's timing
                 at = self._clock()
                 if vk != target_vk:
                     if kind == "down":
                         # user is typing manually -> don't smart-join the
                         # next dictation onto the previous one
                         self._api.note_user_typing()
-                        self._submit(self.cancel_chord)
+                        if vk == ESC_VK:
+                            self._submit(self.cancel_escape)
+                        else:
+                            self._submit(functools.partial(self.cancel_chord,
+                                                           at=at))
                     return
                 # Everything below is queued, never run here (see _submit).
                 press = functools.partial(self.press, at=at)

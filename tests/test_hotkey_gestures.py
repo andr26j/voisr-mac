@@ -325,3 +325,78 @@ def test_the_menu_ends_a_waiting_tap_as_a_dictation():
     rig.svc._toggle()  # menu "Stop" within the gate: the person meant it
     assert rig.api.log == ["start", "stop"]
     assert rig.timers[0].cancelled
+
+
+# ---- chord window -------------------------------------------------------------
+
+def test_a_chord_in_the_first_second_cancels():
+    rig = Rig()
+    rig.down(0.0)
+    rig.other(E_VK, 0.9)
+    assert rig.api.log == ["start", "cancel"]
+    rig.up(1.0)
+    assert rig.api.log == ["start", "cancel"]
+
+
+def test_a_key_after_a_second_of_dictation_is_typing():
+    rig = Rig()
+    rig.down(0.0)
+    rig.other(E_VK, 1.0)
+    assert rig.api.log == ["start"]
+    rig.up(4.0)
+    assert rig.api.log == ["start", "stop"]
+
+
+# ---- Esc ----------------------------------------------------------------------
+
+def test_esc_cancels_a_held_dictation_after_the_chord_window():
+    widget = FakeWidget()
+    rig = Rig(widget=widget)
+    rig.down(0.0)
+    rig.other(ESC_VK, 3.0)
+    assert rig.api.log == ["start", "cancel"]
+    assert widget.calls == ["recording", "hide"]
+    rig.up(3.5)  # nothing left to stop, nothing pasted
+    assert rig.api.log == ["start", "cancel"]
+
+
+def test_esc_cancels_a_hands_free_dictation():
+    rig = Rig()
+    rig.down(0.0)
+    rig.up(0.2)
+    rig.down(0.4)
+    rig.up(0.5)
+    rig.other(ESC_VK, 5.0)
+    assert rig.api.log == ["start", "cancel"]
+    assert not rig.svc.holding
+    rig.down(8.0)  # the next press starts a new dictation, not a stop
+    assert rig.api.log == ["start", "cancel", "start"]
+
+
+def test_esc_cancels_a_menu_started_dictation():
+    rig = Rig()
+    rig.svc._toggle()
+    rig.other(ESC_VK, 2.0)
+    assert rig.api.log == ["start", "cancel"]
+
+
+def test_esc_cancels_a_waiting_tap():
+    rig = Rig()
+    rig.down(0.0)
+    rig.up(0.2)
+    rig.other(ESC_VK, 0.3)
+    assert rig.api.log == ["start", "cancel"]
+    assert rig.timers[0].cancelled
+
+
+def test_esc_with_nothing_recording_does_nothing():
+    rig = Rig()
+    rig.other(ESC_VK, 1.0)
+    assert rig.api.log == []
+
+
+def test_esc_as_the_hotkey_dictates():
+    rig = Rig(vk=ESC_VK)
+    rig.down(0.0)
+    rig.up(2.0)
+    assert rig.api.log == ["start", "stop"]

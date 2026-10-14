@@ -350,3 +350,15 @@ def test_a_quick_release_mid_start_still_waits_for_a_second_press():
     assert api.releases == 0 and api.cancels == 0
     assert svc.holding
     assert delays == [0.0]  # the window closed while the mic was opening
+
+
+def test_esc_mid_start_cancels_once_the_start_completes():
+    api = BlockingApi()
+    widget = FakeWidget()
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    press = start_blocked_press(svc, api)
+    assert returns_promptly(svc.cancel_escape)
+    finish_start(api, press)
+    assert api.cancels == 1 and api.releases == 0
+    assert not svc.holding
+    assert "recording" not in widget.calls
