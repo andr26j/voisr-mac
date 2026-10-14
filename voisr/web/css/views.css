@@ -76,8 +76,9 @@
 /* ---- permissions ----
 
    All three granted: one quiet line. Anything missing: the canvas, not a
-   chip. Without Input Monitoring the product does nothing when you hold the
-   key, which is not a footnote-sized fact. */
+   chip. Without the push-to-talk permission (Accessibility by default, Input
+   Monitoring in listen mode) the product does nothing when you hold the key,
+   which is not a footnote-sized fact. */
 
 /* "pending": first run, the mic hasn't been asked for yet. Same quiet line. */
 .perm-strip[data-state="ok"],
@@ -107,6 +108,12 @@
 .perm-block > p { color: var(--muted); max-width: 52ch; }
 
 .perm-actions { display: flex; gap: 10px; margin-top: 10px; }
+/* the stale-grant way out under a denied hotkey pane: quieter than the
+   main actions, one line */
+.perm-recover {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+  gap: 8px; margin-top: 6px; font-size: 13px; color: var(--muted);
+}
 
 .perm-checks {
   list-style: none; margin-top: 20px; padding-top: 16px;

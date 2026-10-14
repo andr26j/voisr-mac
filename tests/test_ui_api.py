@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 
 import pytest
@@ -565,7 +566,15 @@ import json as _json
 from voisr import launch_agent
 
 
-def test_get_permissions_returns_three_panes(tmp_path):
+def test_get_permissions_defaults_to_microphone_and_accessibility(tmp_path):
+    api = make_api(tmp_path)
+    panes = api.get_permissions()["panes"]
+    assert [p["key"] for p in panes] == ["microphone", "accessibility"]
+    assert [p["key"] for p in panes if p["hotkey"]] == ["accessibility"]
+
+
+def test_get_permissions_returns_three_panes_in_listen_mode(tmp_path):
+    (tmp_path / "config.json").write_text('{"event_tap": "listen"}')
     api = make_api(tmp_path)
     panes = api.get_permissions()["panes"]
     assert [p["key"] for p in panes] == [
@@ -1126,7 +1135,7 @@ def test_concurrent_set_config_calls_keep_every_update(tmp_path, monkeypatch):
 
 def test_capture_hotkey_write_is_atomic(tmp_path, monkeypatch):
     import os
-    api = make_api(tmp_path, capture_fn=lambda timeout: (63, "Fn / Globe"))
+    api = make_api(tmp_path, capture_fn=lambda timeout, mode="listen": (63, "Fn / Globe"))
     api.set_config({"dictionary": {"a": "b"}})
     before = (tmp_path / "config.json").read_bytes()
     monkeypatch.setattr(os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("x")))
@@ -1199,3 +1208,181 @@ def test_get_config_returns_a_private_copy(tmp_path):
     cfg = api.get_config()
     cfg["dictionary"]["zzz"] = "mutated"
     assert "zzz" not in api.get_config()["dictionary"]
+
+
+@pytest.mark.parametrize("key", ["accessibility", "input_monitoring", "microphone"])
+def test_reset_permission_relists_voisr_then_opens_the_pane(tmp_path, monkeypatch, key):
+    # tccutil reset deletes Voisr's row from the list: without asking again
+    # the pane that opens has no Voisr switch to turn on.
+    from voisr import permissions
+    events = []
+    monkeypatch.setattr(permissions, "reset_grant",
+                        lambda key: {"ok": True})
+    monkeypatch.setattr(permissions, "open_pane",
+                        lambda key: events.append(("open", key)) or True)
+    api = make_api(tmp_path, grant_requester=lambda k: events.append(("request", k)))
+    assert api.reset_permission(key) == {"ok": True}
+    assert events == [("request", key), ("open", key)]
+
+
+def test_reset_permission_does_not_open_the_pane_on_failure(tmp_path, monkeypatch):
+    from voisr import permissions
+    events = []
+    monkeypatch.setattr(permissions, "reset_grant",
+                        lambda key: {"ok": False, "error": "nope"})
+    monkeypatch.setattr(permissions, "open_pane",
+                        lambda key: events.append(("open", key)) or True)
+    api = make_api(tmp_path, grant_requester=lambda k: events.append(("request", k)))
+    assert api.reset_permission("accessibility") == {"ok": False, "error": "nope"}
+    assert events == []
+
+
+def test_reset_permission_still_opens_the_pane_if_the_re_request_raises(tmp_path, monkeypatch):
+    from voisr import permissions
+    opened = []
+    monkeypatch.setattr(permissions, "reset_grant", lambda key: {"ok": True})
+    monkeypatch.setattr(permissions, "open_pane",
+                        lambda key: opened.append(key) or True)
+
+    def boom(key):
+        raise RuntimeError("no Quartz")
+
+    api = make_api(tmp_path, grant_requester=boom)
+    assert api.reset_permission("accessibility") == {"ok": True}
+    assert opened == ["accessibility"]
+
+
+def test_api_defaults_to_the_real_grant_requester(tmp_path):
+    # conftest injects an inert requester; left unset, Api uses the real one
+    from voisr import permissions
+    api = make_api(tmp_path, grant_requester=None)
+    assert api._grant_requester is permissions.request_grant
+
+
+def test_reset_permission_never_runs_tccutil_unbundled(tmp_path, monkeypatch):
+    # Under pytest the main bundle is not com.local.voisr; nothing may run.
+    import subprocess
+    from voisr import permissions
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **k: pytest.fail("tccutil must not run"))
+    monkeypatch.setattr(permissions, "open_pane",
+                        lambda key: pytest.fail("pane must not open"))
+    assert make_api(tmp_path).reset_permission("accessibility")["ok"] is False
+
+
+class FakeWindow:
+    def __init__(self):
+        self.destroyed = False
+
+    def destroy(self):
+        self.destroyed = True
+
+
+def _fake_bundle(monkeypatch, path, bundle_id="com.local.voisr"):
+    import Foundation
+
+    class Bundle:
+        def bundlePath(self):
+            return path
+
+        def bundleIdentifier(self):
+            return bundle_id
+
+    class NSBundle:
+        @staticmethod
+        def mainBundle():
+            return Bundle()
+
+    monkeypatch.setattr(Foundation, "NSBundle", NSBundle)
+
+
+def test_relaunch_app_refuses_outside_an_app_bundle(tmp_path, monkeypatch):
+    import subprocess
+    _fake_bundle(monkeypatch, "/usr/local/bin/python3")
+    monkeypatch.setattr(subprocess, "Popen",
+                        lambda *a, **k: pytest.fail("must not spawn"))
+    api = make_api(tmp_path)
+    api.attach_window(FakeWindow())
+    assert api.relaunch_app()["ok"] is False
+    assert api._window.destroyed is False
+
+
+def test_relaunch_app_refuses_python_app_bundle(tmp_path, monkeypatch):
+    # `python -m voisr.ui` runs inside Python.app, which also ends in ".app"
+    import subprocess
+    _fake_bundle(monkeypatch, "/Library/Frameworks/Python.app",
+                 bundle_id="org.python.python")
+    monkeypatch.setattr(subprocess, "Popen",
+                        lambda *a, **k: pytest.fail("must not spawn"))
+    api = make_api(tmp_path)
+    api.attach_window(FakeWindow())
+    assert api.relaunch_app()["ok"] is False
+    assert api._window.destroyed is False
+
+
+def test_relaunch_app_refuses_without_a_window(tmp_path, monkeypatch):
+    import subprocess
+    _fake_bundle(monkeypatch, "/Users/x/Applications/Voisr.app")
+    monkeypatch.setattr(subprocess, "Popen",
+                        lambda *a, **k: pytest.fail("must not spawn"))
+    assert make_api(tmp_path).relaunch_app()["ok"] is False
+
+
+def test_relaunch_app_reopens_the_bundle_then_quits(tmp_path, monkeypatch):
+    import subprocess
+    _fake_bundle(monkeypatch, "/Users/x/Applications/Voisr.app")
+    spawned = []
+    monkeypatch.setattr(subprocess, "Popen",
+                        lambda argv, **kw: spawned.append((argv, kw)))
+    api = make_api(tmp_path)
+    window = FakeWindow()
+    api.attach_window(window)
+    assert api.relaunch_app() == {"ok": True}
+    assert window.destroyed is True
+    argv, kw = spawned[0]
+    # waits for THIS process to be gone (shutdown can take seconds), then
+    # opens the bundle: a fixed sleep raced it and just re-activated us
+    assert argv == ["/bin/sh", "-c",
+                    'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; '
+                    '/usr/bin/open "$0"',
+                    "/Users/x/Applications/Voisr.app", str(os.getpid())]
+    assert kw["start_new_session"] is True
+
+
+def test_relaunch_app_reports_a_spawn_failure_and_stays_open(tmp_path, monkeypatch):
+    import subprocess
+    _fake_bundle(monkeypatch, "/Users/x/Applications/Voisr.app")
+
+    def boom(*a, **k):
+        raise OSError("no /bin/sh")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    api = make_api(tmp_path)
+    window = FakeWindow()
+    api.attach_window(window)
+    res = api.relaunch_app()
+    assert res["ok"] is False and "no /bin/sh" in res["error"]
+    assert window.destroyed is False
+
+
+def test_relaunch_app_cancels_the_waiter_if_quitting_fails(tmp_path, monkeypatch):
+    # a waiter left behind would relaunch Voisr whenever it next quits
+    import subprocess
+    _fake_bundle(monkeypatch, "/Users/x/Applications/Voisr.app")
+
+    class Proc:
+        killed = False
+
+        def kill(self):
+            Proc.killed = True
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: Proc())
+
+    class StuckWindow(FakeWindow):
+        def destroy(self):
+            raise RuntimeError("stuck")
+
+    api = make_api(tmp_path)
+    api.attach_window(StuckWindow())
+    assert api.relaunch_app() == {"ok": False, "error": "couldn't quit"}
+    assert Proc.killed is True

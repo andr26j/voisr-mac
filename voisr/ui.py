@@ -9,6 +9,7 @@ from voisr.app import config_errors, load_config
 from voisr.cleanup import clean
 from voisr.history import HistoryStore
 from voisr.inject import paste_at_cursor, set_clipboard
+from voisr.keytap import TAP_MODES
 from voisr.pasteboard import PasteDeliveryError
 from voisr.recorder import Recorder
 from voisr.recording_queue import (
@@ -60,14 +61,14 @@ def default_recorder():
         return Recorder()
 
 
-def request_permissions() -> None:
+def request_permissions(mode: str = "listen") -> None:
     """Register Voisr with TCC and prompt for the grants it needs, so the app
     APPEARS in System Settings → Privacy & Security under each pane:
-      • Input Monitoring — CGRequestListenEventAccess + the event tap itself
-      • Accessibility    — AXIsProcessTrustedWithOptions(prompt) posts events"""
+      • Input Monitoring — listen-only tap only (mode "listen")
+      • Accessibility    — posting Cmd-V, and the active tap (mode "active")"""
     try:
         import Quartz
-        if not Quartz.CGPreflightListenEventAccess():
+        if mode == "listen" and not Quartz.CGPreflightListenEventAccess():
             Quartz.CGRequestListenEventAccess()
         if not Quartz.CGPreflightPostEventAccess():
             Quartz.CGRequestPostEventAccess()
@@ -306,10 +307,10 @@ def key_label(vk: int, key=None) -> str:
     return f"Key {vk}"
 
 
-def capture_next_key(timeout: float = 8.0):
+def capture_next_key(timeout: float = 8.0, mode: str = "listen"):
     """Block until the user presses any key; return (vk, label) or None."""
-    from voisr.keytap import capture_next_vk
-    vk = capture_next_vk(timeout)
+    from voisr import keytap
+    vk = keytap.capture_next_vk(timeout, mode=mode)
     if vk is None:
         return None
     return vk, key_label(vk)
@@ -574,20 +575,22 @@ class RecordingWidget:
             pass
 
 
-def input_permissions_ok() -> bool:
-    """True when Voisr may listen for global keys (and post events)."""
+def input_permissions_ok(mode: str = "listen") -> bool:
+    """True when Voisr may install its key tap in this mode."""
     try:
         import Quartz
+        if mode == "active":
+            return bool(Quartz.CGPreflightPostEventAccess())
         return bool(Quartz.CGPreflightListenEventAccess())
     except Exception:
         return True  # non-pyobjc environments (tests, other platforms)
 
 
-def _quartz_listener_factory(handler):
+def _quartz_listener_factory(handler, mode="listen"):
     """Create and start the global key tap (see voisr.keytap for why this
     replaces pynput's listener, which crashes the process via TIS)."""
     from voisr.keytap import QuartzKeyListener
-    listener = QuartzKeyListener(handler)
+    listener = QuartzKeyListener(handler, mode=mode)
     listener.start()
     return listener
 
@@ -595,15 +598,22 @@ def _quartz_listener_factory(handler):
 class HotkeyService:
     """Global push-to-talk listener driving the shared Api record path."""
 
+    PANE_REOPEN_S = 60  # a refused permission's pane opens at most this often
+
     def __init__(self, api, widget=None, hide_delay=1.2,
-                 permissions_check=input_permissions_ok, poll_interval=3.0,
+                 permissions_check=None, poll_interval=3.0,
                  listener_factory=None):
         self._api = api
         self._widget = widget
         self._hide_delay = hide_delay
-        self._permissions_check = permissions_check
+        self.tap_mode = "active"
+        self._permissions_check = permissions_check or (
+            lambda: input_permissions_ok(self.tap_mode))
         self._poll_interval = poll_interval
         self._listener_factory = listener_factory or _quartz_listener_factory
+        self._pane_opener = permissions.open_pane
+        self._clock = time.monotonic
+        self._pane_opened_at = None
         self._listener = None
         self._watcher = None
         self._wake = threading.Event()  # set by stop() to end a sleeping poll
@@ -631,6 +641,8 @@ class HotkeyService:
         self._ops = None
         self._ops_thread = None
         self.status = "not started"
+        # active | waiting | not_effective | off -- see _refresh_status
+        self.health = "off"
 
     _OPS_STOP = object()
 
@@ -718,6 +730,8 @@ class HotkeyService:
                 self._latched = False
             raise
         finish = None
+        pane = None
+        refused = False
         with self._state_lock:
             self._starting = False
             released, cancelled = self._start_released, self._start_cancelled
@@ -730,26 +744,48 @@ class HotkeyService:
                     self._flash_error()
                 # a key already let go needs no guard against its repeats
                 self._rejected = not released
-                return
-            self._rejected = False
-            self._epoch += 1
-            epoch = self._epoch
-            if cancelled:
-                # still hide: the new epoch orphans an older pill's own hide
-                self._drop_chord(epoch)
+                pane = self._claim_pane_open(result.get("permission"))
+                refused = True
             else:
-                cfg = self._api.get_config()
-                if self._widget is not None and bool(cfg.get("show_widget", True)):
-                    self._widget_action(
-                        "show_recording", epoch,
-                        theme=sanitize_pill_theme(cfg.get("pill_theme")),
-                        color=sanitize_pill_color(cfg.get("pill_color")))
-                if released:
-                    finish = self._end_recording()
+                self._rejected = False
+                self._epoch += 1
+                epoch = self._epoch
+                if cancelled:
+                    # still hide: the new epoch orphans an older pill's own hide
+                    self._drop_chord(epoch)
+                else:
+                    cfg = self._api.get_config()
+                    if self._widget is not None and bool(cfg.get("show_widget", True)):
+                        self._widget_action(
+                            "show_recording", epoch,
+                            theme=sanitize_pill_theme(cfg.get("pill_theme")),
+                            color=sanitize_pill_color(cfg.get("pill_color")))
+                    if released:
+                        finish = self._end_recording()
+        if refused:
+            # outside _state_lock: the opener dispatches to AppKit
+            if pane is not None:
+                try:
+                    self._pane_opener(pane)
+                except Exception:
+                    pass
+            return
         if cancelled:
             self._api._cancel_recording()
         if finish is not None:
             self._spawn_finish(*finish)
+
+    def _claim_pane_open(self, key):
+        """Open a refused permission's pane at most once a minute; caller
+        holds _state_lock."""
+        if not key:
+            return None
+        now = self._clock()
+        if (self._pane_opened_at is not None
+                and now - self._pane_opened_at < self.PANE_REOPEN_S):
+            return None
+        self._pane_opened_at = now
+        return key
 
     def _flash_error(self) -> None:
         """Error pill, then hide; caller holds _state_lock."""
@@ -849,7 +885,10 @@ class HotkeyService:
         # the prompt. An untrusted tap is null (pynput returns cleanly) — it
         # does not crash — so this is safe. request_permissions() also fires
         # the Accessibility prompt so Voisr appears in that pane too.
-        request_permissions()
+        mode = self._api.get_config().get("event_tap", "active")
+        # a hand-edited config must not leave the service with no listener
+        self.tap_mode = mode if mode in TAP_MODES else "active"
+        request_permissions(self.tap_mode)
         self._start_worker()
         self._spawn_listener()
         self._refresh_status()
@@ -893,6 +932,11 @@ class HotkeyService:
 
         def handler(vk, kind, flags):
             # Never raise: a callback error must not kill the tap.
+            # Stopped: the worker is gone, so _submit would run press() and
+            # friends inline on the tap thread -- a late event between
+            # _stop_worker() and listener.stop(), or from a winding-down tap.
+            if self._stopped:
+                return
             try:
                 if vk != target_vk:
                     if kind == "down":
@@ -927,18 +971,52 @@ class HotkeyService:
             except Exception:
                 pass
         try:
-            self._listener = self._listener_factory(handler)
+            self._listener = self._listener_factory(handler, self.tap_mode)
         except Exception as e:
             print(f"Voisr hotkey: listener start failed: {e}", flush=True)
 
+    def _tap_state(self, granted: bool) -> str:
+        """What macOS actually gave us: "running", "starting" (not decided
+        yet) or "failed". A listener without wait_started is a test double
+        (a bare handler, not a tap): it counts as running only if the
+        permission check passed."""
+        listener = self._listener
+        if listener is None:
+            return "failed"
+        wait = getattr(listener, "wait_started", None)
+        if wait is None:
+            return "running" if granted else "failed"
+        return wait(0.5)
+
     def _refresh_status(self) -> None:
-        if self._permissions_check():
+        # May block up to 0.5 s in wait_started: only start() and the poll
+        # thread call this, never the tap callback.
+        pane = permissions.PANES[permissions.hotkey_key(self.tap_mode)][0]
+        before = self.status
+        granted = self._permissions_check()
+        tap = self._tap_state(granted)
+        if self._stopped:
+            return  # stop() already ran: health stays "off"
+        if tap == "running":
+            self.health = "active"
             self.status = f"active on {self._key_name}"
+        elif tap == "starting":
+            # a slow tap is undecided, not broken: no reset advice yet
+            self.health = "starting"
+            self.status = f"starting push-to-talk on {self._key_name}…"
+        elif granted:
+            # macOS says yes, the tap says no: a stale TCC entry
+            self.health = "not_effective"
+            self.status = (f"{pane} is switched on for Voisr but macOS isn't "
+                           "honouring it — reset it from Home")
         else:
+            self.health = "waiting"
+            panes = ("BOTH Input Monitoring and Accessibility"
+                     if self.tap_mode == "listen" else "Accessibility")
             self.status = ("waiting for permission — open System Settings → "
-                           "Privacy & Security and switch Voisr ON under BOTH "
-                           "Input Monitoring and Accessibility")
-        print(f"Voisr hotkey: {self.status}", flush=True)
+                           f"Privacy & Security and switch Voisr ON under {panes}")
+        if self.status != before:  # the poll re-derives this every interval
+            print(f"Voisr hotkey: {self.status}", flush=True)
 
     def _watch(self) -> None:
         if self._watcher is not None:
@@ -946,19 +1024,24 @@ class HotkeyService:
         self._wake.clear()
 
         def poll():
-            was_granted = self._permissions_check()
-            while not self._stopped:
-                granted = self._permissions_check()
-                if granted and not was_granted:
-                    # permission just landed → respawn to get a LIVE tap
-                    # (the untrusted listener spawned at start() exited)
-                    self._spawn_listener()
-                    self._refresh_status()
-                was_granted = granted
-                if granted:
-                    break
+            me = threading.current_thread()
+            while (not self._stopped and self._watcher is me
+                   and self.health != "active"):
                 # wait, not sleep: stop() wakes this immediately
-                self._wake.wait(self._poll_interval)
+                if self._wake.wait(self._poll_interval):
+                    return
+                if self._stopped or self._watcher is not me:
+                    return
+                listener = self._listener
+                state = getattr(listener, "state", None)
+                if state not in ("starting", "running") \
+                        and self._permissions_check():
+                    # granted (or re-granted after a reset): try for a LIVE tap
+                    self._spawn_listener()
+                # otherwise the tap is coming up (or just came up) and
+                # respawning would stop a live tap, or nothing is granted:
+                # either way just re-derive health from the tap's state
+                self._refresh_status()
 
         self._watcher = threading.Thread(target=poll, daemon=True)
         self._watcher.start()
@@ -974,12 +1057,13 @@ class HotkeyService:
             self._wake.set()
             watcher.join(timeout=2.0)
         listener, self._listener = self._listener, None
-        if listener is None:
-            return
-        try:
-            listener.stop()
-        except Exception:
-            pass  # a dead listener's run loop teardown must not crash the app
+        if listener is not None:
+            try:
+                listener.stop()
+            except Exception:
+                pass  # a dead listener's run loop teardown must not crash the app
+        # last, so a poll that was mid-refresh can't leave a stale health
+        self.health = "off"
 
     def restart(self, key_name=None) -> None:
         self.stop()
@@ -999,7 +1083,9 @@ class Api:
                  fallback_recorder_factory=Recorder,
                  capture_fn=capture_next_key,
                  paste_fn=paste_at_cursor,
-                 clipboard_fn=set_clipboard):
+                 clipboard_fn=set_clipboard,
+                 mic_check=None,
+                 grant_requester=None):
         self._config_path = Path(config_path)
         self._history = history or HistoryStore(ROOT / "data" / "history.jsonl")
         self._transcribe_fn = transcribe_fn
@@ -1008,6 +1094,10 @@ class Api:
         self._capture_fn = capture_fn
         self._paste_fn = paste_fn
         self._clipboard_fn = clipboard_fn
+        # None = no check, so tests never probe the runner's real TCC state
+        self._mic_check = mic_check
+        # asks macOS for one pane's grant again after a reset (a TCC prompt)
+        self._grant_requester = grant_requester or permissions.request_grant
         self._last_paste_text = None
         self._last_paste_ts = None
         self._typing_generation = 0
@@ -1135,10 +1225,15 @@ class Api:
         key doesn't trigger a dictation), capture the next key — any key,
         including Fn/Globe — persist it, and restart the listener on it."""
         svc = self._hotkey_service
+        # capture with the same tap kind the hotkey uses: an active-tap user
+        # may not have granted Input Monitoring at all
+        mode = self.get_config().get("event_tap", "active")
+        if mode not in TAP_MODES:
+            mode = "active"
         if svc is not None:
             svc.stop()
         try:
-            got = self._capture_fn(8.0)
+            got = self._capture_fn(8.0, mode=mode)
             if not got:
                 return {"error": "no key detected — click Change and press a key"}
             vk, label = got
@@ -1255,6 +1350,14 @@ class Api:
         return SessionResult.success(session.sequence, **fields)
 
     def start_recording(self):
+        if self._mic_check is not None:
+            try:
+                mic = self._mic_check()
+            except Exception:
+                mic = None  # unknown never blocks
+            if mic is False:
+                return {"error": "Microphone is switched off for Voisr",
+                        "permission": "microphone"}
         try:
             session = self._recordings.start()
         except RecordingQueueError as error:
@@ -1433,10 +1536,13 @@ class Api:
         if errors:
             return {"error": "; ".join(errors)}
         with self._config_lock:
-            old_hotkey = self.get_config().get("hotkey")
+            old_cfg = self.get_config()
+            old_hotkey = old_cfg.get("hotkey")
+            old_tap = old_cfg.get("event_tap")
             cfg = self._update_config(updates)
         new_hotkey = cfg.get("hotkey")
-        if self._hotkey_service and new_hotkey != old_hotkey:
+        if self._hotkey_service and (
+                new_hotkey != old_hotkey or cfg.get("event_tap") != old_tap):
             self._hotkey_service.restart(new_hotkey)
         return cfg
 
@@ -1476,7 +1582,8 @@ class Api:
         drops the key) or "off"."""
         svc = self._hotkey_service
         if svc is None:
-            return {"status": "push-to-talk not running", "state": "off"}
+            return {"status": "push-to-talk not running", "state": "off",
+                    "health": "off"}
         status = svc.status
         if not (svc.running and status.startswith("active")):
             state = "off"
@@ -1487,13 +1594,74 @@ class Api:
         if status.startswith("active") and self.get_config().get("paste"):
             status += " · paste ready" if paste_ready() \
                 else " · grant Accessibility to auto-paste"
-        return {"status": status, "state": state}
+        return {"status": status, "state": state,
+                "health": getattr(svc, "health", "off")}
 
     def get_permissions(self):
-        return {"panes": permissions.states()}
+        mode = self.get_config().get("event_tap", "active")
+        panes = permissions.states(mode=mode)
+        svc = self._hotkey_service
+        if (svc is not None and getattr(svc, "running", False)
+                and getattr(svc, "health", None) == "not_effective"):
+            for pane in panes:
+                if pane["hotkey"]:
+                    pane["effective"] = False
+        return {"panes": panes}
 
     def open_settings_pane(self, key):
         return {"ok": permissions.open_pane(key)}
+
+    def reset_permission(self, key):
+        """Bridge: reset Voisr's own grant, then open the pane to re-grant.
+        The hotkey watcher notices the new grant and respawns the tap.
+        tccutil reset deletes Voisr's row from the list, so ask for the
+        grant again first: that re-lists Voisr, switched off, in the pane."""
+        result = permissions.reset_grant(key)
+        if result.get("ok"):
+            try:
+                self._grant_requester(key)
+            except Exception:
+                pass  # the pane still opens; the user can add Voisr with +
+            permissions.open_pane(key)
+        return result
+
+    def relaunch_app(self):
+        """Bridge: quit, and reopen Voisr.app once this process is gone."""
+        try:
+            import subprocess
+            import Foundation
+            path = str(Foundation.NSBundle.mainBundle().bundlePath())
+        except Exception:
+            return {"ok": False, "error": "not running as an app"}
+        # Python.app (from `python -m voisr.ui`) also ends in ".app"; only
+        # relaunch the installed Voisr bundle.
+        if (not path.endswith(".app") or self._window is None
+                or permissions.own_bundle_id() != permissions.OWN_BUNDLE_ID):
+            return {"ok": False, "error": "not running as an app"}
+        # Wait on our own pid, not a fixed delay: shutdown can take seconds
+        # (the hotkey join, pending transcriptions), and `open` on a still
+        # running Voisr only re-activates the dying app.
+        import os
+        try:
+            waiter = subprocess.Popen(
+                ["/bin/sh", "-c",
+                 'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; '
+                 '/usr/bin/open "$0"',
+                 path, str(os.getpid())],
+                start_new_session=True)
+        except OSError as error:
+            return {"ok": False, "error": f"couldn't relaunch: {error}"[:200]}
+        try:
+            self._window.destroy()  # same exit path as the menu-bar Quit
+        except Exception:
+            # still running: a waiter left behind would relaunch Voisr
+            # whenever it next quits
+            try:
+                waiter.kill()
+            except Exception:
+                pass
+            return {"ok": False, "error": "couldn't quit"}
+        return {"ok": True}
 
     def restore_history_item(self, item):
         try:
@@ -1659,8 +1827,9 @@ BRIDGE_METHODS = (
     "capture_hotkey", "clear_history", "copy_text", "delete_history_item",
     "export_history", "get_config", "get_history", "get_hotkey_status",
     "get_level", "get_models", "get_permissions", "get_pill_themes", "get_stats",
-    "hotkey_display", "open_settings_pane", "restore_history_item",
-    "save_text_file", "set_appearance", "set_config", "set_launch_at_login",
+    "hotkey_display", "open_settings_pane", "relaunch_app",
+    "reset_permission", "restore_history_item", "save_text_file",
+    "set_appearance", "set_config", "set_launch_at_login",
     "start_recording", "stop_recording", "take_config_notice",
 )
 
@@ -1711,7 +1880,7 @@ def main():
     api = None
     service = None
     try:
-        api = Api()
+        api = Api(mic_check=permissions.microphone_granted)
         widget = RecordingWidget(level_source=api.current_level)
         service = HotkeyService(api, widget=widget)
         api.attach_hotkey_service(service)

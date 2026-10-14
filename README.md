@@ -40,7 +40,7 @@ The dashboard follows your macOS appearance setting automatically, with an optio
 
 **Home** leads with your push-to-talk key rendered as a keycap (`Hold <key> to dictate`) and a headline stat showing **Time saved** (measured against typing at 40 wpm) with a 14-day sparkline.
 
-A **permission health strip** shows three chips for Microphone, Input Monitoring, and Accessibility. Any missing grant turns amber; clicking it opens the exact System Settings pane. When all three are granted, it collapses to a single quiet line.
+A **permission health strip** shows a chip for Microphone and Accessibility (plus Input Monitoring if `event_tap` is `"listen"`). Any missing grant turns amber; clicking it opens the exact System Settings pane. When everything is granted, it collapses to a single quiet line.
 
 **⌘K command palette** lets you start dictation, jump between views, change the push-to-talk key, toggle appearance, and copy the last dictation.
 
@@ -106,8 +106,8 @@ Grant these to your terminal app in System Settings → Privacy & Security:
 | Permission | Needed for |
 |---|---|
 | Microphone | recording (all modes) |
-| Accessibility / Automation | pasting via Cmd-V (`paste: true`) |
-| Input Monitoring | the global hotkey (`--mode hotkey`) |
+| Accessibility / Automation | the global hotkey (`--mode hotkey`) and pasting via Cmd-V (`paste: true`) |
+| Input Monitoring | the global hotkey, only if `event_tap` is set to `"listen"` |
 
 Toggle mode with `--no-paste` works with Microphone permission only.
 

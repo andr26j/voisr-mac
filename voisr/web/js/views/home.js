@@ -5,11 +5,17 @@ window.Voisr = window.Voisr || {};
      consequence, not the name of the setting. */
   const PERM_BREAKS = {
     microphone: "Voisr can't hear you at all until macOS grants Microphone.",
-    input_monitoring: "Voisr can't see the key until macOS grants Input Monitoring. " +
-                      "Until then, holding it does nothing — everything else still works.",
     accessibility: "Voisr can't paste for you until macOS grants Accessibility. " +
                    "Dictations are copied to your clipboard instead.",
   };
+
+  const hotkeyBreak = (label) =>
+    `Voisr can't see the key until macOS grants ${label}. ` +
+    "Until then, holding it does nothing — everything else still works.";
+  const STALE_BREAK =
+    "Voisr is listed and switched on, but macOS still blocks it — this " +
+    "usually happens after an update. Reset clears the stale entry; then " +
+    "switch Voisr on again in the pane that opens.";
 
   const MIC_FIRST_ASK = "asked on your first dictation";
 
@@ -18,12 +24,32 @@ window.Voisr = window.Voisr || {};
     input_monitoring: "needed for push-to-talk",
     accessibility: "needed to paste for you",
   };
+  /* The pane that carries the push-to-talk key says what it is for. In active
+     mode that is Accessibility, which also pastes; in listen mode it is Input
+     Monitoring. A non-hotkey pane keeps its PERM_WHY text. */
+  const HOTKEY_WHY = {
+    input_monitoring: "needed for push-to-talk",
+    accessibility: "needed for push-to-talk and pasting",
+  };
+  const whyText = (p) => (p.hotkey && HOTKEY_WHY[p.key]) || PERM_WHY[p.key] || "";
 
   /* A null mic is "not asked yet": macOS shows the prompt on the first
      recording, and Voisr isn't even listed in the Microphone pane until then.
      So it never blocks — holding the key is how the user gets asked. */
   const micPending = (p) => p.key === "microphone" && p.granted === null;
-  const blocking = (panes) => panes.filter((p) => p.granted !== true && !micPending(p));
+  /* Granted in System Settings, yet macOS still refuses it (the hotkey
+     pane's `effective` is false) — the stale grant an update leaves behind.
+     Only a grant known to be on counts: an unknown or denied pane keeps its
+     own wording, so unknown is never dressed up as "switched on". */
+  const stale = (p) => p.effective === false && p.granted === true;
+  const blocking = (panes) =>
+    panes.filter((p) => stale(p) || (p.granted !== true && !micPending(p)));
+
+  const listLabels = (panes) => {
+    const names = panes.map((p) => p.label);
+    return names.length < 2 ? names.join("")
+      : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  };
 
   function openPane(key) {
     return async () => {
@@ -36,41 +62,84 @@ window.Voisr = window.Voisr || {};
     };
   }
 
+  /* Reset clears Voisr's own TCC entry and opens the pane to grant it again;
+     Relaunch quits and reopens, for a grant macOS only reads at launch. */
+  function resetButton(pane, cls) {
+    return V.ui.el("button", { type: "button", class: cls,
+      text: `Reset ${pane.label}`, on: { click: async () => {
+        const res = await V.ui.tryApi(V.api().reset_permission(pane.key),
+                                      `Reset ${pane.label}`);
+        if (res && res.ok) V.ui.toast(`Reset — switch Voisr on under ${pane.label}`);
+        else if (res && res.ok === false) V.ui.toast(`Couldn't reset ${pane.label}`);
+      } } });
+  }
+
+  function relaunchButton() {
+    return V.ui.el("button", { type: "button", class: "btn-secondary",
+      text: "Relaunch Voisr", on: { click: async () => {
+        const res = await V.ui.tryApi(V.api().relaunch_app(), "Relaunch");
+        if (res && res.ok === false) V.ui.toast(res.error || "Couldn't relaunch");
+      } } });
+  }
+
   /* The blocking state. A missing grant is not a footnote: without Input
      Monitoring the entire product does nothing when you hold the key, and a
      chip above a hero still saying "hold this key to dictate" was a lie. */
   function permBlock(panes) {
     const bad = blocking(panes);
-    // worst first: a false is a known denial, a null is merely unverified
-    const lead = bad.find((p) => p.granted === false) || bad[0];
+    // worst first: a stale grant, then a known denial, then a merely unverified null
+    const lead = bad.find(stale) || bad.find((p) => p.granted === false) || bad[0];
+    const isStale = stale(lead);
+    const heading = isStale ? `macOS isn't honouring the ${lead.label} switch`
+      : lead.hotkey ? "Push-to-talk isn't working"
+      : `${lead.label} is switched off`;
+    const body = isStale ? STALE_BREAK
+      : lead.hotkey ? hotkeyBreak(lead.label)
+      : PERM_BREAKS[lead.key] || "";
 
-    const actions = V.ui.el("div", { class: "perm-actions" },
-      V.ui.el("button", {
+    const actions = V.ui.el("div", { class: "perm-actions" });
+    let recover = null;
+    if (isStale) {
+      actions.append(resetButton(lead, "btn-primary"), relaunchButton());
+    } else {
+      actions.append(V.ui.el("button", {
         type: "button", class: "btn-primary", text: `Open ${lead.label}`,
         on: { click: openPane(lead.key) },
       }));
-    // Recording from the dock still works without Input Monitoring or
-    // Accessibility; without the microphone nothing does, so no second path.
-    if (lead.key !== "microphone") {
-      actions.append(V.ui.el("button", {
-        type: "button", class: "btn-secondary", text: "Record from here instead",
-        // starts the dock recording: a bare .focus() shows no ring after a
-        // mouse click, so the button looked like it did nothing
-        // (only from idle: toggleRecord would stop a dock recording already
-        // running, which is not what "Record" says)
-        on: { click: () => {
-          V.ui.$("#record-btn").focus();
-          if (recState === "idle") toggleRecord();
-        } },
-      }));
+      // Recording from the dock still works without Input Monitoring or
+      // Accessibility; without the microphone nothing does, so no second path.
+      if (lead.key !== "microphone") {
+        actions.append(V.ui.el("button", {
+          type: "button", class: "btn-secondary", text: "Record from here instead",
+          // starts the dock recording: a bare .focus() shows no ring after a
+          // mouse click, so the button looked like it did nothing
+          // (only from idle: toggleRecord would stop a dock recording already
+          // running, which is not what "Record" says)
+          on: { click: () => {
+            V.ui.$("#record-btn").focus();
+            if (recState === "idle") toggleRecord();
+          } },
+        }));
+      }
+      // A denied hotkey grant can still be the stale one: listen mode's
+      // preflight reads false while the switch shows ON, and "Open" alone
+      // sends the user to a pane that already looks right. Only a known
+      // denial of the hotkey's own pane — never unknown, never another pane.
+      if (lead.hotkey && lead.granted === false) {
+        recover = V.ui.el("div", { class: "perm-recover" },
+          V.ui.el("span", { text: "Already switched on?" }),
+          resetButton(lead, "btn-secondary"), relaunchButton());
+      }
     }
 
     const checks = V.ui.el("ul", { class: "perm-checks" },
       ...panes.map((p) => {
-        const state = p.granted === true ? "ok" : p.granted === false ? "denied" : "unknown";
+        const state = stale(p) ? "denied"
+          : p.granted === true ? "ok" : p.granted === false ? "denied" : "unknown";
         const mark = state === "ok" ? "\u2713" : state === "denied" ? "!" : "?";
-        const why = state === "ok" ? "granted"
-          : micPending(p) ? MIC_FIRST_ASK : PERM_WHY[p.key] || "";
+        const why = stale(p) ? "switched on, not working"
+          : state === "ok" ? "granted"
+          : micPending(p) ? MIC_FIRST_ASK : whyText(p);
         return V.ui.el("li", { class: `perm-${state}-row` },
           V.ui.el("span", { class: "perm-mark", "aria-hidden": "true", text: mark }),
           V.ui.el("span", { text: p.label }),
@@ -79,27 +148,61 @@ window.Voisr = window.Voisr || {};
 
     return V.ui.el("div", { class: "perm-block" },
       V.ui.el("div", { class: "perm-glyph", html: V.ui.ICONS.keyboard }),
-      V.ui.el("h2", { text: lead.key === "input_monitoring"
-                        ? "Push-to-talk isn't working" : `${lead.label} is switched off` }),
-      V.ui.el("p", { text: PERM_BREAKS[lead.key] || "" }),
-      actions, checks);
+      V.ui.el("h2", { text: heading }),
+      V.ui.el("p", { text: body }),
+      ...(recover ? [actions, recover] : [actions]), checks);
   }
 
-  async function renderPermissions() {
+  let permPoll = null;
+  // A tick's bridge calls can outlast the 1 s interval on a slow bridge;
+  // overlapping ticks would stack calls. Skip a tick until the last settles.
+  let pollInFlight = false;
+
+  /* A bridge call that, when `quiet`, swallows its failure instead of
+     toasting it: the 1 s poll would otherwise toast twice a second for as
+     long as the bridge stayed broken. User-initiated renders keep toasting. */
+  async function callApi(call, label, quiet) {
+    if (!quiet) return V.ui.tryApi(call(), label);
+    try {
+      const res = await call();
+      return res && res.error ? null : res;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function renderPermissions(opts = {}) {
     const strip = V.ui.$("#perm-strip");
     const ptt = V.ui.$("#ptt-bar");
-    const res = await V.ui.tryApi(V.api().get_permissions(), "Load permissions");
+    const res = await callApi(() => V.api().get_permissions(), "Load permissions", opts.quiet);
     // Leave whatever the strip last showed rather than wiping it: a stale
     // strip beside a toast explaining the staleness beats an empty one.
     if (!res || !res.panes) return;
     const panes = res.panes;
+    const bad = blocking(panes);
+    // Granting happens in System Settings, so while something is blocked the
+    // strip re-checks itself every second. Started and stopped before the
+    // sig early-return so an unchanged attention state keeps polling.
+    if (bad.length > 0 && permPoll === null) {
+      permPoll = setInterval(() => {
+        if (document.getElementById("view-home").hidden) return;
+        if (pollInFlight) return;
+        pollInFlight = true;
+        Promise.allSettled([
+          renderPermissions({ quiet: true }),
+          renderListener({ quiet: true }),
+        ]).then(() => { pollInFlight = false; });
+      }, 1000);
+    } else if (bad.length === 0 && permPoll !== null) {
+      clearInterval(permPoll);
+      permPoll = null;
+    }
     // #perm-strip is aria-live, and replacing its children makes a screen
     // reader read it again: on every window focus, it re-announced a strip
     // that hadn't changed. Only re-render when a grant actually moved.
-    const sig = JSON.stringify(panes.map((p) => [p.key, p.granted]));
+    const sig = JSON.stringify(panes.map((p) => [p.key, p.granted, p.effective]));
     if (strip.dataset.sig === sig) return;
     strip.dataset.sig = sig;
-    const bad = blocking(panes);
 
     if (bad.length === 0 && panes.some(micPending)) {
       // first run: nothing is wrong yet, the first dictation will ask
@@ -117,7 +220,7 @@ window.Voisr = window.Voisr || {};
       // a healthy app should not shout — one quiet line, not three badges
       strip.replaceChildren(V.ui.el("p", {
         class: "perm-ok",
-        text: "Microphone, Input Monitoring and Accessibility all granted.",
+        text: `${listLabels(panes)} granted.`,
       }));
       strip.dataset.state = "ok";
       if (ptt) ptt.hidden = false;
@@ -127,7 +230,7 @@ window.Voisr = window.Voisr || {};
     strip.dataset.state = "attention";
     strip.replaceChildren(permBlock(panes));
     // the status line promises a key that does not currently work
-    if (ptt) ptt.hidden = bad.some((p) => p.key !== "accessibility");
+    if (ptt) ptt.hidden = bad.some((p) => p.hotkey || p.key === "microphone");
   }
 
   // granting a permission happens in System Settings, outside the app;
@@ -187,8 +290,8 @@ window.Voisr = window.Voisr || {};
     unknown: "Listener status unknown",
   };
 
-  async function renderListener() {
-    const res = await V.ui.tryApi(V.api().get_hotkey_status(), "Load shortcut status");
+  async function renderListener(opts = {}) {
+    const res = await callApi(() => V.api().get_hotkey_status(), "Load shortcut status", opts.quiet);
     const state = res && LISTENER_LABELS[res.state] ? res.state : "unknown";
     V.ui.$("#ptt-state").dataset.state = state;
     V.ui.$("#ptt-state-label").textContent = LISTENER_LABELS[state];

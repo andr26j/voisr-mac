@@ -100,7 +100,8 @@ def test_main_exposes_the_bridge_and_never_the_api(monkeypatch):
     seen = {}
 
     class FakeApi(Recorder):
-        pass
+        def __init__(self, **kwargs):
+            pass
 
     class FakeService:
         def __init__(self, api, widget):

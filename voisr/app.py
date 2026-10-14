@@ -13,7 +13,8 @@ from voisr.transcriber import transcribe
 
 DEFAULT_CONFIG = {"hotkey": "alt_r", "paste": True, "device": ":0", "dictionary": {},
                   "show_widget": True, "pill_theme": "classic", "pill_color": None,
-                  "appearance": "system", "launch_at_login": False, "model": None}
+                  "appearance": "system", "launch_at_login": False, "model": None,
+                  "event_tap": "active"}
 
 
 def _is_str(v):
@@ -33,6 +34,10 @@ def _is_vk(v):
     return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 0xFFFF
 
 
+def _is_tap_mode(v):
+    return v in ("listen", "active")
+
+
 def _is_dictionary(v):
     return isinstance(v, dict) and all(
         isinstance(k, str) and k and isinstance(w, str) for k, w in v.items())
@@ -44,6 +49,7 @@ CONFIG_VALIDATORS = {
     "pill_theme": _is_str, "pill_color": _is_optional_str,
     "appearance": _is_str, "launch_at_login": _is_bool,
     "model": _is_optional_str, "hotkey_vk": _is_vk, "hotkey_label": _is_str,
+    "event_tap": _is_tap_mode,
 }
 
 

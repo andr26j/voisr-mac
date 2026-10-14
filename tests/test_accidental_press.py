@@ -127,8 +127,11 @@ def make_service(tmp_path, target_vk):
     api, calls = make_api(tmp_path, transcript="real words")
     widget = FakeWidget()
     svc = HotkeyService(api, widget=widget, hide_delay=0,
-                        listener_factory=lambda handler: handler)
+                        listener_factory=lambda handler, mode="listen": handler)
     # No worker: ops run inline, so the handler's effects are synchronous.
+    # Marked running by hand (start() would also spawn the worker); a
+    # stopped service's handler ignores every event.
+    svc._stopped = False
     svc._target_vk = target_vk
     svc._spawn_listener()
     return svc, svc._listener, api, calls, widget

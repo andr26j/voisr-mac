@@ -27,6 +27,15 @@ const HOME_IDS = ["greeting", "perm-strip", "ptt-bar", "ptt-keycap", "ptt-key-na
                   "dock", "record-btn", "record-status", "record-error", "dock-time",
                   "nav-home"];
 
+/* Home polls permissions with a real setInterval while something is blocked.
+   Unref'd, a render that ends blocked can't keep the test process alive. */
+const realSetInterval = globalThis.setInterval;
+globalThis.setInterval = (...args) => {
+  const timer = realSetInterval(...args);
+  if (timer && typeof timer.unref === "function") timer.unref();
+  return timer;
+};
+
 const HISTORY = Array.from({ length: 7 }, (_, i) => ({
   id: `h${i}`, ts: 1_750_000_000 + i * 60, text: `dictation ${i}`, words: 10 + i, duration_s: 4,
 }));
@@ -152,7 +161,7 @@ test("home render() degrades one panel at a time -- a failed get_stats still lea
 test("home renderPermissions() replaces the whole panel when a grant is missing, and says what broke", async () => {
   const h = mountHome({ get_permissions: async () => ({ panes: [
     { key: "microphone", label: "Microphone", granted: true },
-    { key: "input_monitoring", label: "Input Monitoring", granted: false },
+    { key: "input_monitoring", label: "Input Monitoring", granted: false, hotkey: true },
     { key: "accessibility", label: "Accessibility", granted: null },
   ]}) });
 
@@ -237,7 +246,7 @@ test("home renderPermissions() keeps push-to-talk up on first run, when macOS ha
 test("home renderPermissions() leads with a real denial, not a mic that hasn't been asked yet", async () => {
   const h = mountHome({ get_permissions: async () => ({ panes: [
     { key: "microphone", label: "Microphone", granted: null },
-    { key: "input_monitoring", label: "Input Monitoring", granted: false },
+    { key: "input_monitoring", label: "Input Monitoring", granted: false, hotkey: true },
     { key: "accessibility", label: "Accessibility", granted: true },
   ]}) });
 
@@ -392,7 +401,7 @@ test("'Record from here instead' starts a dock recording rather than only focusi
   const { api, calls } = recordingApi();
   const h = mountHome({ ...api, get_permissions: async () => ({ panes: [
     { key: "microphone", label: "Microphone", granted: true },
-    { key: "input_monitoring", label: "Input Monitoring", granted: false },
+    { key: "input_monitoring", label: "Input Monitoring", granted: false, hotkey: true },
     { key: "accessibility", label: "Accessibility", granted: true },
   ]}) });
   await h.V.views.home.renderPermissions();
@@ -446,7 +455,7 @@ test("'Record from here instead' never stops a dock recording already running", 
   const { api, calls } = recordingApi();
   const h = mountHome({ ...api, get_permissions: async () => ({ panes: [
     { key: "microphone", label: "Microphone", granted: true },
-    { key: "input_monitoring", label: "Input Monitoring", granted: false },
+    { key: "input_monitoring", label: "Input Monitoring", granted: false, hotkey: true },
     { key: "accessibility", label: "Accessibility", granted: true },
   ]}) });
   await h.V.views.home.renderPermissions();
@@ -591,4 +600,282 @@ test("a recent-list refresh that fails mid-animation says so instead of an unhan
 
   const toastText = h.toast.children.map((c) => c.textContent).join("");
   assert.match(toastText, /Recent dictations failed to update/);
+});
+
+/* ---------- Task 7: a granted-but-refused hotkey grant, Reset/Relaunch, polling ---------- */
+
+// a fake container's textContent doesn't include its descendants
+const allText = (node) => [node.textContent || "", ...(node.children || []).map(allText)].join(" ");
+
+const STALE_API = {
+  get_permissions: async () => ({ panes: [
+    { key: "microphone", label: "Microphone", granted: true, hotkey: false, effective: true },
+    { key: "accessibility", label: "Accessibility", granted: true, hotkey: true, effective: false },
+  ]}),
+};
+
+test("a granted-but-not-effective hotkey pane blocks with Reset and Relaunch", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const h = mountHome(STALE_API);
+  await h.V.views.home.render();
+  assert.equal(h["perm-strip"].dataset.state, "attention");
+  const text = allText(h["perm-strip"]);
+  assert.match(text, /isn't honouring/);
+  assert.match(text, /Reset Accessibility/);
+  assert.match(text, /Relaunch Voisr/);
+  assert.equal(h["ptt-bar"].hidden, true, "the key doesn't work, so don't promise it");
+});
+
+test("active mode: two granted panes read as all granted", async () => {
+  const h = mountHome({ get_permissions: async () => ({ panes: [
+    { key: "microphone", label: "Microphone", granted: true, hotkey: false, effective: true },
+    { key: "accessibility", label: "Accessibility", granted: true, hotkey: true, effective: true },
+  ]}) });
+  await h.V.views.home.render();
+  assert.equal(h["perm-strip"].dataset.state, "ok");
+  assert.equal(h["perm-strip"].children[0].textContent,
+               "Microphone and Accessibility granted.");
+});
+
+test("while attention is needed, permissions re-render every second", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let calls = 0;
+  const h = mountHome({ get_permissions: async () => {
+    calls += 1;
+    return (await STALE_API.get_permissions());
+  } });
+  await h.V.views.home.render();
+  const before = calls;
+  for (let i = 0; i < 3; i++) {
+    t.mock.timers.tick(1000);
+    await settle();   // each tick's calls finish before the next (see in-flight guard)
+  }
+  assert.ok(calls >= before + 3, `expected ≥3 polls, got ${calls - before}`);
+});
+
+test("Reset and Relaunch call the bridge, and surface a failure as a toast", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const calls = [];
+  const h = mountHome({ ...STALE_API,
+    reset_permission: async (key) => { calls.push(["reset", key]); return { ok: true }; },
+    relaunch_app: async () => { calls.push(["relaunch"]); return { ok: false, error: "no bundle" }; },
+  });
+  await h.V.views.home.render();
+  const actions = h["perm-strip"].children[0].children.find((c) => c.className === "perm-actions");
+  const [reset, relaunch] = actions.children;
+  const toastText = () => h.toast.children.map((c) => c.textContent).join("|");
+  reset.dispatch("click", { target: reset });
+  await settle();
+  assert.match(toastText(), /switch Voisr on under Accessibility/);
+  relaunch.dispatch("click", { target: relaunch });
+  await settle();
+  assert.match(toastText(), /no bundle/);
+  assert.deepEqual(calls, [["reset", "accessibility"], ["relaunch"]]);
+});
+
+/* ---------- Task 7 fix round 1 ---------- */
+
+const hotkeyPane = (granted, effective) => ({ panes: [
+  { key: "microphone", label: "Microphone", granted: true, hotkey: false, effective: true },
+  { key: "accessibility", label: "Accessibility", granted, hotkey: true, effective },
+]});
+
+for (const [granted, label] of [[null, "unknown"], [false, "denied"]]) {
+  test(`a ${label} hotkey pane with effective:false is not called "switched on, not working"`, async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+    const h = mountHome({ get_permissions: async () => hotkeyPane(granted, false) });
+    await h.V.views.home.render();
+    assert.equal(h["perm-strip"].dataset.state, "attention");
+    const text = allText(h["perm-strip"]);
+    assert.doesNotMatch(text, /isn't honouring/);
+    assert.doesNotMatch(text, /switched on, not working/);
+    assert.match(text, /Open Accessibility/);
+    // only a known denial offers the "already switched on?" reset (R15)
+    if (granted === null) assert.doesNotMatch(text, /Reset /);
+    else assert.match(text, /Reset Accessibility/);
+  });
+}
+
+test("polling stops once permissions flip to all granted", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let fixed = false;
+  let calls = 0;
+  const h = mountHome({ get_permissions: async () => {
+    calls += 1;
+    return hotkeyPane(true, fixed);
+  } });
+  await h.V.views.home.render();
+  fixed = true;
+  t.mock.timers.tick(1000);
+  await settle();
+  assert.equal(h["perm-strip"].dataset.state, "ok");
+  const after = calls;
+  t.mock.timers.tick(5000);
+  await settle();
+  assert.equal(calls, after, "no get_permissions calls once nothing is blocked");
+});
+
+test("repeated renders while blocked don't stack poll intervals", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let calls = 0;
+  const h = mountHome({ get_permissions: async () => {
+    calls += 1;
+    return hotkeyPane(true, false);
+  } });
+  await h.V.views.home.render();
+  await h.V.views.home.render();
+  await h.V.views.home.renderPermissions();
+  const before = calls;
+  t.mock.timers.tick(1000);
+  await settle();
+  assert.equal(calls - before, 1, "one tick, one poll");
+});
+
+test("the poll tick does nothing while Home is hidden", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let calls = 0;
+  const h = mountHome({ get_permissions: async () => {
+    calls += 1;
+    return hotkeyPane(true, false);
+  } });
+  await h.V.views.home.render();
+  h["view-home"].hidden = true;
+  const before = calls;
+  t.mock.timers.tick(3000);
+  await settle();
+  assert.equal(calls, before);
+});
+
+test("a failing bridge doesn't toast every second from the poll", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let broken = false;
+  const h = mountHome({
+    get_permissions: async () => {
+      if (broken) throw new Error("bridge down");
+      return hotkeyPane(true, false);
+    },
+    get_hotkey_status: async () => {
+      if (broken) throw new Error("bridge down");
+      return { state: "listening" };
+    },
+  });
+  await h.V.views.home.render();
+  broken = true;
+  t.mock.timers.tick(3000);
+  await settle();
+  assert.equal(h.toast.children.map((c) => c.textContent).join(""), "",
+    "the poll is quiet; user-initiated renders still toast");
+  await h.V.views.home.renderPermissions();
+  assert.match(h.toast.children.map((c) => c.textContent).join(""), /bridge down/);
+});
+
+test("Reset without an error string still says it couldn't", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const h = mountHome({ ...STALE_API, reset_permission: async () => ({ ok: false }) });
+  await h.V.views.home.render();
+  const actions = h["perm-strip"].children[0].children.find((c) => c.className === "perm-actions");
+  actions.children[0].dispatch("click", { target: actions.children[0] });
+  await settle();
+  assert.match(h.toast.children.map((c) => c.textContent).join(""), /Couldn't reset Accessibility/);
+});
+
+/* ---------- final review: I2 (R15) ---------- */
+
+const findRow = (h, cls) =>
+  h["perm-strip"].children[0].children.find((c) => c.className === cls);
+
+const LISTEN_DENIED_HOTKEY = { panes: [
+  { key: "microphone", label: "Microphone", granted: true, hotkey: false, effective: true },
+  { key: "input_monitoring", label: "Input Monitoring", granted: false, hotkey: true, effective: true },
+  { key: "accessibility", label: "Accessibility", granted: true, hotkey: false, effective: true },
+]};
+
+test("a denied hotkey pane also offers Reset and Relaunch for a switch that only looks off", async (t) => {
+  // listen mode's preflight can read false while the switch shows ON: Open
+  // alone sent the user to a pane that already looked right -- a dead end
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const calls = [];
+  const h = mountHome({
+    get_permissions: async () => LISTEN_DENIED_HOTKEY,
+    reset_permission: async (key) => { calls.push(["reset", key]); return { ok: true }; },
+    relaunch_app: async () => { calls.push(["relaunch"]); return { ok: true }; },
+  });
+  await h.V.views.home.render();
+  assert.deepEqual(findRow(h, "perm-actions").children.map((b) => b.textContent),
+    ["Open Input Monitoring", "Record from here instead"]);
+  const recover = findRow(h, "perm-recover");
+  assert.ok(recover, "a recovery row under the main actions");
+  assert.match(allText(recover), /Already switched on\?/);
+  const buttons = recover.children.filter((c) => c.tagName === "BUTTON" || c.type === "button");
+  assert.deepEqual(buttons.map((b) => b.textContent), ["Reset Input Monitoring", "Relaunch Voisr"]);
+  buttons[0].dispatch("click", { target: buttons[0] });
+  await settle();
+  buttons[1].dispatch("click", { target: buttons[1] });
+  await settle();
+  assert.deepEqual(calls, [["reset", "input_monitoring"], ["relaunch"]]);
+  assert.match(h.toast.children.map((c) => c.textContent).join("|"),
+               /switch Voisr on under Input Monitoring/);
+});
+
+test("a denied pane that isn't the hotkey's gets no Reset", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const h = mountHome({ get_permissions: async () => ({ panes: [
+    { key: "microphone", label: "Microphone", granted: true, hotkey: false, effective: true },
+    { key: "input_monitoring", label: "Input Monitoring", granted: true, hotkey: true, effective: true },
+    { key: "accessibility", label: "Accessibility", granted: false, hotkey: false, effective: true },
+  ]}) });
+  await h.V.views.home.render();
+  const text = allText(h["perm-strip"]);
+  assert.match(text, /Open Accessibility/);
+  assert.doesNotMatch(text, /Reset /);
+  assert.doesNotMatch(text, /Relaunch/);
+  assert.equal(findRow(h, "perm-recover"), undefined);
+});
+
+test("an unknown (null) hotkey pane gets no Reset", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const h = mountHome({ get_permissions: async () => ({ panes: [
+    { key: "microphone", label: "Microphone", granted: true, hotkey: false, effective: true },
+    { key: "input_monitoring", label: "Input Monitoring", granted: null, hotkey: true, effective: true },
+    { key: "accessibility", label: "Accessibility", granted: true, hotkey: false, effective: true },
+  ]}) });
+  await h.V.views.home.render();
+  const text = allText(h["perm-strip"]);
+  assert.match(text, /Open Input Monitoring/);
+  assert.doesNotMatch(text, /Reset /);
+  assert.equal(findRow(h, "perm-recover"), undefined);
+});
+
+test("a denied hotkey accessibility pane says it is needed for push-to-talk and pasting", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const h = mountHome({ get_permissions: async () => hotkeyPane(false, true) });
+  await h.V.views.home.render();
+  const checks = findRow(h, "perm-checks");
+  const accessRow = checks.children[1];
+  assert.match(accessRow.className, /perm-denied-row/);
+  const why = accessRow.children.find((c) => c.className === "perm-why");
+  assert.equal(why.textContent, "needed for push-to-talk and pasting");
+});
+
+/* ---------- final review: M5 ---------- */
+
+test("a poll tick is skipped while the previous tick's calls are still pending", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let calls = 0;
+  let hang = false;
+  const h = mountHome({ get_permissions: () => {
+    calls += 1;
+    return hang ? new Promise(() => {}) : Promise.resolve(LISTEN_DENIED_HOTKEY);
+  } });
+  await h.V.views.home.render();
+  hang = true;
+  const before = calls;
+  t.mock.timers.tick(1000);
+  await settle();
+  assert.equal(calls, before + 1, "the first tick polls");
+  for (let i = 0; i < 4; i++) {
+    t.mock.timers.tick(1000);
+    await settle();
+  }
+  assert.equal(calls, before + 1, "a slow bridge never gets a second overlapping poll");
 });

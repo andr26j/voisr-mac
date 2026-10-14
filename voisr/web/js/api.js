@@ -27,12 +27,12 @@ window.Voisr = window.Voisr || {};
     window.pywebview = { api: {
       get_permissions: async () => ({ panes: [
         { key: "microphone", label: "Microphone", granted: true,
-          settings_url: "x-apple.systempreferences:" },
-        { key: "input_monitoring", label: "Input Monitoring", granted: false,
-          settings_url: "x-apple.systempreferences:" },
-        { key: "accessibility", label: "Accessibility", granted: null,
-          settings_url: "x-apple.systempreferences:" },
+          settings_url: "x-apple.systempreferences:", hotkey: false, effective: true },
+        { key: "accessibility", label: "Accessibility", granted: false,
+          settings_url: "x-apple.systempreferences:", hotkey: true, effective: true },
       ]}),
+      reset_permission: async () => ({ ok: true }),
+      relaunch_app: async () => ({ ok: false, error: "dev mode" }),
       open_settings_pane: async () => ({ ok: true }),
       get_history: async () => [...mockHistory].sort((a, b) => b.ts - a.ts),
       get_stats: async () => ({

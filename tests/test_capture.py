@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from voisr.history import HistoryStore
 from voisr.ui import (Api, HotkeyService, event_vk, key_label,
                       legacy_name_to_vk, TOGGLE_VKS)
@@ -39,7 +41,7 @@ class CallbackListener:
 
 def cb_factory():
     made = []
-    def factory(handler):
+    def factory(handler, mode="listen"):
         l = CallbackListener(handler)
         made.append(l)
         return l
@@ -184,7 +186,7 @@ def test_capture_hotkey_stores_vk_and_restarts_service(tmp_path):
 
     svc = FakeSvc()
     api = make_api(tmp_path, hotkey_service=svc,
-                   capture_fn=lambda timeout: (63, "Fn / Globe"))
+                   capture_fn=lambda timeout, mode="listen": (63, "Fn / Globe"))
     res = api.capture_hotkey()
     assert res == {"vk": 63, "label": "Fn / Globe"}
     cfg = json.loads((tmp_path / "config.json").read_text())
@@ -200,11 +202,36 @@ def test_capture_hotkey_timeout_restores_service(tmp_path):
         status = "active"
 
     svc = FakeSvc()
-    api = make_api(tmp_path, hotkey_service=svc, capture_fn=lambda timeout: None)
+    api = make_api(tmp_path, hotkey_service=svc, capture_fn=lambda timeout, mode="listen": None)
     res = api.capture_hotkey()
     assert "error" in res
     assert svc.events == ["stop", "start"]
 
+
+
+@pytest.mark.parametrize("configured, expected", [
+    (None, "active"), ("listen", "listen"), ("active", "active"), ("grab", "active"),
+])
+def test_capture_hotkey_captures_with_the_configured_tap_mode(tmp_path, configured, expected):
+    # An active-tap user may have no Input Monitoring: a listen-only capture
+    # tap would never see the key and Change hotkey would time out.
+    if configured is not None:
+        (tmp_path / "config.json").write_text(json.dumps({"event_tap": configured}))
+    modes = []
+    api = make_api(tmp_path, capture_fn=lambda timeout, mode="listen":
+                   modes.append(mode) or (63, "Fn / Globe"))
+    api.capture_hotkey()
+    assert modes == [expected]
+
+
+def test_capture_next_key_passes_the_mode_to_the_tap(monkeypatch):
+    from voisr import keytap
+    from voisr.ui import capture_next_key
+    seen = []
+    monkeypatch.setattr(keytap, "capture_next_vk",
+                        lambda timeout, mode="listen": seen.append(mode) or 63)
+    assert capture_next_key(1.0, mode="active")[0] == 63
+    assert seen == ["active"]
 
 def test_tap_handler_returns_fast_while_previous_capture_is_finalizing(tmp_path):
     """H2: a press that lands while the previous recorder is still in stop()
