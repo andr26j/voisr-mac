@@ -1,3 +1,6 @@
+import sys
+import types
+
 import pytest
 
 from voisr import permissions
@@ -151,3 +154,51 @@ def test_macos_26_uses_the_settings_extension_pane():
 def test_older_macos_keeps_the_preference_pane():
     assert permissions.settings_url("microphone", macos_major=15) == (
         "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+
+
+def _fake_tcc_modules(monkeypatch):
+    """Stub every framework request_grant may touch: no real prompt."""
+    calls = []
+    monkeypatch.setitem(sys.modules, "Quartz", types.SimpleNamespace(
+        CGRequestListenEventAccess=lambda: calls.append("request_listen"),
+        CGRequestPostEventAccess=lambda: calls.append("request_post")))
+    monkeypatch.setitem(sys.modules, "ApplicationServices", types.SimpleNamespace(
+        AXIsProcessTrustedWithOptions=lambda opts: calls.append(("ax_prompt", opts)),
+        kAXTrustedCheckOptionPrompt="prompt"))
+
+    class Device:
+        @staticmethod
+        def requestAccessForMediaType_completionHandler_(media, handler):
+            calls.append(("mic", media))
+            handler(True)
+
+    monkeypatch.setitem(sys.modules, "AVFoundation", types.SimpleNamespace(
+        AVCaptureDevice=Device, AVMediaTypeAudio="soun"))
+    return calls
+
+
+@pytest.mark.parametrize("key, expected", [
+    ("input_monitoring", ["request_listen"]),
+    ("accessibility", ["request_post", ("ax_prompt", {"prompt": True})]),
+    ("microphone", [("mic", "soun")]),
+    ("camera", []),
+])
+def test_request_grant_asks_for_exactly_that_pane(monkeypatch, key, expected):
+    calls = _fake_tcc_modules(monkeypatch)
+    permissions.request_grant(key)
+    assert calls == expected
+
+
+def test_request_grant_never_raises(monkeypatch):
+    def boom(*_):
+        raise RuntimeError("boom")
+
+    monkeypatch.setitem(sys.modules, "Quartz", types.SimpleNamespace(
+        CGRequestListenEventAccess=boom, CGRequestPostEventAccess=boom))
+    ax = []
+    monkeypatch.setitem(sys.modules, "ApplicationServices", types.SimpleNamespace(
+        AXIsProcessTrustedWithOptions=lambda opts: ax.append(opts),
+        kAXTrustedCheckOptionPrompt="prompt"))
+    permissions.request_grant("input_monitoring")
+    permissions.request_grant("accessibility")
+    assert ax == [{"prompt": True}], "one failed request must not skip the AX prompt"

@@ -1201,28 +1201,53 @@ def test_get_config_returns_a_private_copy(tmp_path):
     assert "zzz" not in api.get_config()["dictionary"]
 
 
-def test_reset_permission_opens_the_pane_only_after_a_good_reset(tmp_path, monkeypatch):
+@pytest.mark.parametrize("key", ["accessibility", "input_monitoring", "microphone"])
+def test_reset_permission_relists_voisr_then_opens_the_pane(tmp_path, monkeypatch, key):
+    # tccutil reset deletes Voisr's row from the list: without asking again
+    # the pane that opens has no Voisr switch to turn on.
     from voisr import permissions
-    opened = []
+    events = []
     monkeypatch.setattr(permissions, "reset_grant",
                         lambda key: {"ok": True})
     monkeypatch.setattr(permissions, "open_pane",
-                        lambda key: opened.append(key) or True)
-    api = make_api(tmp_path)
-    assert api.reset_permission("accessibility") == {"ok": True}
-    assert opened == ["accessibility"]
+                        lambda key: events.append(("open", key)) or True)
+    api = make_api(tmp_path, grant_requester=lambda k: events.append(("request", k)))
+    assert api.reset_permission(key) == {"ok": True}
+    assert events == [("request", key), ("open", key)]
 
 
 def test_reset_permission_does_not_open_the_pane_on_failure(tmp_path, monkeypatch):
     from voisr import permissions
-    opened = []
+    events = []
     monkeypatch.setattr(permissions, "reset_grant",
                         lambda key: {"ok": False, "error": "nope"})
     monkeypatch.setattr(permissions, "open_pane",
-                        lambda key: opened.append(key) or True)
-    api = make_api(tmp_path)
+                        lambda key: events.append(("open", key)) or True)
+    api = make_api(tmp_path, grant_requester=lambda k: events.append(("request", k)))
     assert api.reset_permission("accessibility") == {"ok": False, "error": "nope"}
-    assert opened == []
+    assert events == []
+
+
+def test_reset_permission_still_opens_the_pane_if_the_re_request_raises(tmp_path, monkeypatch):
+    from voisr import permissions
+    opened = []
+    monkeypatch.setattr(permissions, "reset_grant", lambda key: {"ok": True})
+    monkeypatch.setattr(permissions, "open_pane",
+                        lambda key: opened.append(key) or True)
+
+    def boom(key):
+        raise RuntimeError("no Quartz")
+
+    api = make_api(tmp_path, grant_requester=boom)
+    assert api.reset_permission("accessibility") == {"ok": True}
+    assert opened == ["accessibility"]
+
+
+def test_api_defaults_to_the_real_grant_requester(tmp_path):
+    # conftest injects an inert requester; left unset, Api uses the real one
+    from voisr import permissions
+    api = make_api(tmp_path, grant_requester=None)
+    assert api._grant_requester is permissions.request_grant
 
 
 def test_reset_permission_never_runs_tccutil_unbundled(tmp_path, monkeypatch):

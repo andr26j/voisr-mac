@@ -32,6 +32,8 @@ def _no_real_paste(monkeypatch):
     def init(self, *args, **kwargs):
         kwargs.setdefault("paste_fn", lambda text: True)
         kwargs.setdefault("clipboard_fn", lambda text: None)
+        # nor ask macOS for a grant (a real TCC prompt) after a faked reset
+        kwargs.setdefault("grant_requester", lambda key: None)
         real_init(self, *args, **kwargs)
 
     monkeypatch.setattr(Api, "__init__", init)

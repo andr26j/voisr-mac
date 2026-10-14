@@ -147,6 +147,38 @@ def reset_grant(key: str, bundle_id=None, runner=None) -> dict:
     return {"ok": True}
 
 
+def request_grant(key: str) -> None:
+    """Ask macOS for one pane's grant again. After `tccutil reset` Voisr's
+    row is gone from that list; asking re-registers it (switched off) so
+    the pane the user is sent to has a Voisr switch to turn on. May show
+    the system prompt. Never raises."""
+    if key == "input_monitoring":
+        try:
+            import Quartz
+            Quartz.CGRequestListenEventAccess()
+        except Exception:
+            pass
+    elif key == "accessibility":
+        try:
+            import Quartz
+            Quartz.CGRequestPostEventAccess()
+        except Exception:
+            pass
+        try:
+            from ApplicationServices import (AXIsProcessTrustedWithOptions,
+                                             kAXTrustedCheckOptionPrompt)
+            AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
+        except Exception:
+            pass
+    elif key == "microphone":
+        try:
+            import AVFoundation
+            AVFoundation.AVCaptureDevice.requestAccessForMediaType_completionHandler_(
+                AVFoundation.AVMediaTypeAudio, lambda granted: None)
+        except Exception:
+            pass
+
+
 def open_pane(key: str, opener=None) -> bool:
     """Open a pane by key. The key is validated against PANES so caller input
     can never reach NSWorkspace verbatim."""

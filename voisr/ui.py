@@ -1084,7 +1084,8 @@ class Api:
                  capture_fn=capture_next_key,
                  paste_fn=paste_at_cursor,
                  clipboard_fn=set_clipboard,
-                 mic_check=None):
+                 mic_check=None,
+                 grant_requester=None):
         self._config_path = Path(config_path)
         self._history = history or HistoryStore(ROOT / "data" / "history.jsonl")
         self._transcribe_fn = transcribe_fn
@@ -1095,6 +1096,8 @@ class Api:
         self._clipboard_fn = clipboard_fn
         # None = no check, so tests never probe the runner's real TCC state
         self._mic_check = mic_check
+        # asks macOS for one pane's grant again after a reset (a TCC prompt)
+        self._grant_requester = grant_requester or permissions.request_grant
         self._last_paste_text = None
         self._last_paste_ts = None
         self._typing_generation = 0
@@ -1610,9 +1613,15 @@ class Api:
 
     def reset_permission(self, key):
         """Bridge: reset Voisr's own grant, then open the pane to re-grant.
-        The hotkey watcher notices the new grant and respawns the tap."""
+        The hotkey watcher notices the new grant and respawns the tap.
+        tccutil reset deletes Voisr's row from the list, so ask for the
+        grant again first: that re-lists Voisr, switched off, in the pane."""
         result = permissions.reset_grant(key)
         if result.get("ok"):
+            try:
+                self._grant_requester(key)
+            except Exception:
+                pass  # the pane still opens; the user can add Voisr with +
             permissions.open_pane(key)
         return result
 
