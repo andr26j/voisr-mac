@@ -50,9 +50,16 @@ def test_a_quiet_room_alone_is_not_speech():
     assert analyze(pcm(noise(1, 10))).verdict == "no_speech"
 
 
-def test_noise_just_under_the_absolute_floor_is_not_speech():
+def test_steady_noise_near_the_floor_is_not_speech():
     # uniform ±60 is about -59.5 dBFS RMS: steady, so nothing rises 3 dB above it
     assert analyze(pcm(noise(1, 60))).verdict == "no_speech"
+
+
+def test_a_tone_below_minus_60_dbfs_is_not_speech():
+    # room is about -92 dBFS, tone about -67 dBFS: 3 dB above the room floor,
+    # but under the -60 dBFS absolute minimum, so it must be rejected
+    span = analyze(pcm(noise(0.5, 1), tone(0.5, 20), noise(0.5, 1, seed=2)))
+    assert span.verdict == "no_speech"
 
 
 def test_speech_in_a_quiet_room_is_kept_with_two_blocks_of_padding():
@@ -93,7 +100,10 @@ def test_whispered_speech_in_a_quiet_room_counts():
 
 
 def test_a_loud_room_never_hides_speech():
-    span = analyze(pcm(noise(1, 2000), tone(0.5, 8000), noise(1, 2000, seed=3)))
+    # room is about -45 dBFS and the tone about -44 dBFS. Without the -50 dBFS
+    # floor cap the floor would be -45, the threshold -42, and the tone would
+    # be rejected. With the cap the threshold is -47 and the tone is kept.
+    span = analyze(pcm(noise(1, 320), tone(0.5, 300), noise(1, 320, seed=3)))
     assert span.verdict == "speech"
 
 
