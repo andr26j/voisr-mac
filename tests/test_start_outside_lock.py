@@ -325,3 +325,40 @@ def test_a_start_interrupted_by_a_base_exception_does_not_wedge_the_key():
     api.result = {"recording": True}
     svc.press()
     assert api.starts == 2 and svc.holding
+
+
+class NullTimer:
+    def start(self):
+        pass
+
+    def cancel(self):
+        pass
+
+
+def test_a_quick_release_mid_start_still_waits_for_a_second_press():
+    # the mic took a second to open, but the key was only down 0.2 s
+    api = BlockingApi()
+    delays = []
+    svc = HotkeyService(api, widget=FakeWidget(), hide_delay=0, tap_gate_s=0.5,
+                        timer_factory=lambda d, fn: delays.append(d) or NullTimer())
+    now = [0.0]
+    svc._clock = lambda: now[0]
+    press = start_blocked_press(svc, api)
+    assert returns_promptly(svc.release, 0.2)
+    now[0] = 1.0
+    finish_start(api, press)
+    assert api.releases == 0 and api.cancels == 0
+    assert svc.holding
+    assert delays == [0.0]  # the window closed while the mic was opening
+
+
+def test_esc_mid_start_cancels_once_the_start_completes():
+    api = BlockingApi()
+    widget = FakeWidget()
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    press = start_blocked_press(svc, api)
+    assert returns_promptly(svc.cancel_escape)
+    finish_start(api, press)
+    assert api.cancels == 1 and api.releases == 0
+    assert not svc.holding
+    assert "recording" not in widget.calls

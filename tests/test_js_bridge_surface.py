@@ -104,7 +104,7 @@ def test_main_exposes_the_bridge_and_never_the_api(monkeypatch):
             pass
 
     class FakeService:
-        def __init__(self, api, widget, fallback_check=None):
+        def __init__(self, api, widget, fallback_check=None, key_state=None):
             pass
 
         def stop(self):

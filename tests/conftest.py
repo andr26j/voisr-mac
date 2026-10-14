@@ -1,3 +1,4 @@
+import functools
 import subprocess
 
 import pytest
@@ -37,6 +38,23 @@ def _no_real_paste(monkeypatch):
         real_init(self, *args, **kwargs)
 
     monkeypatch.setattr(Api, "__init__", init)
+
+
+@pytest.fixture(autouse=True)
+def _no_tap_gate(monkeypatch):
+    """Most HotkeyService tests press and release within microseconds and
+    expect a dictation, which the 500 ms tap gate would hold back as a tap.
+    They get the gate switched off; a test of the gate passes tap_gate_s."""
+    from voisr.ui import HotkeyService
+
+    real_init = HotkeyService.__init__
+
+    @functools.wraps(real_init)  # the real signature stays inspectable
+    def init(self, *args, **kwargs):
+        kwargs.setdefault("tap_gate_s", 0)
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(HotkeyService, "__init__", init)
 
 
 @pytest.fixture

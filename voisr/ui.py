@@ -1,3 +1,4 @@
+import functools
 import json
 import re
 import threading
@@ -594,6 +595,31 @@ def _quartz_listener_factory(handler, mode="listen"):
     return listener
 
 
+# Hotkey timing (robustness spec item 3, Wispr's observed values)
+TAP_GATE_S = 0.5  # let go sooner: a tap, unless a second press follows within this
+CHORD_WINDOW_S = 1.0  # another key this soon after the press: a shortcut
+ESC_VK = 53
+STALE_CHECK_S = 5.0  # how often a long hold is checked against the keyboard
+STALE_AFTER_S = 10.0  # a hold this long has its key state confirmed
+
+
+def hotkey_key_down(vk):
+    """The keyboard's own reading of whether `vk` is down: True or False, or
+    None when it can't be read. Never raises."""
+    try:
+        import Quartz
+        return bool(Quartz.CGEventSourceKeyState(
+            Quartz.kCGEventSourceStateHIDSystemState, vk))
+    except Exception:
+        return None
+
+
+def _daemon_timer(delay, fn):
+    timer = threading.Timer(delay, fn)
+    timer.daemon = True
+    return timer
+
+
 class HotkeyService:
     """Global push-to-talk listener driving the shared Api record path."""
 
@@ -601,7 +627,9 @@ class HotkeyService:
 
     def __init__(self, api, widget=None, hide_delay=1.2,
                  permissions_check=None, poll_interval=3.0,
-                 listener_factory=None, fallback_check=None):
+                 listener_factory=None, fallback_check=None,
+                 tap_gate_s=TAP_GATE_S, timer_factory=None, key_state=None,
+                 stale_interval=STALE_CHECK_S):
         self._api = api
         self._widget = widget
         self._hide_delay = hide_delay
@@ -625,7 +653,25 @@ class HotkeyService:
         self._wake = threading.Event()  # set by stop() to end a sleeping poll
         self._stopped = True  # until start(); see running
         self._pressed = False
-        self._latched = False  # pressed by a toggle key, not held
+        self._latched = False  # hands-free: a toggle key, or a double-tap
+        self._latch_armed = False  # hands-free and the key is up: the next press stops it
+        self._pressed_at = None  # event time of the press that owns the recording
+        # event time of the second press that latched a double-tap, until its
+        # release is seen: the latch is provisional (held >= the gate, that
+        # press was a dictation). None for toggles and once released.
+        self._latch_press_at = None
+        self._tap_gate_s = tap_gate_s
+        self._timer_factory = timer_factory or _daemon_timer
+        self._pending = None  # token while a quick tap waits for a second press
+        self._pending_from = None  # event time that tap was let go
+        self._pending_timer = None
+        # Opt-in like fallback_check (main() passes hotkey_key_down): None
+        # means no stuck-key check, so tests never read the real keyboard.
+        self._key_state = key_state
+        self._key_trusted = False  # the probe has read the held key as down
+        self._stale_interval = stale_interval
+        self._ticker = None
+        self._tick_wake = threading.Event()  # set by stop() to end the ticker
         self._rejected = False  # this press already reported it couldn't start
         # press() calls start_recording() with _state_lock released (it can
         # take seconds, and the pill's main-thread callbacks take the lock).
@@ -633,6 +679,7 @@ class HotkeyService:
         # a release or chord in the gap is noted here and settled after.
         self._starting = False
         self._start_released = False
+        self._start_released_at = None
         self._start_cancelled = False
         self._key_name = None
         self._target_vk = None
@@ -732,15 +779,32 @@ class HotkeyService:
         else:
             method(*args, **kwargs)
 
-    def press(self, latched=False) -> None:
+    def press(self, latched=False, at=None) -> None:
+        at = self._clock() if at is None else at
+        if self._settle_pending(at):
+            return
+        finish = None
         with self._state_lock:
             if self._pressed:
-                return
-            self._pressed = True
-            self._latched = latched
-            self._starting = True
-            self._start_released = False
-            self._start_cancelled = False
+                # auto-repeat, a modifier's flags event, or the key already
+                # held: only a fresh press of a hands-free dictation stops it
+                if latched or not (self._latched and self._latch_armed):
+                    return
+                finish = self._end_recording()
+            else:
+                self._pressed = True
+                self._pressed_at = at
+                self._latched = latched
+                self._latch_press_at = None
+                # a toggle isn't held: its next press (any key) stops it
+                self._latch_armed = latched
+                self._starting = True
+                self._start_released = False
+                self._start_released_at = None
+                self._start_cancelled = False
+        if finish is not None:
+            self._spawn_finish(*finish)
+            return
         try:
             result = self._api.start_recording()
         except Exception as error:
@@ -753,9 +817,9 @@ class HotkeyService:
                 self._pressed = False
                 self._latched = False
             raise
-        finish = None
         pane = None
         refused = False
+        learn = False
         with self._state_lock:
             self._starting = False
             released, cancelled = self._start_released, self._start_cancelled
@@ -785,7 +849,11 @@ class HotkeyService:
                             theme=sanitize_pill_theme(cfg.get("pill_theme")),
                             color=sanitize_pill_color(cfg.get("pill_color")))
                     if released:
-                        finish = self._end_recording()
+                        # a toggle ends at once; a held key goes through the gate
+                        finish = (self._end_recording() if self._latched
+                                  else self._release_held(self._start_released_at))
+                    else:
+                        learn = not self._latched
         if refused:
             # outside _state_lock: the opener dispatches to AppKit
             if pane is not None:
@@ -798,6 +866,69 @@ class HotkeyService:
             self._api._cancel_recording()
         if finish is not None:
             self._spawn_finish(*finish)
+        elif learn:
+            self._learn_key_state()
+
+    def _settle_pending(self, at) -> bool:
+        """A press while a quick tap waits. Within the tap gate it makes the
+        dictation hands-free (True: nothing else to do). Later, the tap is
+        dropped first and the press starts afresh (False)."""
+        with self._state_lock:
+            if self._pending is None:
+                return False
+            self._clear_pending()
+            if at - self._pending_from <= self._tap_gate_s:
+                self._latched = True
+                self._latch_armed = False  # this press's own release comes first
+                self._latch_press_at = at
+                latched = True
+            else:
+                latched = False
+                self._drop_chord(self._epoch)
+        if latched:
+            print("Voisr hotkey: hands-free on (double-tap)", flush=True)
+            return True
+        self._api._cancel_recording()
+        return False
+
+    def _clear_pending(self) -> None:
+        """Forget a waiting tap; caller holds _state_lock."""
+        timer, self._pending_timer = self._pending_timer, None
+        self._pending = None
+        if timer is not None:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+
+    def _release_held(self, at):
+        """The held key let go; caller holds _state_lock. Sooner than the tap
+        gate it's a tap: keep recording, wait for a second press, and return
+        None. Otherwise end the recording (the result is for _spawn_finish)."""
+        if (self._tap_gate_s and at is not None and self._pressed_at is not None
+                and at - self._pressed_at < self._tap_gate_s):
+            token = object()
+            self._pending = token
+            self._pending_from = at
+            delay = max(0.0, at + self._tap_gate_s - self._clock())
+            timer = self._timer_factory(
+                delay, lambda: self._submit(lambda: self._expire_tap(token)))
+            self._pending_timer = timer
+            timer.start()
+            return None
+        return self._end_recording()
+
+    def _expire_tap(self, token) -> None:
+        """No second press came: the tap is dropped, silently."""
+        with self._state_lock:
+            if self._pending is not token:
+                return
+            held = ((self._pending_from - self._pressed_at)
+                    if self._pressed_at is not None else 0.0)
+            self._clear_pending()
+            self._drop_chord(self._epoch)
+        print(f"Voisr hotkey: tap dropped (held {held:.2f} s)", flush=True)
+        self._api._cancel_recording()
 
     def _claim_pane_open(self, key):
         """Open a refused permission's pane at most once a minute; caller
@@ -828,16 +959,32 @@ class HotkeyService:
 
         threading.Thread(target=hide_later, daemon=True).start()
 
-    def release(self) -> None:
+    def release(self, at=None) -> None:
+        at = self._clock() if at is None else at
         with self._state_lock:
             if not self._pressed:
                 self._rejected = False
                 return
-            if self._starting:
+            if self._latched:
+                held_from, self._latch_press_at = self._latch_press_at, None
+                if (held_from is not None
+                        and at - held_from >= self._tap_gate_s):
+                    # the second press was held, not tapped: a dictation
+                    # that ends on its release, not a hands-free latch
+                    finish = self._end_recording()
+                else:
+                    self._latch_armed = True  # hands-free: the next press stops it
+                    return
+            elif self._pending is not None:
+                return  # already let go: a repeated edge
+            elif self._starting:
                 self._start_released = True  # press() ends it once started
+                self._start_released_at = at
                 return
-            finish = self._end_recording()
-        self._spawn_finish(*finish)
+            else:
+                finish = self._release_held(at)
+        if finish is not None:
+            self._spawn_finish(*finish)
 
     def _end_recording(self):
         """Close the mic and show processing; caller holds _state_lock and
@@ -904,6 +1051,8 @@ class HotkeyService:
         self.tap_fallback = False
         self._fallback_failed = False
         vk, label = self._resolve_target(key_name)
+        if vk != self._target_vk:
+            self._key_trusted = False  # the probe was read on another key
         self._target_vk = vk
         self._key_name = label
         # Attempt the listener NOW even if unpermitted: creating the event
@@ -919,31 +1068,141 @@ class HotkeyService:
         self._spawn_listener()
         self._refresh_status()
         self._watch()
+        self._start_ticker()
 
     def _toggle(self) -> None:
         """flagsChanged-only keys (Fn) report both edges identically."""
         if self._pressed:
-            self.release()
+            self._stop_hands_free()
         else:
             # every toggle is a press of its own, and a refused one gets no
             # release() to clear the once-per-press guard
             self._rejected = False
             self.press(latched=True)
 
-    def cancel_chord(self) -> None:
-        """Another key went down while the hotkey was held: it's a shortcut
-        (⌥e for é with Right Option), not a dictation. A latched toggle key
-        isn't held, so typing during it is left alone."""
+    def _stop_hands_free(self) -> None:
+        """A toggle key or the menu: the second toggle ends the dictation,
+        however it began."""
         with self._state_lock:
-            if not self._pressed or self._latched:
+            if not self._pressed:
                 return
             if self._starting:
+                self._start_released = True  # press() ends it once started
+                self._start_released_at = None  # not a key hold: no tap gate
+                return
+            self._clear_pending()
+            finish = self._end_recording()
+        self._spawn_finish(*finish)
+
+    def cancel_chord(self, at=None) -> None:
+        """Another key went down while the hotkey was held. Within
+        CHORD_WINDOW_S of the press it's a shortcut (⌥e for é with Right
+        Option), not a dictation: cancel. Held longer, the person is
+        dictating and the key is theirs. A hands-free dictation isn't held,
+        so typing during it is left alone; a quick tap then typing is dropped.
+        A double-tap's second press is still held until it is let go (the
+        latch is provisional), so it counts as held here."""
+        at = self._clock() if at is None else at
+        with self._state_lock:
+            if not self._pressed or (self._latched
+                                     and self._latch_press_at is None):
+                return
+            was_held = self._pending is None
+            if self._pending is not None:
+                self._clear_pending()
+            elif (self._pressed_at is not None
+                    and at - self._pressed_at >= CHORD_WINDOW_S):
+                return
+            elif self._starting:
                 # once let go, a key going down is typing, not a chord
                 if not self._start_released:
                     self._start_cancelled = True
                 return
             self._drop_chord(self._epoch)
+        if was_held:
+            print("Voisr hotkey: dictation cancelled (another key within 1 s)",
+                  flush=True)
         self._api._cancel_recording()
+
+    def cancel_escape(self) -> None:
+        """Esc cancels a dictation in progress, however it began: the audio
+        is dropped and nothing is pasted. Esc itself still reaches the app."""
+        with self._state_lock:
+            if not self._pressed:
+                return
+            if self._starting:
+                self._start_cancelled = True
+                return
+            self._clear_pending()
+            self._drop_chord(self._epoch)
+        print("Voisr hotkey: dictation cancelled by Esc", flush=True)
+        self._api._cancel_recording()
+
+    def _learn_key_state(self) -> None:
+        """Trust the key-state probe once it has read the held hotkey as
+        down: a probe macOS keeps blind (always False) would otherwise end
+        every long dictation at the first stuck-key check."""
+        if self._key_trusted or self._key_state is None:
+            return
+        try:
+            down = self._key_state(self._target_vk)
+        except Exception:
+            return
+        if down is True:
+            self._key_trusted = True
+            print("Voisr hotkey: key state readable — stuck-key check on",
+                  flush=True)
+
+    def _check_stale_key(self, force=False) -> None:
+        """A held key whose release never arrived (lost while macOS had the
+        tap switched off) would record until the 600 s cap. A hold of
+        STALE_AFTER_S or more -- or any hold, right after the tap was
+        re-enabled -- is checked against the keyboard; up means the release
+        is made up here. Runs on the worker, in order with the key events."""
+        probe = self._key_state
+        if probe is None or not self._key_trusted:
+            return
+        if self._stopped:
+            return  # a check queued before stop() must not act on a dead service
+        if force:
+            print("Voisr hotkey: macOS re-enabled the key tap — checking the key",
+                  flush=True)
+        now = self._clock()
+        with self._state_lock:
+            if (not self._pressed or self._latched or self._starting
+                    or self._pending is not None or self._pressed_at is None):
+                return
+            if not force and now - self._pressed_at < STALE_AFTER_S:
+                return
+            vk = self._target_vk
+        try:
+            down = probe(vk)
+        except Exception:
+            return
+        if down is not False:
+            return  # down, or unknown: unknown is never a release
+        print("Voisr hotkey: the key is up but its release never arrived — "
+              "ending the dictation", flush=True)
+        self.release(at=now)
+
+    def _start_ticker(self) -> None:
+        """Every _stale_interval, queue a stuck-key check on the worker."""
+        if self._key_state is None or self._ticker is not None:
+            return
+        self._tick_wake.clear()
+
+        def tick():
+            me = threading.current_thread()
+            while not self._stopped and self._ticker is me:
+                if self._tick_wake.wait(self._stale_interval):
+                    return
+                if self._stopped or self._ticker is not me:
+                    return
+                self._submit(self._check_stale_key)
+
+        self._ticker = threading.Thread(target=tick, name="voisr-hotkey-stale",
+                                        daemon=True)
+        self._ticker.start()
 
     def _drop_chord(self, epoch: int) -> None:
         """Un-press and hide; caller holds _state_lock, then cancels the
@@ -965,27 +1224,42 @@ class HotkeyService:
             if self._stopped:
                 return
             try:
+                # stamped here: the worker may run the op much later, and
+                # the tap gate and chord window measure the keyboard's timing
+                at = self._clock()
+                if kind == "reenabled":
+                    # macOS switched the tap off for a while: a release may
+                    # have been lost in the gap
+                    self._submit(functools.partial(self._check_stale_key,
+                                                   force=True))
+                    return
                 if vk != target_vk:
                     if kind == "down":
                         # user is typing manually -> don't smart-join the
                         # next dictation onto the previous one
                         self._api.note_user_typing()
-                        self._submit(self.cancel_chord)
+                        if vk == ESC_VK:
+                            self._submit(self.cancel_escape)
+                        else:
+                            self._submit(functools.partial(self.cancel_chord,
+                                                           at=at))
                     return
                 # Everything below is queued, never run here (see _submit).
+                press = functools.partial(self.press, at=at)
+                release = functools.partial(self.release, at=at)
                 if kind == "down":       # auto-repeats; press() guards
-                    self._submit(self.press)
+                    self._submit(press)
                 elif kind == "up":
-                    self._submit(self.release)
+                    self._submit(release)
                 else:                    # "flags": modifier edges (Fn, ⌥, ⌘...)
                     mask = _VK_FLAG_MASKS.get(vk)
                     if mask is not None:
                         # the flag bit carries the key's true state — immune
                         # to the desync a missed edge causes with toggling
                         if flags & mask:
-                            self._submit(self.press)
+                            self._submit(press)
                         else:
-                            self._submit(self.release)
+                            self._submit(release)
                     else:                # e.g. Caps Lock: flag ≠ key state
                         self._submit(self._toggle)   # modifiers never auto-repeat
             except Exception:
@@ -1102,6 +1376,10 @@ class HotkeyService:
         if watcher is not None and watcher is not threading.current_thread():
             self._wake.set()
             watcher.join(timeout=2.0)
+        ticker, self._ticker = self._ticker, None
+        if ticker is not None and ticker is not threading.current_thread():
+            self._tick_wake.set()
+            ticker.join(timeout=2.0)
         listener, self._listener = self._listener, None
         if listener is not None:
             try:
@@ -1949,7 +2227,8 @@ def main():
     try:
         api = Api(mic_check=permissions.microphone_granted)
         widget = RecordingWidget(level_source=api.current_level)
-        service = HotkeyService(api, widget=widget, fallback_check=listen_tap_granted)
+        service = HotkeyService(api, widget=widget, fallback_check=listen_tap_granted,
+                                key_state=hotkey_key_down)
         api.attach_hotkey_service(service)
         # No js_api: see bridge_functions
         window = webview.create_window("Voisr", str(WEB_DIR / "index.html"),

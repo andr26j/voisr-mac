@@ -27,8 +27,10 @@ TAP_MODES = ("listen", "active")
 class QuartzKeyListener:
     """Calls handler(vk, kind, flags) for every key event.
 
-    kind: "down" | "up" (normal keys, includes auto-repeat) or
-          "flags" (modifier edges: Fn, Option, Command, ...)
+    kind: "down" | "up" (normal keys, includes auto-repeat),
+          "flags" (modifier edges: Fn, Option, Command, ...) or
+          "reenabled" (vk -1: macOS had switched the tap off and it was
+          switched back on; key events in the gap are lost)
     """
 
     def __init__(self, handler, mode="listen", quartz=None):
@@ -98,6 +100,7 @@ class QuartzKeyListener:
                         # a tap being torn down stays off
                         if tap is not None and not self._stop_requested:
                             Quartz.CGEventTapEnable(tap, True)
+                            self._handler(-1, "reenabled", 0)
                         return event
                     src_pid = Quartz.CGEventGetIntegerValueField(
                         event, Quartz.kCGEventSourceUnixProcessID)
