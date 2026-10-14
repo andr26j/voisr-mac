@@ -163,7 +163,8 @@ def test_active_tap_reenables_itself_when_macos_disables_it(disabled):
     event = _event(14)
     assert q.callback(None, disabled, event, None) is event
     assert q.enabled == [("TAP", True)]
-    assert seen == []
+    # key events in the gap are lost: the owner is told so it can re-check
+    assert seen == [(-1, "reenabled", 0)]
     listener.stop()
 
 
@@ -277,6 +278,49 @@ def test_a_stopping_tap_is_not_reenabled_by_a_late_timeout_event():
     q.callback(None, q.kCGEventTapDisabledByTimeout, _event(0), None)
     assert ("TAP", True) not in q.enabled
 
+
+
+def test_a_stopping_tap_does_not_report_a_reenable():
+    seen = []
+    q = FakeQuartz()
+    listener = _start("active", q, handler=lambda *a: seen.append(a))
+    listener.wait_started(1)
+    listener.stop()
+    listener._thread.join(1)
+    q.callback(None, q.kCGEventTapDisabledByTimeout, _event(0), None)
+    assert seen == []
+
+
+def test_a_raising_handler_on_reenable_still_passes_the_event():
+    def boom(*args):
+        raise RuntimeError("handler bug")
+
+    q = FakeQuartz()
+    listener = _start("active", q, handler=boom)
+    listener.wait_started(1)
+    q.enabled.clear()
+    event = _event(14)
+    assert q.callback(None, q.kCGEventTapDisabledByTimeout, event, None) is event
+    assert q.enabled == [("TAP", True)]
+    listener.stop()
+
+
+def test_capture_next_vk_ignores_a_reenable(monkeypatch):
+    from voisr import keytap
+
+    class FakeListener:
+        def __init__(self, handler, mode="listen", quartz=None):
+            self.handler = handler
+
+        def start(self):
+            self.handler(-1, "reenabled", 0)
+            self.handler(63, "flags", 0)
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(keytap, "QuartzKeyListener", FakeListener)
+    assert keytap.capture_next_vk(timeout=1, mode="active") == 63
 
 
 def test_capture_next_vk_uses_the_requested_tap_mode(monkeypatch):

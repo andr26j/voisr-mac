@@ -400,3 +400,139 @@ def test_esc_as_the_hotkey_dictates():
     rig.down(0.0)
     rig.up(2.0)
     assert rig.api.log == ["start", "stop"]
+
+
+def wait_for(cond, timeout=2.0):
+    import time
+    deadline = time.monotonic() + timeout
+    while not cond() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return cond()
+
+
+# ---- stuck keys ---------------------------------------------------------------
+
+class Keyboard:
+    """The keyboard's real state, as hotkey_key_down would read it."""
+
+    def __init__(self, reading=None):
+        self.down = set()
+        self.reading = reading  # overrides: False (blind), None (unknown), raise
+        self.reads = 0
+
+    def __call__(self, vk):
+        self.reads += 1
+        if self.reading == "raise":
+            raise RuntimeError("no Quartz")
+        if self.reading != "real":
+            return self.reading
+        return vk in self.down
+
+
+def held_then_lost(keyboard, at=0.0):
+    """Press (the probe sees the key down, so it is trusted), then let go
+    with the release event lost."""
+    rig = Rig(key_state=keyboard)
+    keyboard.down.add(RIGHT_OPTION_VK)
+    rig.down(at)
+    keyboard.down.discard(RIGHT_OPTION_VK)  # no up event: the tap missed it
+    return rig
+
+
+def test_a_key_up_without_its_release_is_let_go_after_ten_seconds(capsys):
+    rig = held_then_lost(Keyboard("real"))
+    rig.at(10.0).svc._check_stale_key()
+    assert rig.api.log == ["start", "stop"]
+    assert "release never arrived" in capsys.readouterr().out
+
+
+def test_a_hold_under_ten_seconds_is_not_checked():
+    keyboard = Keyboard("real")
+    rig = held_then_lost(keyboard)
+    reads = keyboard.reads
+    rig.at(9.9).svc._check_stale_key()
+    assert rig.api.log == ["start"]
+    assert keyboard.reads == reads
+
+
+def test_a_key_still_down_keeps_dictating():
+    keyboard = Keyboard("real")
+    rig = Rig(key_state=keyboard)
+    keyboard.down.add(RIGHT_OPTION_VK)
+    rig.down(0.0)
+    rig.at(30.0).svc._check_stale_key()
+    assert rig.api.log == ["start"]
+
+
+def test_a_blind_probe_never_ends_a_long_dictation():
+    # a probe macOS never lets read the key (always False) is never trusted
+    rig = Rig(key_state=Keyboard(False))
+    rig.down(0.0)
+    rig.at(60.0).svc._check_stale_key()
+    assert rig.api.log == ["start"]
+
+
+def test_an_unknown_or_raising_reading_is_never_a_release():
+    for reading in (None, "raise"):
+        keyboard = Keyboard("real")
+        rig = held_then_lost(keyboard)
+        keyboard.reading = reading
+        rig.at(20.0).svc._check_stale_key()
+        assert rig.api.log == ["start"], reading
+
+
+def test_a_reenabled_tap_checks_at_once():
+    rig = held_then_lost(Keyboard("real"))
+    rig.now = 2.0
+    rig.handler(-1, "reenabled", 0)
+    assert rig.api.log == ["start", "stop"]
+
+
+def test_a_hands_free_dictation_is_never_stale():
+    keyboard = Keyboard("real")
+    rig = Rig(key_state=keyboard)
+    keyboard.down.add(RIGHT_OPTION_VK)
+    rig.down(0.0)
+    keyboard.down.discard(RIGHT_OPTION_VK)
+    rig.up(0.2)
+    rig.down(0.4)  # a latch, not a start: the probe isn't asked here
+    rig.up(0.5)
+    reads = keyboard.reads
+    rig.at(60.0).svc._check_stale_key()
+    assert rig.api.log == ["start"]
+    assert keyboard.reads == reads  # the key is up by design: nothing to read
+
+
+def test_no_probe_means_no_check_and_no_ticker():
+    rig = Rig(key_state=None)
+    rig.down(0.0)
+    rig.at(60.0).svc._check_stale_key()
+    rig.svc._start_ticker()
+    assert rig.api.log == ["start"]
+    assert rig.svc._ticker is None
+
+
+def test_the_ticker_queues_checks_until_stop():
+    rig = Rig(key_state=Keyboard("real"))
+    rig.svc._stale_interval = 0.01
+    checks = []
+    rig.svc._check_stale_key = lambda: checks.append(1)
+    rig.svc._start_ticker()
+    assert wait_for(lambda: len(checks) >= 2)
+    ticker = rig.svc._ticker
+    rig.svc.stop()
+    assert rig.svc._ticker is None and not ticker.is_alive()
+
+
+def test_hotkey_key_down_reads_quartz_and_never_raises(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    calls = []
+    fake = SimpleNamespace(
+        kCGEventSourceStateHIDSystemState=1,
+        CGEventSourceKeyState=lambda state, vk: calls.append((state, vk)) or 1)
+    monkeypatch.setitem(sys.modules, "Quartz", fake)
+    assert ui.hotkey_key_down(61) is True
+    assert calls == [(1, 61)]
+    monkeypatch.setitem(sys.modules, "Quartz", SimpleNamespace())
+    assert ui.hotkey_key_down(61) is None

@@ -599,6 +599,19 @@ def _quartz_listener_factory(handler, mode="listen"):
 TAP_GATE_S = 0.5  # let go sooner: a tap, unless a second press follows within this
 CHORD_WINDOW_S = 1.0  # another key this soon after the press: a shortcut
 ESC_VK = 53
+STALE_CHECK_S = 5.0  # how often a long hold is checked against the keyboard
+STALE_AFTER_S = 10.0  # a hold this long has its key state confirmed
+
+
+def hotkey_key_down(vk):
+    """The keyboard's own reading of whether `vk` is down: True or False, or
+    None when it can't be read. Never raises."""
+    try:
+        import Quartz
+        return bool(Quartz.CGEventSourceKeyState(
+            Quartz.kCGEventSourceStateHIDSystemState, vk))
+    except Exception:
+        return None
 
 
 def _daemon_timer(delay, fn):
@@ -615,7 +628,8 @@ class HotkeyService:
     def __init__(self, api, widget=None, hide_delay=1.2,
                  permissions_check=None, poll_interval=3.0,
                  listener_factory=None, fallback_check=None,
-                 tap_gate_s=TAP_GATE_S, timer_factory=None):
+                 tap_gate_s=TAP_GATE_S, timer_factory=None, key_state=None,
+                 stale_interval=STALE_CHECK_S):
         self._api = api
         self._widget = widget
         self._hide_delay = hide_delay
@@ -647,6 +661,13 @@ class HotkeyService:
         self._pending = None  # token while a quick tap waits for a second press
         self._pending_from = None  # event time that tap was let go
         self._pending_timer = None
+        # Opt-in like fallback_check (main() passes hotkey_key_down): None
+        # means no stuck-key check, so tests never read the real keyboard.
+        self._key_state = key_state
+        self._key_trusted = False  # the probe has read the held key as down
+        self._stale_interval = stale_interval
+        self._ticker = None
+        self._tick_wake = threading.Event()  # set by stop() to end the ticker
         self._rejected = False  # this press already reported it couldn't start
         # press() calls start_recording() with _state_lock released (it can
         # take seconds, and the pill's main-thread callbacks take the lock).
@@ -793,6 +814,7 @@ class HotkeyService:
             raise
         pane = None
         refused = False
+        learn = False
         with self._state_lock:
             self._starting = False
             released, cancelled = self._start_released, self._start_cancelled
@@ -825,6 +847,8 @@ class HotkeyService:
                         # a toggle ends at once; a held key goes through the gate
                         finish = (self._end_recording() if self._latched
                                   else self._release_held(self._start_released_at))
+                    else:
+                        learn = not self._latched
         if refused:
             # outside _state_lock: the opener dispatches to AppKit
             if pane is not None:
@@ -837,6 +861,8 @@ class HotkeyService:
             self._api._cancel_recording()
         if finish is not None:
             self._spawn_finish(*finish)
+        elif learn:
+            self._learn_key_state()
 
     def _settle_pending(self, at) -> bool:
         """A press while a quick tap waits. Within the tap gate it makes the
@@ -1018,6 +1044,7 @@ class HotkeyService:
         self._spawn_listener()
         self._refresh_status()
         self._watch()
+        self._start_ticker()
 
     def _toggle(self) -> None:
         """flagsChanged-only keys (Fn) report both edges identically."""
@@ -1079,6 +1106,67 @@ class HotkeyService:
             self._drop_chord(self._epoch)
         self._api._cancel_recording()
 
+    def _learn_key_state(self) -> None:
+        """Trust the key-state probe once it has read the held hotkey as
+        down: a probe macOS keeps blind (always False) would otherwise end
+        every long dictation at the first stuck-key check."""
+        if self._key_trusted or self._key_state is None:
+            return
+        try:
+            down = self._key_state(self._target_vk)
+        except Exception:
+            return
+        if down is True:
+            self._key_trusted = True
+            print("Voisr hotkey: key state readable — stuck-key check on",
+                  flush=True)
+
+    def _check_stale_key(self, force=False) -> None:
+        """A held key whose release never arrived (lost while macOS had the
+        tap switched off) would record until the 600 s cap. A hold of
+        STALE_AFTER_S or more -- or any hold, right after the tap was
+        re-enabled -- is checked against the keyboard; up means the release
+        is made up here. Runs on the worker, in order with the key events."""
+        probe = self._key_state
+        if probe is None or not self._key_trusted:
+            return
+        now = self._clock()
+        with self._state_lock:
+            if (not self._pressed or self._latched or self._starting
+                    or self._pending is not None or self._pressed_at is None):
+                return
+            if not force and now - self._pressed_at < STALE_AFTER_S:
+                return
+            vk = self._target_vk
+        try:
+            down = probe(vk)
+        except Exception:
+            return
+        if down is not False:
+            return  # down, or unknown: unknown is never a release
+        print("Voisr hotkey: the key is up but its release never arrived — "
+              "ending the dictation", flush=True)
+        self.release(at=now)
+
+    def _start_ticker(self) -> None:
+        """Every _stale_interval, queue a stuck-key check on the worker."""
+        if self._key_state is None or self._ticker is not None:
+            return
+        self._tick_wake.clear()
+
+        def tick():
+            me = threading.current_thread()
+            while not self._stopped and self._ticker is me:
+                if self._tick_wake.wait(self._stale_interval):
+                    return
+                if self._stopped or self._ticker is not me:
+                    return
+                self._submit(self._check_stale_key)
+
+        self._ticker = threading.Thread(target=tick, name="voisr-hotkey-stale",
+                                        daemon=True)
+        self._ticker.start()
+
     def _drop_chord(self, epoch: int) -> None:
         """Un-press and hide; caller holds _state_lock, then cancels the
         recording after letting go of it: closing a mic can block, and the
@@ -1102,6 +1190,12 @@ class HotkeyService:
                 # stamped here: the worker may run the op much later, and
                 # the tap gate and chord window measure the keyboard's timing
                 at = self._clock()
+                if kind == "reenabled":
+                    # macOS switched the tap off for a while: a release may
+                    # have been lost in the gap
+                    self._submit(functools.partial(self._check_stale_key,
+                                                   force=True))
+                    return
                 if vk != target_vk:
                     if kind == "down":
                         # user is typing manually -> don't smart-join the
@@ -1245,6 +1339,10 @@ class HotkeyService:
         if watcher is not None and watcher is not threading.current_thread():
             self._wake.set()
             watcher.join(timeout=2.0)
+        ticker, self._ticker = self._ticker, None
+        if ticker is not None and ticker is not threading.current_thread():
+            self._tick_wake.set()
+            ticker.join(timeout=2.0)
         listener, self._listener = self._listener, None
         if listener is not None:
             try:
@@ -2092,7 +2190,8 @@ def main():
     try:
         api = Api(mic_check=permissions.microphone_granted)
         widget = RecordingWidget(level_source=api.current_level)
-        service = HotkeyService(api, widget=widget, fallback_check=listen_tap_granted)
+        service = HotkeyService(api, widget=widget, fallback_check=listen_tap_granted,
+                                key_state=hotkey_key_down)
         api.attach_hotkey_service(service)
         # No js_api: see bridge_functions
         window = webview.create_window("Voisr", str(WEB_DIR / "index.html"),
