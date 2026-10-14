@@ -257,6 +257,51 @@ def test_a_double_tap_goes_hands_free_until_the_next_press():
     assert not rig.svc.holding
 
 
+def test_a_tap_then_press_and_hold_dictates_instead_of_going_hands_free():
+    # the latch is provisional until the second press is let go: held for
+    # the gate or longer, that press is a dictation and its release ends it
+    rig = Rig()
+    rig.down(0.0)
+    rig.up(0.15)
+    rig.down(0.35)
+    rig.up(3.35)
+    assert rig.api.log == ["start", "stop"]
+    assert not rig.svc.holding
+
+
+def test_a_second_press_held_exactly_the_gate_stops_on_release():
+    rig = Rig()
+    rig.down(0.0)
+    rig.up(0.2)
+    rig.down(0.4)
+    rig.up(0.4 + ui.TAP_GATE_S)
+    assert rig.api.log == ["start", "stop"]
+    assert not rig.svc.holding
+
+
+def test_a_second_press_just_under_the_gate_still_goes_hands_free():
+    rig = Rig()
+    rig.down(0.0)
+    rig.up(0.2)
+    rig.down(0.4)
+    rig.up(0.4 + ui.TAP_GATE_S - 0.01)
+    assert rig.api.log == ["start"]
+    assert rig.svc.holding
+    rig.down(5.0)
+    assert rig.api.log == ["start", "stop"]
+
+
+def test_a_held_second_press_leaves_the_next_dictation_working():
+    rig = Rig()
+    rig.down(0.0)
+    rig.up(0.15)
+    rig.down(0.35)
+    rig.up(3.35)
+    rig.down(6.0)
+    rig.up(8.0)
+    assert rig.api.log == ["start", "stop", "start", "stop"]
+
+
 def test_the_second_press_is_timed_from_the_release():
     rig = Rig()
     rig.down(0.0)
@@ -536,3 +581,154 @@ def test_hotkey_key_down_reads_quartz_and_never_raises(monkeypatch):
     assert calls == [(1, 61)]
     monkeypatch.setitem(sys.modules, "Quartz", SimpleNamespace())
     assert ui.hotkey_key_down(61) is None
+
+
+def test_a_stopped_service_runs_no_stale_check():
+    # the ticker may already have queued a check when stop() ran
+    keyboard = Keyboard("real")
+    rig = held_then_lost(keyboard)
+    rig.svc._stopped = True
+    reads = keyboard.reads
+    rig.at(20.0).svc._check_stale_key()
+    rig.svc._check_stale_key(force=True)
+    assert rig.api.log == ["start"]
+    assert keyboard.reads == reads
+
+
+# ---- trust follows the hotkey ---------------------------------------------------
+
+class ConfiguredApi(GestureApi):
+    def __init__(self, vk):
+        super().__init__()
+        self.vk = vk
+
+    def get_config(self):
+        return {"show_widget": True, "hotkey_vk": self.vk,
+                "event_tap": "active"}
+
+
+def started_service(monkeypatch, api):
+    monkeypatch.setattr(ui, "request_permissions", lambda mode="listen": None)
+    return HotkeyService(api, hide_delay=0, permissions_check=lambda: True,
+                         listener_factory=lambda handler, mode: handler,
+                         key_state=Keyboard("real"), stale_interval=60)
+
+
+def test_a_new_hotkey_forgets_that_the_probe_was_trusted(monkeypatch):
+    api = ConfiguredApi(RIGHT_OPTION_VK)
+    svc = started_service(monkeypatch, api)
+    try:
+        svc.start()
+        svc._key_trusted = True  # the probe read Right Option as down
+        api.vk = F13_VK
+        svc.restart()
+        assert svc._target_vk == F13_VK
+        assert svc._key_trusted is False
+    finally:
+        svc.stop()
+
+
+def test_the_same_hotkey_keeps_the_probe_trusted_across_a_restart(monkeypatch):
+    api = ConfiguredApi(RIGHT_OPTION_VK)
+    svc = started_service(monkeypatch, api)
+    try:
+        svc.start()
+        svc._key_trusted = True
+        svc.restart()
+        assert svc._key_trusted is True
+    finally:
+        svc.stop()
+
+
+# ---- the log -------------------------------------------------------------------
+
+def test_a_dropped_tap_is_logged_with_its_duration(capsys):
+    rig = Rig()
+    rig.down(0.0)
+    rig.up(0.21)
+    capsys.readouterr()
+    rig.timers[0].fire()
+    assert ("Voisr hotkey: tap dropped (held 0.21 s)\n"
+            in capsys.readouterr().out)
+
+
+def test_a_double_tap_is_logged(capsys):
+    rig = Rig()
+    rig.down(0.0)
+    rig.up(0.2)
+    capsys.readouterr()
+    rig.down(0.4)
+    assert "Voisr hotkey: hands-free on (double-tap)\n" in capsys.readouterr().out
+
+
+def test_esc_is_logged_only_when_it_cancels(capsys):
+    rig = Rig()
+    rig.svc.cancel_escape()  # nothing recording
+    assert "Esc" not in capsys.readouterr().out
+    rig.down(0.0)
+    rig.svc.cancel_escape()
+    assert ("Voisr hotkey: dictation cancelled by Esc\n"
+            in capsys.readouterr().out)
+
+
+def test_a_chord_cancel_is_logged_but_a_late_key_is_not(capsys):
+    rig = Rig()
+    rig.down(0.0)
+    rig.other(E_VK, 2.0)  # typing, not a chord
+    assert "cancelled" not in capsys.readouterr().out
+    rig.up(2.5)
+    rig.down(5.0)
+    rig.other(E_VK, 5.2)
+    assert ("Voisr hotkey: dictation cancelled (another key within 1 s)\n"
+            in capsys.readouterr().out)
+
+
+def test_a_reenabled_tap_is_logged(capsys):
+    rig = Rig(key_state=Keyboard("real"))
+    rig.svc._key_trusted = True
+    rig.handler(-1, "reenabled", 0)
+    assert ("Voisr hotkey: macOS re-enabled the key tap — checking the key\n"
+            in capsys.readouterr().out)
+
+
+# ---- the real worker and the real timer ---------------------------------------------
+
+def real_service():
+    api = GestureApi()
+    svc = HotkeyService(api, hide_delay=0, tap_gate_s=0.05,
+                        listener_factory=lambda handler, mode: handler)
+    svc._start_worker()
+    svc._stopped = False
+    svc._target_vk = F13_VK
+    svc._spawn_listener()
+    return api, svc
+
+
+def test_a_lone_tap_is_dropped_by_the_real_timer_on_the_real_worker():
+    import time
+    api, svc = real_service()
+    try:
+        svc._listener(F13_VK, "down", 0)
+        time.sleep(0.01)
+        svc._listener(F13_VK, "up", 0)
+        assert wait_for(lambda: api.log == ["start", "cancel"])
+    finally:
+        svc.stop()
+
+
+def test_a_double_tap_survives_the_real_timer_on_the_real_worker():
+    import time
+    api, svc = real_service()
+    try:
+        svc._listener(F13_VK, "down", 0)
+        time.sleep(0.01)
+        svc._listener(F13_VK, "up", 0)
+        time.sleep(0.01)
+        svc._listener(F13_VK, "down", 0)
+        time.sleep(0.01)
+        svc._listener(F13_VK, "up", 0)
+        time.sleep(0.2)  # well past the 0.05 s gate
+        assert api.log == ["start"]
+        assert svc.holding
+    finally:
+        svc.stop()

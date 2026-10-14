@@ -656,6 +656,10 @@ class HotkeyService:
         self._latched = False  # hands-free: a toggle key, or a double-tap
         self._latch_armed = False  # hands-free and the key is up: the next press stops it
         self._pressed_at = None  # event time of the press that owns the recording
+        # event time of the second press that latched a double-tap, until its
+        # release is seen: the latch is provisional (held >= the gate, that
+        # press was a dictation). None for toggles and once released.
+        self._latch_press_at = None
         self._tap_gate_s = tap_gate_s
         self._timer_factory = timer_factory or _daemon_timer
         self._pending = None  # token while a quick tap waits for a second press
@@ -791,6 +795,7 @@ class HotkeyService:
                 self._pressed = True
                 self._pressed_at = at
                 self._latched = latched
+                self._latch_press_at = None
                 # a toggle isn't held: its next press (any key) stops it
                 self._latch_armed = latched
                 self._starting = True
@@ -875,8 +880,14 @@ class HotkeyService:
             if at - self._pending_from <= self._tap_gate_s:
                 self._latched = True
                 self._latch_armed = False  # this press's own release comes first
-                return True
-            self._drop_chord(self._epoch)
+                self._latch_press_at = at
+                latched = True
+            else:
+                latched = False
+                self._drop_chord(self._epoch)
+        if latched:
+            print("Voisr hotkey: hands-free on (double-tap)", flush=True)
+            return True
         self._api._cancel_recording()
         return False
 
@@ -912,8 +923,11 @@ class HotkeyService:
         with self._state_lock:
             if self._pending is not token:
                 return
+            held = ((self._pending_from - self._pressed_at)
+                    if self._pressed_at is not None else 0.0)
             self._clear_pending()
             self._drop_chord(self._epoch)
+        print(f"Voisr hotkey: tap dropped (held {held:.2f} s)", flush=True)
         self._api._cancel_recording()
 
     def _claim_pane_open(self, key):
@@ -952,15 +966,23 @@ class HotkeyService:
                 self._rejected = False
                 return
             if self._latched:
-                self._latch_armed = True  # hands-free: the next press stops it
-                return
-            if self._pending is not None:
+                held_from, self._latch_press_at = self._latch_press_at, None
+                if (held_from is not None
+                        and at - held_from >= self._tap_gate_s):
+                    # the second press was held, not tapped: a dictation
+                    # that ends on its release, not a hands-free latch
+                    finish = self._end_recording()
+                else:
+                    self._latch_armed = True  # hands-free: the next press stops it
+                    return
+            elif self._pending is not None:
                 return  # already let go: a repeated edge
-            if self._starting:
+            elif self._starting:
                 self._start_released = True  # press() ends it once started
                 self._start_released_at = at
                 return
-            finish = self._release_held(at)
+            else:
+                finish = self._release_held(at)
         if finish is not None:
             self._spawn_finish(*finish)
 
@@ -1029,6 +1051,8 @@ class HotkeyService:
         self.tap_fallback = False
         self._fallback_failed = False
         vk, label = self._resolve_target(key_name)
+        if vk != self._target_vk:
+            self._key_trusted = False  # the probe was read on another key
         self._target_vk = vk
         self._key_name = label
         # Attempt the listener NOW even if unpermitted: creating the event
@@ -1080,6 +1104,7 @@ class HotkeyService:
         with self._state_lock:
             if not self._pressed or self._latched:
                 return
+            was_held = self._pending is None
             if self._pending is not None:
                 self._clear_pending()
             elif (self._pressed_at is not None
@@ -1091,6 +1116,9 @@ class HotkeyService:
                     self._start_cancelled = True
                 return
             self._drop_chord(self._epoch)
+        if was_held:
+            print("Voisr hotkey: dictation cancelled (another key within 1 s)",
+                  flush=True)
         self._api._cancel_recording()
 
     def cancel_escape(self) -> None:
@@ -1104,6 +1132,7 @@ class HotkeyService:
                 return
             self._clear_pending()
             self._drop_chord(self._epoch)
+        print("Voisr hotkey: dictation cancelled by Esc", flush=True)
         self._api._cancel_recording()
 
     def _learn_key_state(self) -> None:
@@ -1130,6 +1159,11 @@ class HotkeyService:
         probe = self._key_state
         if probe is None or not self._key_trusted:
             return
+        if self._stopped:
+            return  # a check queued before stop() must not act on a dead service
+        if force:
+            print("Voisr hotkey: macOS re-enabled the key tap — checking the key",
+                  flush=True)
         now = self._clock()
         with self._state_lock:
             if (not self._pressed or self._latched or self._starting
