@@ -4,7 +4,7 @@ import threading
 import time
 from pathlib import Path
 
-from voisr import launch_agent, permissions
+from voisr import launch_agent, permissions, speech_gate
 from voisr.app import config_errors, load_config
 from voisr.cleanup import clean
 from voisr.history import HistoryStore
@@ -152,24 +152,6 @@ def paste_ready() -> bool:
     except Exception:
         return False
 
-def wav_peak(path) -> int:
-    """Peak |amplitude| of a 16-bit WAV, -1 if unparseable (skip the check)."""
-    import array
-    import wave
-    try:
-        with wave.open(str(path), "rb") as w:
-            if w.getsampwidth() != 2:
-                return -1
-            data = w.readframes(w.getnframes())
-        if not data:
-            return 0
-        samples = array.array("h")
-        samples.frombytes(data[:len(data) // 2 * 2])
-        return max(abs(s) for s in samples) if samples else 0
-    except Exception:
-        return -1
-
-
 def wav_seconds(path) -> float:
     """Length of a WAV in seconds, -1 if unparseable (skip the check)."""
     import wave
@@ -183,6 +165,13 @@ def wav_seconds(path) -> float:
 # Shorter than any spoken word: a tap, or a hotkey used as a modifier. The
 # WAV is measured, not the key hold, because the hold includes mic start-up.
 MIN_SPEECH_S = 0.3
+# Exact zeros from start to finish: macOS gives a denied app digital
+# silence, and so does a wedged input device.
+MIC_SILENT_MESSAGE = (
+    "the microphone sent only silence — check that Voisr is on under "
+    "Microphone in System Settings → Privacy & Security, and the input "
+    "device in Sound")
+NO_SPEECH_MESSAGE = "didn't catch that — hold the key and speak"
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -1270,12 +1259,20 @@ class Api:
             return SessionResult.failure(
                 session.sequence, "audio",
                 f"recording failed (mic permission?) {detail}".rstrip())
-        peak = wav_peak(wav)
-        if 0 <= peak < 60:
-            return SessionResult.failure(
-                session.sequence, "audio",
-                "no audio captured — allow Voisr to use the Microphone in "
-                "System Settings → Privacy & Security, then try again")
+        span = speech_gate.gate_wav(wav)  # None: unreadable, skip the gate
+        if span is not None:
+            if span.verdict == "all_zeros":
+                return SessionResult.failure(
+                    session.sequence, "audio", MIC_SILENT_MESSAGE)
+            if span.verdict == "no_speech":
+                return SessionResult.failure(
+                    session.sequence, "audio", NO_SPEECH_MESSAGE)
+            # Leading and trailing non-speech beyond the padding: fewer
+            # [BLANK_AUDIO] hallucinations and less audio to decode.
+            try:
+                speech_gate.trim_wav(wav, span.start, span.end)
+            except Exception:
+                pass  # an untrimmed clip still transcribes
         try:
             raw = self._transcribe_audio(wav, cfg)
             text = clean(raw, dictionary=cfg.get("dictionary", {}))

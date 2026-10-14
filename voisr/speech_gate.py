@@ -4,8 +4,11 @@ Measured in 40 ms blocks of 16-bit mono PCM (spec: capture & hotkey
 robustness, item 5). Plain Python, no numpy, like
 stream_recorder.level_from_int16: a 10-minute clip takes about 0.5 s, on the
 queue worker, never on the tap thread."""
+import array
 import math
 import operator
+import os
+import wave
 from dataclasses import dataclass
 
 SAMPLERATE = 16000
@@ -74,3 +77,38 @@ def analyze(samples, samplerate: int = SAMPLERATE) -> SpeechSpan:
     high = min(len(levels), speech[-1] + PAD_BLOCKS + 1)
     return SpeechSpan("speech", speech_ms, first + low * block,
                       min(count, first + high * block))
+
+
+def gate_wav(path) -> SpeechSpan | None:
+    """analyze() for a WAV file. None when it isn't 16-bit mono PCM that
+    can be read: the gate then skips itself and never fails a dictation."""
+    try:
+        with wave.open(str(path), "rb") as w:
+            if w.getsampwidth() != 2 or w.getnchannels() != 1:
+                return None
+            rate = w.getframerate()
+            data = w.readframes(w.getnframes())
+    except Exception:
+        return None
+    samples = array.array("h")
+    samples.frombytes(data[:len(data) // 2 * 2])
+    return analyze(samples, rate)
+
+
+def trim_wav(path, start: int, end: int) -> bool:
+    """Keep frames [start, end) of a WAV, in place. False (file untouched)
+    when the window is the whole file."""
+    with wave.open(str(path), "rb") as w:
+        params = w.getparams()
+        frames = w.getnframes()
+        start, end = max(0, start), min(frames, end)
+        if start == 0 and end == frames:
+            return False
+        w.setpos(start)
+        data = w.readframes(end - start)
+    tmp = f"{path}.trim"
+    with wave.open(tmp, "wb") as out:
+        out.setparams(params)
+        out.writeframes(data)
+    os.replace(tmp, str(path))
+    return True

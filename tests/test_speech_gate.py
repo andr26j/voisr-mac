@@ -3,9 +3,11 @@ is rejected, and which window is kept for whisper."""
 import array
 import math
 import random
+import wave
 
 from voisr import speech_gate
-from voisr.speech_gate import SpeechSpan, analyze, block_dbfs
+from voisr.speech_gate import (
+    SpeechSpan, analyze, block_dbfs, gate_wav, trim_wav)
 
 R = 16000
 BLOCK = 640  # 40 ms at 16 kHz
@@ -114,3 +116,51 @@ def test_steady_loud_sound_is_accepted_and_kept_whole():
     span = analyze(pcm(noise(1, 2000)))
     assert span.verdict == "speech"
     assert (span.start, span.end) == (0, R)
+
+
+def write_wav(path, samples, width=2, channels=1, rate=R):
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(channels)
+        w.setsampwidth(width)
+        w.setframerate(rate)
+        if width == 2:
+            w.writeframes(array.array("h", samples).tobytes())
+        else:
+            w.writeframes(bytes((s // 256 + 128) & 0xFF for s in samples))
+
+
+def read_frames(path):
+    with wave.open(str(path), "rb") as w:
+        data = array.array("h")
+        data.frombytes(w.readframes(w.getnframes()))
+        return w.getparams(), list(data)
+
+
+def test_gate_wav_matches_analyze(tmp_path):
+    samples = noise(0.5, 10) + tone(0.5, 3000) + noise(0.5, 10, seed=2)
+    write_wav(tmp_path / "a.wav", samples)
+    assert gate_wav(tmp_path / "a.wav") == analyze(pcm(samples))
+
+
+def test_gate_wav_skips_what_it_cannot_read(tmp_path):
+    write_wav(tmp_path / "8bit.wav", tone(1, 3000), width=1)
+    write_wav(tmp_path / "stereo.wav", tone(1, 3000) * 2, channels=2)
+    (tmp_path / "junk.wav").write_bytes(b"\0" * 2000)
+    for name in ("8bit.wav", "stereo.wav", "junk.wav", "missing.wav"):
+        assert gate_wav(tmp_path / name) is None, name
+
+
+def test_trim_wav_keeps_exactly_the_window(tmp_path):
+    samples = list(range(1, 3201))
+    write_wav(tmp_path / "a.wav", samples)
+    assert trim_wav(tmp_path / "a.wav", 640, 1920) is True
+    params, frames = read_frames(tmp_path / "a.wav")
+    assert frames == samples[640:1920]
+    assert (params.nchannels, params.sampwidth, params.framerate) == (1, 2, R)
+
+
+def test_trim_wav_leaves_a_whole_window_alone(tmp_path):
+    write_wav(tmp_path / "a.wav", list(range(1, 3201)))
+    before = (tmp_path / "a.wav").read_bytes()
+    assert trim_wav(tmp_path / "a.wav", 0, 3200) is False
+    assert (tmp_path / "a.wav").read_bytes() == before
