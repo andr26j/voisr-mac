@@ -38,8 +38,10 @@ class QuartzKeyListener:
         self._mode = mode
         self._quartz = quartz
         self._loop = None
+        self._tap = None
         self._thread = None
         self._started = threading.Event()
+        self._stop_requested = False
         self.running = False
         self.state = "starting"
 
@@ -52,10 +54,36 @@ class QuartzKeyListener:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
-    def _run(self) -> None:
+    def _quartz_module(self):
+        return self._quartz if self._quartz is not None \
+            else importlib.import_module("Quartz")
+
+    @staticmethod
+    def _teardown(Quartz, tap, loop, source) -> None:
+        """Disable, unhook and invalidate a created tap. An enabled active
+        tap that nobody services holds every key event until macOS times it
+        out, so a tap must never outlive its run loop enabled. Each step is
+        guarded: one failure must not skip the rest."""
         try:
-            Quartz = self._quartz if self._quartz is not None \
-                else importlib.import_module("Quartz")
+            Quartz.CGEventTapEnable(tap, False)
+        except Exception:
+            pass
+        if source is not None and loop is not None:
+            try:
+                Quartz.CFRunLoopRemoveSource(loop, source,
+                                             Quartz.kCFRunLoopDefaultMode)
+            except Exception:
+                pass
+        try:
+            Quartz.CFMachPortInvalidate(tap)
+        except Exception:
+            pass
+
+    def _run(self) -> None:
+        Quartz = None
+        tap = loop = source = None  # source: only once added to the loop
+        try:
+            Quartz = self._quartz_module()
 
             mask = (Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown)
                     | Quartz.CGEventMaskBit(Quartz.kCGEventKeyUp)
@@ -67,7 +95,8 @@ class QuartzKeyListener:
                     if etype in (Quartz.kCGEventTapDisabledByTimeout,
                                  Quartz.kCGEventTapDisabledByUserInput):
                         tap = tap_holder.get("tap")
-                        if tap is not None:
+                        # a tap being torn down stays off
+                        if tap is not None and not self._stop_requested:
                             Quartz.CGEventTapEnable(tap, True)
                         return event
                     src_pid = Quartz.CGEventGetIntegerValueField(
@@ -100,18 +129,34 @@ class QuartzKeyListener:
                 self._started.set()
                 return
             tap_holder["tap"] = tap
-            source = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
-            self._loop = Quartz.CFRunLoopGetCurrent()
-            Quartz.CFRunLoopAddSource(self._loop, source,
-                                      Quartz.kCFRunLoopDefaultMode)
+            self._tap = tap
+            src = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
+            loop = Quartz.CFRunLoopGetCurrent()
+            self._loop = loop
+            Quartz.CFRunLoopAddSource(loop, src, Quartz.kCFRunLoopDefaultMode)
+            source = src
             Quartz.CGEventTapEnable(tap, True)
         except Exception as e:
             # Any setup error must still release wait_started(); otherwise
             # the state stays "starting" and the caller waits out the timeout.
+            if tap is not None:
+                self._teardown(Quartz, tap, loop, source)
+            self._tap = None
             self._loop = None
             self.running = False
             self.state = "failed"
             print(f"Voisr keytap: tap setup failed: {e}", flush=True)
+            self._started.set()
+            return
+        # stop() sets the flag BEFORE reading _loop, and _loop was set above
+        # before this check: either stop() saw the loop (and stops it) or
+        # this sees the flag. A stop() that came before the loop existed
+        # would otherwise leave this thread running the tap as an orphan.
+        if self._stop_requested:
+            self._teardown(Quartz, tap, loop, source)
+            self._tap = None
+            self._loop = None
+            self.state = "stopped"
             self._started.set()
             return
         self.running = True
@@ -120,13 +165,25 @@ class QuartzKeyListener:
         try:
             Quartz.CFRunLoopRun()
         finally:
+            self._teardown(Quartz, tap, loop, source)
             self.running = False
             self.state = "stopped"
+            self._tap = None
             self._loop = None
 
     def stop(self) -> None:
-        Quartz = self._quartz if self._quartz is not None \
-            else importlib.import_module("Quartz")
+        self._stop_requested = True
+        Quartz = self._quartz_module()
+        # Disable now, from this thread: if the run loop has not been
+        # entered yet, CFRunLoopStop below is lost (CFRunLoopRun clears the
+        # stopped flag on entry), and an enabled tap nobody services would
+        # stall the keyboard. The tap thread still does the full teardown.
+        tap = self._tap
+        if tap is not None:
+            try:
+                Quartz.CGEventTapEnable(tap, False)
+            except Exception:
+                pass
         loop, self._loop = self._loop, None
         if loop is not None:
             try:

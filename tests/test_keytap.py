@@ -22,6 +22,9 @@ class FakeQuartz:
         self.created = None
         self.callback = None
         self.enabled = []  # (tap, enable) for every CGEventTapEnable call
+        self.invalidated = []  # every CFMachPortInvalidate'd tap
+        self.removed = []  # (loop, source, mode) per CFRunLoopRemoveSource
+        self.ran = False  # entered CFRunLoopRun
         self.release = threading.Event()
 
     def CGEventMaskBit(self, t):
@@ -44,7 +47,14 @@ class FakeQuartz:
     def CGEventTapEnable(self, tap, enable):
         self.enabled.append((tap, enable))
 
+    def CFRunLoopRemoveSource(self, loop, source, mode):
+        self.removed.append((loop, source, mode))
+
+    def CFMachPortInvalidate(self, tap):
+        self.invalidated.append(tap)
+
     def CFRunLoopRun(self):
+        self.ran = True
         self.release.wait(2)
 
     def CFRunLoopStop(self, _loop):
@@ -167,3 +177,103 @@ def test_callback_reports_down_up_and_flags():
     q.callback(None, q.kCGEventFlagsChanged, _event(61, flags=0x40), None)
     assert seen == [(14, "down", 0), (14, "up", 0), (61, "flags", 0x40)]
     listener.stop()
+
+
+# ---------- teardown: an enabled active tap nobody services stalls input ----------
+
+def test_stop_disables_removes_and_invalidates_the_tap():
+    q = FakeQuartz()
+    listener = _start("active", q)
+    assert listener.wait_started(1) == "running"
+    listener.stop()
+    listener._thread.join(1)
+    assert q.enabled[-1] == ("TAP", False)
+    assert q.removed == [("LOOP", "SRC", "default")]
+    assert q.invalidated == ["TAP"]
+
+
+@pytest.mark.parametrize("step", [
+    "CFMachPortCreateRunLoopSource", "CFRunLoopAddSource", "CGEventTapEnable",
+])
+def test_a_setup_error_after_create_tears_the_tap_down(step):
+    q = FakeQuartz()
+    real = getattr(q, step)
+    added_source = step == "CGEventTapEnable"
+
+    def boom(*args):
+        if step == "CGEventTapEnable" and args[1] is False:
+            return real(*args)  # the teardown's disable still gets through
+        raise RuntimeError("boom")
+
+    setattr(q, step, boom)
+    listener = _start("active", q)
+    assert listener.wait_started(1) == "failed"
+    listener._thread.join(1)
+    assert ("TAP", False) in q.enabled
+    assert q.invalidated == ["TAP"]
+    assert q.removed == ([("LOOP", "SRC", "default")] if added_source else [])
+    assert q.ran is False
+
+
+def test_a_create_error_has_no_tap_to_tear_down():
+    q = FakeQuartz()
+
+    def boom(*_):
+        raise RuntimeError("boom")
+
+    q.CGEventTapCreate = boom
+    listener = _start("active", q)
+    assert listener.wait_started(1) == "failed"
+    assert q.invalidated == [] and q.enabled == []
+
+
+class _GatedQuartz(FakeQuartz):
+    """Holds _run inside one setup step until the test lets it go."""
+
+    def __init__(self, gate_step):
+        super().__init__()
+        self.gate_step = gate_step
+        self.inside = threading.Event()
+        self.go = threading.Event()
+
+    def _gate(self, step):
+        if step == self.gate_step:
+            self.inside.set()
+            self.go.wait(2)
+
+    def CGEventTapCreate(self, *args):
+        self._gate("CGEventTapCreate")
+        return super().CGEventTapCreate(*args)
+
+    def CGEventTapEnable(self, tap, enable):
+        if enable:
+            self._gate("CGEventTapEnable")
+        super().CGEventTapEnable(tap, enable)
+
+
+@pytest.mark.parametrize("gate_step", ["CGEventTapCreate", "CGEventTapEnable"])
+def test_stop_before_the_run_loop_starts_never_runs_it_and_tears_down(gate_step):
+    q = _GatedQuartz(gate_step)
+    listener = _start("active", q)
+    assert q.inside.wait(1)
+    listener.stop()
+    q.go.set()
+    listener._thread.join(1)
+    assert not listener._thread.is_alive(), "no orphan tap thread"
+    assert q.ran is False
+    assert q.enabled[-1] == ("TAP", False)
+    assert q.invalidated == ["TAP"]
+    assert listener.wait_started(0) == "stopped"
+    assert listener.running is False
+
+
+def test_a_stopping_tap_is_not_reenabled_by_a_late_timeout_event():
+    q = FakeQuartz()
+    listener = _start("active", q)
+    listener.wait_started(1)
+    listener.stop()
+    listener._thread.join(1)
+    q.enabled.clear()
+    q.callback(None, q.kCGEventTapDisabledByTimeout, _event(0), None)
+    assert ("TAP", True) not in q.enabled
+
