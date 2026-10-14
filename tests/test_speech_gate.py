@@ -164,3 +164,15 @@ def test_trim_wav_leaves_a_whole_window_alone(tmp_path):
     before = (tmp_path / "a.wav").read_bytes()
     assert trim_wav(tmp_path / "a.wav", 0, 3200) is False
     assert (tmp_path / "a.wav").read_bytes() == before
+
+
+def test_gate_wav_skips_an_implausible_sample_rate(tmp_path):
+    # `wave` validates nothing about the rate on write, so patch the header
+    # field (bytes 24-27, little-endian uint32) the way a damaged file would.
+    for rate in (0, 10):
+        path = tmp_path / f"rate{rate}.wav"
+        write_wav(path, tone(1, 3000))
+        raw = bytearray(path.read_bytes())
+        raw[24:28] = rate.to_bytes(4, "little")
+        path.write_bytes(bytes(raw))
+        assert gate_wav(path) is None, rate

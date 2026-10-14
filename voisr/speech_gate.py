@@ -87,6 +87,8 @@ def gate_wav(path) -> SpeechSpan | None:
             if w.getsampwidth() != 2 or w.getnchannels() != 1:
                 return None
             rate = w.getframerate()
+            if rate < 1000:  # a damaged header: the blocks would be empty
+                return None
             data = w.readframes(w.getnframes())
     except Exception:
         return None
