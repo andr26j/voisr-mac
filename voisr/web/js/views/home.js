@@ -54,6 +54,26 @@ window.Voisr = window.Voisr || {};
     };
   }
 
+  /* Reset clears Voisr's own TCC entry and opens the pane to grant it again;
+     Relaunch quits and reopens, for a grant macOS only reads at launch. */
+  function resetButton(pane, cls) {
+    return V.ui.el("button", { type: "button", class: cls,
+      text: `Reset ${pane.label}`, on: { click: async () => {
+        const res = await V.ui.tryApi(V.api().reset_permission(pane.key),
+                                      `Reset ${pane.label}`);
+        if (res && res.ok) V.ui.toast(`Reset — switch Voisr on under ${pane.label}`);
+        else if (res && res.ok === false) V.ui.toast(`Couldn't reset ${pane.label}`);
+      } } });
+  }
+
+  function relaunchButton() {
+    return V.ui.el("button", { type: "button", class: "btn-secondary",
+      text: "Relaunch Voisr", on: { click: async () => {
+        const res = await V.ui.tryApi(V.api().relaunch_app(), "Relaunch");
+        if (res && res.ok === false) V.ui.toast(res.error || "Couldn't relaunch");
+      } } });
+  }
+
   /* The blocking state. A missing grant is not a footnote: without Input
      Monitoring the entire product does nothing when you hold the key, and a
      chip above a hero still saying "hold this key to dictate" was a lie. */
@@ -70,20 +90,9 @@ window.Voisr = window.Voisr || {};
       : PERM_BREAKS[lead.key] || "";
 
     const actions = V.ui.el("div", { class: "perm-actions" });
+    let recover = null;
     if (isStale) {
-      actions.append(
-        V.ui.el("button", { type: "button", class: "btn-primary",
-          text: `Reset ${lead.label}`, on: { click: async () => {
-            const res = await V.ui.tryApi(V.api().reset_permission(lead.key),
-                                          `Reset ${lead.label}`);
-            if (res && res.ok) V.ui.toast(`Reset — switch Voisr on under ${lead.label}`);
-            else if (res && res.ok === false) V.ui.toast(`Couldn't reset ${lead.label}`);
-          } } }),
-        V.ui.el("button", { type: "button", class: "btn-secondary",
-          text: "Relaunch Voisr", on: { click: async () => {
-            const res = await V.ui.tryApi(V.api().relaunch_app(), "Relaunch");
-            if (res && res.ok === false) V.ui.toast(res.error || "Couldn't relaunch");
-          } } }));
+      actions.append(resetButton(lead, "btn-primary"), relaunchButton());
     } else {
       actions.append(V.ui.el("button", {
         type: "button", class: "btn-primary", text: `Open ${lead.label}`,
@@ -103,6 +112,15 @@ window.Voisr = window.Voisr || {};
             if (recState === "idle") toggleRecord();
           } },
         }));
+      }
+      // A denied hotkey grant can still be the stale one: listen mode's
+      // preflight reads false while the switch shows ON, and "Open" alone
+      // sends the user to a pane that already looks right. Only a known
+      // denial of the hotkey's own pane — never unknown, never another pane.
+      if (lead.hotkey && lead.granted === false) {
+        recover = V.ui.el("div", { class: "perm-recover" },
+          V.ui.el("span", { text: "Already switched on?" }),
+          resetButton(lead, "btn-secondary"), relaunchButton());
       }
     }
 
@@ -124,7 +142,7 @@ window.Voisr = window.Voisr || {};
       V.ui.el("div", { class: "perm-glyph", html: V.ui.ICONS.keyboard }),
       V.ui.el("h2", { text: heading }),
       V.ui.el("p", { text: body }),
-      actions, checks);
+      ...(recover ? [actions, recover] : [actions]), checks);
   }
 
   let permPoll = null;

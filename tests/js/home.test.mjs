@@ -686,9 +686,11 @@ for (const [granted, label] of [[null, "unknown"], [false, "denied"]]) {
     assert.equal(h["perm-strip"].dataset.state, "attention");
     const text = allText(h["perm-strip"]);
     assert.doesNotMatch(text, /isn't honouring/);
-    assert.doesNotMatch(text, /Reset /);
     assert.doesNotMatch(text, /switched on, not working/);
     assert.match(text, /Open Accessibility/);
+    // only a known denial offers the "already switched on?" reset (R15)
+    if (granted === null) assert.doesNotMatch(text, /Reset /);
+    else assert.match(text, /Reset Accessibility/);
   });
 }
 
@@ -773,4 +775,71 @@ test("Reset without an error string still says it couldn't", async (t) => {
   actions.children[0].dispatch("click", { target: actions.children[0] });
   await settle();
   assert.match(h.toast.children.map((c) => c.textContent).join(""), /Couldn't reset Accessibility/);
+});
+
+/* ---------- final review: I2 (R15) ---------- */
+
+const findRow = (h, cls) =>
+  h["perm-strip"].children[0].children.find((c) => c.className === cls);
+
+const LISTEN_DENIED_HOTKEY = { panes: [
+  { key: "microphone", label: "Microphone", granted: true, hotkey: false, effective: true },
+  { key: "input_monitoring", label: "Input Monitoring", granted: false, hotkey: true, effective: true },
+  { key: "accessibility", label: "Accessibility", granted: true, hotkey: false, effective: true },
+]};
+
+test("a denied hotkey pane also offers Reset and Relaunch for a switch that only looks off", async (t) => {
+  // listen mode's preflight can read false while the switch shows ON: Open
+  // alone sent the user to a pane that already looked right -- a dead end
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const calls = [];
+  const h = mountHome({
+    get_permissions: async () => LISTEN_DENIED_HOTKEY,
+    reset_permission: async (key) => { calls.push(["reset", key]); return { ok: true }; },
+    relaunch_app: async () => { calls.push(["relaunch"]); return { ok: true }; },
+  });
+  await h.V.views.home.render();
+  assert.deepEqual(findRow(h, "perm-actions").children.map((b) => b.textContent),
+    ["Open Input Monitoring", "Record from here instead"]);
+  const recover = findRow(h, "perm-recover");
+  assert.ok(recover, "a recovery row under the main actions");
+  assert.match(allText(recover), /Already switched on\?/);
+  const buttons = recover.children.filter((c) => c.tagName === "BUTTON" || c.type === "button");
+  assert.deepEqual(buttons.map((b) => b.textContent), ["Reset Input Monitoring", "Relaunch Voisr"]);
+  buttons[0].dispatch("click", { target: buttons[0] });
+  await settle();
+  buttons[1].dispatch("click", { target: buttons[1] });
+  await settle();
+  assert.deepEqual(calls, [["reset", "input_monitoring"], ["relaunch"]]);
+  assert.match(h.toast.children.map((c) => c.textContent).join("|"),
+               /switch Voisr on under Input Monitoring/);
+});
+
+test("a denied pane that isn't the hotkey's gets no Reset", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const h = mountHome({ get_permissions: async () => ({ panes: [
+    { key: "microphone", label: "Microphone", granted: true, hotkey: false, effective: true },
+    { key: "input_monitoring", label: "Input Monitoring", granted: true, hotkey: true, effective: true },
+    { key: "accessibility", label: "Accessibility", granted: false, hotkey: false, effective: true },
+  ]}) });
+  await h.V.views.home.render();
+  const text = allText(h["perm-strip"]);
+  assert.match(text, /Open Accessibility/);
+  assert.doesNotMatch(text, /Reset /);
+  assert.doesNotMatch(text, /Relaunch/);
+  assert.equal(findRow(h, "perm-recover"), undefined);
+});
+
+test("an unknown (null) hotkey pane gets no Reset", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const h = mountHome({ get_permissions: async () => ({ panes: [
+    { key: "microphone", label: "Microphone", granted: true, hotkey: false, effective: true },
+    { key: "input_monitoring", label: "Input Monitoring", granted: null, hotkey: true, effective: true },
+    { key: "accessibility", label: "Accessibility", granted: true, hotkey: false, effective: true },
+  ]}) });
+  await h.V.views.home.render();
+  const text = allText(h["perm-strip"]);
+  assert.match(text, /Open Input Monitoring/);
+  assert.doesNotMatch(text, /Reset /);
+  assert.equal(findRow(h, "perm-recover"), undefined);
 });
