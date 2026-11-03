@@ -1,3 +1,4 @@
+import atexit
 import functools
 import inspect
 import json
@@ -1411,9 +1412,13 @@ class Api:
                  clipboard_fn=set_clipboard,
                  mic_check=None,
                  grant_requester=None,
-                 models_dir=None, model_downloader=None, system_info_fn=None):
+                 models_dir=None, model_downloader=None, system_info_fn=None,
+                 warm_server=None):
         self._config_path = Path(config_path)
         self._models_dir = models_dir  # None = transcriber.MODELS_DIR
+        # Kept-loaded whisper-server; None = every dictation uses whisper-cli
+        # (tests and the --mode paths that don't set one up).
+        self._warm = warm_server
         self._model_downloader = model_downloader
         self._model_downloader_lock = threading.Lock()
         self._system_info_fn = system_info_fn
@@ -1462,10 +1467,32 @@ class Api:
         )
 
     def _default_transcribe(self, wav, cfg):
-        """Transcribe with the release-time model and dictionary prompt."""
-        from voisr.transcriber import resolve_model, transcribe as _transcribe
-        return _transcribe(wav, model_path=resolve_model(cfg.get("model")),
-                           prompt=glossary_prompt(cfg.get("dictionary")))
+        """Transcribe with the release-time model and dictionary prompt.
+        Returns (text, info): see transcriber.transcribe_routed."""
+        from voisr.transcriber import resolve_model, transcribe_routed
+        return transcribe_routed(
+            wav, resolve_model(cfg.get("model"), self._models_path()),
+            prompt=glossary_prompt(cfg.get("dictionary")),
+            server=self._warm, unload=cfg.get("model_unload", "min5"))
+
+    def _prewarm(self):
+        """Key down: start loading the model in the background, in parallel
+        with capture (Handy does the same). Runs on its own thread so the
+        hotkey path never waits for it, and can never raise into it."""
+        warm = self._warm
+        if warm is None:
+            return
+
+        def go():
+            try:
+                from voisr.transcriber import resolve_model
+                cfg = self.get_config()
+                warm.prewarm(resolve_model(cfg.get("model"), self._models_path()),
+                             unload=cfg.get("model_unload", "min5"))
+            except Exception as error:
+                print(f"Voisr: model preload skipped: {error}", flush=True)
+
+        threading.Thread(target=go, name="voisr-prewarm", daemon=True).start()
 
     def _model_name(self, cfg):
         """Model that transcribed this clip, or None when a test or caller
@@ -1474,7 +1501,7 @@ class Api:
             return None
         from voisr.models import id_from_path
         from voisr.transcriber import resolve_model
-        return id_from_path(resolve_model(cfg.get("model")))
+        return id_from_path(resolve_model(cfg.get("model"), self._models_path()))
 
     def _record_delivery_timings(self, item, t_start, paste_started, paste_sent=None):
         """Best effort, after delivery: the paste has already happened and the
@@ -1494,8 +1521,9 @@ class Api:
             print(f"Voisr history: timings not recorded: {error}", flush=True)
 
     def _transcribe_audio(self, wav, cfg):
+        """(raw text, info) where info has the mode and any extra timings."""
         if self._transcribe_fn is not None:
-            return self._transcribe_fn(wav)
+            return self._transcribe_fn(wav), {"mode": None, "timings": {}}
         return self._default_transcribe(wav, cfg)
 
     def current_level(self):
@@ -1551,6 +1579,9 @@ class Api:
             else:
                 self._sessions_in_flight.discard(sequence)
             busy = bool(self._sessions_in_flight)
+            if self._warm is not None:
+                # holds off the idle unload from key down to the last paste
+                self._warm.set_busy(busy)
             status = self._status_item
             # Read the status item before committing _glyph_busy: committing
             # with nothing to push to would record a state that was never
@@ -1651,7 +1682,7 @@ class Api:
                 print(f"Voisr audio: trim failed: {error}", flush=True)
         t_start = self._clock()
         try:
-            raw = self._transcribe_audio(wav, cfg)
+            raw, info = self._transcribe_audio(wav, cfg)
             t_transcribed = self._clock()
             text = clean(raw, dictionary=cfg.get("dictionary", {}))
             t_cleaned = self._clock()
@@ -1671,8 +1702,10 @@ class Api:
             # the paste does. Paste and total are merged in afterwards.
             item = self._history.add(
                 text, duration_s=duration, model=self._model_name(cfg),
+                mode=info["mode"],
                 timings_ms={"transcribe": (t_transcribed - t_start) * 1000,
-                            "cleanup": (t_cleaned - t_transcribed) * 1000})
+                            "cleanup": (t_cleaned - t_transcribed) * 1000,
+                            **info["timings"]})
             self._notify_dictation()
         except Exception as error:
             warning = f"history failed: {error}"[:250]
@@ -1761,6 +1794,7 @@ class Api:
             self._active_sequence = session.sequence
             self._is_recording = True
             self._mark_session(session.sequence, True)  # reentrant: RLock
+        self._prewarm()
         return {"recording": True, "session_id": session.sequence}
 
     def _release_recording(self, paste=False):
@@ -1836,6 +1870,8 @@ class Api:
         if self._model_downloader is not None:
             self._model_downloader.cancel()
         self._recordings.close()
+        if self._warm is not None:
+            self._warm.shutdown()
         if getattr(self, "_status_item", None) is not None:
             self._status_item.release()
 
@@ -1932,11 +1968,26 @@ class Api:
             old_hotkey = old_cfg.get("hotkey")
             old_tap = old_cfg.get("event_tap")
             cfg = self._update_config(updates)
+        self._apply_warm_settings(old_cfg, cfg)
         new_hotkey = cfg.get("hotkey")
         if self._hotkey_service and (
                 new_hotkey != old_hotkey or cfg.get("event_tap") != old_tap):
             self._hotkey_service.restart(new_hotkey)
         return cfg
+
+    def _apply_warm_settings(self, old_cfg, cfg):
+        """A different model must not stay loaded (it holds hundreds of MB
+        and the next dictation would use the wrong one); a new unload choice
+        takes effect now."""
+        if self._warm is None:
+            return
+        try:
+            if cfg.get("model") != old_cfg.get("model"):
+                self._warm.unload()
+            if cfg.get("model_unload") != old_cfg.get("model_unload"):
+                self._warm.configure(cfg.get("model_unload", "min5"))
+        except Exception as error:
+            print(f"Voisr: warm model settings not applied: {error}", flush=True)
 
     def get_hotkey_options(self):
         return HOTKEY_OPTIONS
@@ -2124,6 +2175,8 @@ class Api:
                              "dictation needs at least one."}
         if model_id == self._active_model_id():
             return {"error": "That model is in use. Pick another one first."}
+        if self._warm is not None:
+            self._warm.forget_model(path)  # a loaded copy would outlive the file
         try:
             path.unlink()
         except OSError as e:
@@ -2302,6 +2355,24 @@ def start_hotkey_service(service):
     return None
 
 
+def make_warm_server():
+    """The kept-loaded whisper-server manager, after removing one that an
+    earlier Voisr that died left behind. Never raises: without it Voisr just
+    uses whisper-cli."""
+    try:
+        from voisr.whisper_server import WhisperServer
+        server = WhisperServer(ROOT / "data" / "whisper-server.json")
+        atexit.register(server.shutdown)  # normal interpreter exits
+        stopped = server.start_cleanup()
+        if stopped:
+            print(f"Voisr: stopped a leftover whisper-server (pids {stopped})",
+                  flush=True)
+        return server
+    except Exception as error:
+        print(f"Voisr: kept-loaded model unavailable: {error}", flush=True)
+        return None
+
+
 def main():
     import platform
 
@@ -2320,7 +2391,8 @@ def main():
     api = None
     service = None
     try:
-        api = Api(mic_check=permissions.microphone_granted)
+        api = Api(mic_check=permissions.microphone_granted,
+                  warm_server=make_warm_server())
         widget = RecordingWidget(level_source=api.current_level)
         service = HotkeyService(api, widget=widget, fallback_check=listen_tap_granted,
                                 key_state=hotkey_key_down)

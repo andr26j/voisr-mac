@@ -15,7 +15,9 @@ whisper.cpp -- MIT License
   Copyright (c) 2023-2026 The ggml authors
   https://github.com/ggml-org/whisper.cpp
   Installed with Homebrew (`brew install whisper-cpp`, formula licence: MIT).
-  Voisr runs its `whisper-cli` program as a separate process.
+  Voisr runs its `whisper-cli` and `whisper-server` programs (both in the
+  same package) as separate processes. The server is reached only over
+  127.0.0.1.
 
 ggml-base.en.bin, ggml-small.en.bin, ggml-medium.en-q5_0.bin and
 ggml-large-v3-turbo-q5_0.bin -- MIT License

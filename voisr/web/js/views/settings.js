@@ -375,6 +375,8 @@ window.Voisr = window.Voisr || {};
         appliedAppearance = cfg.appearance || "system";
         renderAppearance();
         $("#launch-toggle").checked = !!cfg.launch_at_login;
+        const unload = $("#unload-select");
+        if (unload) unload.value = cfg.model_unload || "min5";
       }
       if (hotkey) $("#hotkey-current").textContent = hotkey.display || "unset";
       if (status) renderHotkeyStatus(status);
@@ -457,6 +459,19 @@ window.Voisr = window.Voisr || {};
       if (!res) { e.target.checked = !e.target.checked; return; }
       V.ui.toast(e.target.checked ? "Voisr will start at login" : "Launch at login off");
     });
+
+    const unloadSelect = document.getElementById("unload-select");
+    if (unloadSelect) {
+      let appliedUnload = unloadSelect.value;
+      unloadSelect.addEventListener("change", async (e) => {
+        const next = e.target.value;
+        const res = await V.ui.tryApi(
+          V.api().set_config({ model_unload: next }), "Save keep model loaded");
+        if (!res) { e.target.value = appliedUnload; return; }
+        appliedUnload = next;
+        V.ui.toast("Model unload saved");
+      });
+    }
 
     document.getElementById("color-open").addEventListener("click", openColorPopover);
 

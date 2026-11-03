@@ -230,6 +230,21 @@
           </div>
         </div>
         <div id="model-list" class="model-list"></div>
+        <div class="setting-row">
+          <div>
+            <h3>Keep model loaded</h3>
+            <p class="setting-desc">Voisr loads the model when you start talking and keeps it in memory, so the next dictation starts about a second sooner. While it is loaded it uses about 0.7&nbsp;GB of memory for Small and 0.3&nbsp;GB for Base (more for bigger models), then frees it after the time you pick. &ldquo;Immediately&rdquo; reloads the model for every dictation and keeps no memory. Everything stays on this Mac.</p>
+          </div>
+          <select id="unload-select" class="select" aria-label="Keep model loaded">
+            <option value="never">Never unload</option>
+            <option value="immediately">Immediately</option>
+            <option value="min2">After 2 minutes</option>
+            <option value="min5">After 5 minutes</option>
+            <option value="min10">After 10 minutes</option>
+            <option value="min15">After 15 minutes</option>
+            <option value="hour1">After 1 hour</option>
+          </select>
+        </div>
       </div>
 
       <div class="settings-section">
