@@ -82,11 +82,23 @@ def changed_share(pasted: str, final: str) -> float:
     return changed / len(words)
 
 
+def _without_later_typing(heard: list[str], written: list[str]) -> list[str]:
+    """A replaced run at the very end of a paste with nothing after it to anchor
+    on can run on into what was typed next ("tomorow" -> "tomorrow at nine").
+    Keep only as many leading words as read most like what was heard, so
+    "openai" -> "Open AI" still stays whole."""
+    heard_text = " ".join(_bare(w) for w in heard)
+    prefixes = [written[:n] for n in range(1, len(written) + 1)]
+    return max(prefixes, key=lambda p: similarity(heard_text, " ".join(_bare(w) for w in p)))
+
+
 def diff_candidates(pasted: str, final: str, context_terms=(),
-                    limit: int = MAX_CANDIDATES) -> tuple[list[tuple[str, str]], int]:
+                    limit: int = MAX_CANDIDATES, open_end: bool = False,
+                    ) -> tuple[list[tuple[str, str]], int]:
     """([(heard, written)], words corrected). Each replaced run of 1-3 words
     that looks like a spelling fix; words corrected counts every replaced word
-    whether or not it made a candidate."""
+    whether or not it made a candidate. open_end: nothing anchored the end of
+    the span, so words past the paste may be later typing, not a correction."""
     before, after = pasted.split(), final.split()
     terms = {t.casefold() for t in context_terms}
     candidates = []
@@ -95,17 +107,20 @@ def diff_candidates(pasted: str, final: str, context_terms=(),
         if tag != "replace":
             continue
         corrected += i2 - i1
-        if i2 - i1 > MAX_RUN_WORDS or j2 - j1 > MAX_RUN_WORDS:
+        new_words = after[j1:j2]
+        if open_end and i2 == len(before) and j2 == len(after):
+            new_words = _without_later_typing(before[i1:i2], new_words)
+        if i2 - i1 > MAX_RUN_WORDS or len(new_words) > MAX_RUN_WORDS:
             continue
         heard = " ".join(_bare(w) for w in before[i1:i2]).strip()
-        written = " ".join(_bare(w) for w in after[j1:j2]).strip()
+        written = " ".join(_bare(w) for w in new_words).strip()
         if not heard or not written or heard == written:
             continue
         if len(heard) > _MAX_PAIR_CHARS or len(written) > _MAX_PAIR_CHARS:
             continue
         if (heard.casefold() == written.casefold()
                 or similarity(heard, written) >= MIN_SIMILARITY
-                or any(_bare(w).casefold() in terms for w in after[j1:j2])):
+                or any(_bare(w).casefold() in terms for w in new_words)):
             candidates.append((heard, written))
     return candidates[:limit], corrected
 
@@ -127,6 +142,7 @@ class _Ended:
     pasted: str = field(default="", repr=False)
     final: str | None = field(default=None, repr=False)
     terms: tuple[str, ...] = field(default=(), repr=False)
+    open_end: bool = False
 
 
 @dataclass
@@ -217,6 +233,7 @@ class EditWatcher:
         if keep and window.last_final is not None:
             result.pasted, result.final = window.pasted, window.last_final
             result.terms = window.terms
+            result.open_end = not window.after_anchor
         # the text goes now; the object may sit in the heap until its next due
         window.pasted = window.last_final = window.before_anchor = window.after_anchor = ""
         window.terms = ()
@@ -227,7 +244,8 @@ class EditWatcher:
         try:
             pairs, corrected = [], 0
             if ended.final is not None:
-                pairs, corrected = diff_candidates(ended.pasted, ended.final, ended.terms)
+                pairs, corrected = diff_candidates(ended.pasted, ended.final, ended.terms,
+                                                   open_end=ended.open_end)
             self._on_end(EditResult(ended.item_id, ended.reason, pairs, corrected))
         except Exception as error:
             print(f"Voisr: edit learning skipped ({error.__class__.__name__})", flush=True)

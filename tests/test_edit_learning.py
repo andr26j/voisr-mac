@@ -55,6 +55,54 @@ def test_edit_differ(pasted, final, terms, pairs, corrected):
     assert diff_candidates(pasted, final, terms) == (pairs, corrected)
 
 
+@pytest.mark.parametrize("pasted, final, pairs", [
+    # a fix to the last word, then more typing: the typing is not the fix
+    ("see you tomorow", "see you tomorrow at nine", [("tomorow", "tomorrow")]),
+    ("ask voiser", "ask Voisr about the plan today and more", [("voiser", "Voisr")]),
+    # the correction itself may be two words
+    ("use openai", "use Open AI", [("openai", "Open AI")]),
+    ("use openai", "use Open AI for this", [("openai", "Open AI")]),
+    # plain typing after an untouched paste
+    ("see you soon", "see you soon at nine", []),
+    # the last word replaced by something else altogether: nothing to learn
+    ("see you tomorow", "see you Friday at nine", []),
+])
+def test_later_typing_never_forms_a_candidate(pasted, final, pairs):
+    assert diff_candidates(pasted, final, open_end=True)[0] == pairs
+
+
+def test_with_an_anchored_end_the_whole_run_is_the_correction():
+    assert diff_candidates("the trade mate", "the Trade Mate", open_end=False)[0] == [
+        ("trade mate", "Trade Mate")]
+    # text after it was there before the paste, so this all sits inside the span
+    assert diff_candidates("see tomorow", "see tomorrow at nine", open_end=False)[0] == [
+        ("tomorow", "tomorrow at nine")]
+
+
+def test_a_window_with_no_text_after_the_paste_is_open_ended():
+    box = textbox("start see you tomorow")
+    results = []
+
+    class Worker:
+        def submit(self, fn):
+            from concurrent.futures import Future
+            future = Future()
+            future.set_result(fn())
+            return future
+
+    now = [0.0]
+    watcher = EditWatcher(FakeAX(box), Worker(), lambda: True, results.append,
+                          clock=lambda: now[0], budget_s=1.0, autostart=False)
+    focus = FocusContext(bundle_id="com.example.app", before_text="start ", after_text="",
+                         element=box, element_id=box.id, caret_known=True)
+    watcher.watch("i", focus, box.id, "see you tomorow", ())
+    box.attrs["AXValue"] = "start see you tomorrow at nine"
+    for t in READ_AT_S:
+        now[0] = t
+        watcher.tick()
+    assert results[0].pairs == [("tomorow", "tomorrow")]
+
+
 def test_at_most_four_candidates():
     pasted = "voiser one github two brunswik three kestrelwey four zorblaks"
     final = "Voisr one GitHub two Brunswick three Kestrelway four Zorblax"
