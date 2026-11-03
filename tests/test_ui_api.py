@@ -274,7 +274,7 @@ def test_history_failure_warns_but_still_delivers(tmp_path):
         recorder_factory=FakeRecorder,
         transcribe_fn=lambda wav: "still usable",
         clipboard_fn=copied.append,
-        clock=iter([1.0, 2.0]).__next__,
+        clock=iter([1.0, 2.0] + [3.0] * 20).__next__,
     )
     try:
         api.start_recording()
@@ -598,12 +598,91 @@ def test_restore_history_item_puts_it_back(tmp_path):
     assert api.get_history()[0]["id"] == item["id"]
 
 
-def test_get_models_lists_known_models_with_installed_flags(tmp_path):
-    api = make_api(tmp_path)
+MAC_16 = {"memory_gb": 16, "chip": "Apple M2", "apple_silicon": True}
+
+
+def _models_api(tmp_path, installed=("small.en", "base.en"), model=None, **kw):
+    mdir = tmp_path / "models"
+    mdir.mkdir()
+    for n in installed:
+        (mdir / f"ggml-{n}.bin").write_bytes(b"x")
+    api = make_api(tmp_path, models_dir=mdir, system_info_fn=lambda: MAC_16, **kw)
+    if model:
+        api.set_config({"model": model})
+    return api, mdir
+
+
+def test_get_models_returns_registry_with_install_state(tmp_path):
+    api, _ = _models_api(tmp_path, installed=("small.en",))
     out = api.get_models()
-    values = [m["value"] for m in out["models"]]
-    assert values == ["small.en", "base.en"]
-    assert all(isinstance(m["installed"], bool) for m in out["models"])
+    rows = {m["id"]: m for m in out["models"]}
+    assert list(rows) == ["base.en", "small.en", "medium.en-q5_0",
+                          "large-v3-turbo-q5_0"]
+    assert rows["small.en"]["installed"] and rows["small.en"]["active"]
+    assert not rows["base.en"]["installed"]
+    assert out["active"] == "small.en" and out["system"] == MAC_16
+    assert all(m["benchmark"] is None for m in out["models"])
+
+
+def test_get_models_warns_when_memory_is_short(tmp_path):
+    api, _ = _models_api(tmp_path)
+    api._system_info_fn = lambda: {"memory_gb": 8, "apple_silicon": True}
+    rows = {m["id"]: m for m in api.get_models()["models"]}
+    assert rows["medium.en-q5_0"]["warning"] and not rows["small.en"]["warning"]
+
+
+def test_old_config_naming_a_missing_model_falls_back(tmp_path):
+    api, _ = _models_api(tmp_path, installed=("base.en",), model="small.en")
+    assert api.get_models()["active"] == "base.en"
+
+
+def test_delete_model_refuses_the_active_one(tmp_path):
+    api, mdir = _models_api(tmp_path, model="small.en")
+    assert "in use" in api.delete_model("small.en")["error"]
+    assert (mdir / "ggml-small.en.bin").exists()
+
+
+def test_delete_model_refuses_the_last_one(tmp_path):
+    api, mdir = _models_api(tmp_path, installed=("small.en",))
+    assert "only model" in api.delete_model("small.en")["error"]
+    assert (mdir / "ggml-small.en.bin").exists()
+
+
+def test_delete_model_removes_an_inactive_one(tmp_path):
+    api, mdir = _models_api(tmp_path, model="small.en")
+    assert api.delete_model("base.en") == {"ok": True}
+    assert not (mdir / "ggml-base.en.bin").exists()
+    assert "isn't installed" in api.delete_model("base.en")["error"]
+
+
+def test_delete_model_works_on_a_custom_file(tmp_path):
+    api, mdir = _models_api(tmp_path, installed=("small.en", "mine"))
+    assert api.delete_model("mine") == {"ok": True}
+    assert not (mdir / "ggml-mine.bin").exists()
+
+
+def test_download_model_refuses_when_disk_is_full(tmp_path):
+    from voisr.models import ModelDownloader
+    mdir = tmp_path / "models"
+    mdir.mkdir()
+    dl = ModelDownloader(mdir, "http://127.0.0.1:9", free_bytes_fn=lambda: 10)
+    api = make_api(tmp_path, models_dir=mdir, model_downloader=dl,
+                   system_info_fn=lambda: MAC_16)
+    assert "Not enough disk space" in api.download_model("small.en")["error"]
+    assert api.get_download_progress() == {"state": "idle"}
+
+
+def test_close_cancels_a_download_in_flight(tmp_path):
+    class Spy:
+        cancelled = False
+
+        def cancel(self):
+            self.cancelled = True
+
+    spy = Spy()
+    api, _ = _models_api(tmp_path, model_downloader=spy)
+    api.close()
+    assert spy.cancelled
 
 
 def test_set_launch_at_login_round_trips(tmp_path, monkeypatch):
@@ -1386,3 +1465,108 @@ def test_relaunch_app_cancels_the_waiter_if_quitting_fails(tmp_path, monkeypatch
     api.attach_window(StuckWindow())
     assert api.relaunch_app() == {"ok": False, "error": "couldn't quit"}
     assert Proc.killed is True
+
+
+def _ticking_clock(step=0.25):
+    state = {"t": 100.0}
+
+    def now():
+        state["t"] += step
+        return state["t"]
+    return now
+
+
+def test_history_item_gets_stage_timings_after_paste(tmp_path):
+    api = make_api(tmp_path, clock=_ticking_clock(), paste_fn=lambda text: True)
+    api.start_recording()
+    api.stop_recording(paste=True)
+    item = api._history.list()[0]
+    t = item["timings_ms"]
+    assert set(t) == {"transcribe", "cleanup", "paste", "total"}
+    assert t["transcribe"] == 250 and t["cleanup"] == 250
+    assert t["total"] >= t["transcribe"] + t["cleanup"] + t["paste"]
+    assert "model" not in item  # injected transcriber: no model to name
+
+
+def test_history_is_written_before_paste_and_survives_timing_failure(tmp_path):
+    seen = {}
+
+    class Store(HistoryStore):
+        def merge_timings(self, *a, **k):
+            raise OSError("disk full")
+
+    store = Store(tmp_path / "h.jsonl")
+
+    def paste(text):
+        seen["in_history_before_paste"] = [i["text"] for i in store.list()]
+        return True
+
+    api = make_api(tmp_path, history=store, paste_fn=paste, clock=_ticking_clock())
+    api.start_recording()
+    out = api.stop_recording(paste=True)
+    assert seen["in_history_before_paste"] == ["Hello world"]
+    assert out.get("pasted") is True
+    assert "error" not in out
+    assert [i["text"] for i in store.list()] == ["Hello world"]
+    assert "paste" not in store.list()[0]["timings_ms"]
+
+
+def test_no_paste_records_total_without_paste_time(tmp_path):
+    api = make_api(tmp_path, clock=_ticking_clock())
+    api.start_recording()
+    api.stop_recording()
+    t = api._history.list()[0]["timings_ms"]
+    assert "total" in t and "paste" not in t
+
+
+def test_paste_timings_stop_at_cmd_v_not_the_clipboard_restore_wait(tmp_path):
+    # the fake's "restore wait" jumps the clock 1 s after reporting Cmd-V sent
+    state = {"t": 100.0}
+
+    def clock():
+        state["t"] += 0.25
+        return state["t"]
+
+    def paste(text, on_sent=None):
+        on_sent()
+        state["t"] += 1.0  # PASTE_GRACE_S
+        return True
+
+    api = make_api(tmp_path, clock=clock, paste_fn=paste)
+    api.start_recording()
+    api.stop_recording(paste=True)
+    t = api._history.list()[0]["timings_ms"]
+    assert t["paste"] < 1000 and t["total"] < 2500
+    assert t["total"] >= t["transcribe"] + t["cleanup"] + t["paste"]
+
+
+def test_a_paste_function_that_cannot_report_still_gets_timings(tmp_path):
+    api = make_api(tmp_path, clock=_ticking_clock(), paste_fn=lambda text: True)
+    api.start_recording()
+    api.stop_recording(paste=True)
+    assert {"paste", "total"} <= set(api._history.list()[0]["timings_ms"])
+
+
+def test_downloader_creation_is_shared_across_threads(tmp_path):
+    api, _ = _models_api(tmp_path)
+    seen, barrier = [], threading.Barrier(8)
+
+    def grab():
+        barrier.wait()
+        seen.append(api._downloader())
+
+    threads = [threading.Thread(target=grab) for _ in range(8)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert len({id(d) for d in seen}) == 1
+
+
+def test_model_name_uses_the_registry_id(tmp_path, monkeypatch):
+    from voisr import transcriber
+    api, mdir = _models_api(tmp_path, installed=("medium.en-q5_0",))
+    api._transcribe_fn = None
+    monkeypatch.setattr(transcriber, "MODELS_DIR", mdir)
+    real = transcriber.resolve_model
+    monkeypatch.setattr(transcriber, "resolve_model",
+                        lambda name=None, models_dir=mdir: real(name, models_dir))
+    assert api._model_name({"model": "medium.en-q5_0"}) == "medium.en-q5_0"

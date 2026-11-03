@@ -1,4 +1,5 @@
 import functools
+import inspect
 import json
 import re
 import threading
@@ -1409,14 +1410,24 @@ class Api:
                  paste_fn=paste_at_cursor,
                  clipboard_fn=set_clipboard,
                  mic_check=None,
-                 grant_requester=None):
+                 grant_requester=None,
+                 models_dir=None, model_downloader=None, system_info_fn=None):
         self._config_path = Path(config_path)
+        self._models_dir = models_dir  # None = transcriber.MODELS_DIR
+        self._model_downloader = model_downloader
+        self._model_downloader_lock = threading.Lock()
+        self._system_info_fn = system_info_fn
         self._history = history or HistoryStore(ROOT / "data" / "history.jsonl")
         self._transcribe_fn = transcribe_fn
         self._clock = clock
         self._hotkey_service = hotkey_service
         self._capture_fn = capture_fn
         self._paste_fn = paste_fn
+        try:
+            self._paste_reports_sent = "on_sent" in inspect.signature(
+                paste_fn).parameters
+        except (TypeError, ValueError):
+            self._paste_reports_sent = False
         self._clipboard_fn = clipboard_fn
         # None = no check, so tests never probe the runner's real TCC state
         self._mic_check = mic_check
@@ -1455,6 +1466,32 @@ class Api:
         from voisr.transcriber import resolve_model, transcribe as _transcribe
         return _transcribe(wav, model_path=resolve_model(cfg.get("model")),
                            prompt=glossary_prompt(cfg.get("dictionary")))
+
+    def _model_name(self, cfg):
+        """Model that transcribed this clip, or None when a test or caller
+        injected its own transcribe function and no model was involved."""
+        if self._transcribe_fn is not None:
+            return None
+        from voisr.models import id_from_path
+        from voisr.transcriber import resolve_model
+        return id_from_path(resolve_model(cfg.get("model")))
+
+    def _record_delivery_timings(self, item, t_start, paste_started, paste_sent=None):
+        """Best effort, after delivery: the paste has already happened and the
+        history line already exists, so a failure here costs only the numbers.
+        paste_sent is when Cmd-V went out; the clipboard-restore wait after it
+        (inject.PASTE_GRACE_S) is not time the user waited for their text. When
+        the paste function doesn't report it, fall back to now."""
+        if item is None:
+            return
+        now = paste_sent if paste_sent is not None else self._clock()
+        timings = {"total": (now - t_start) * 1000}
+        if paste_started is not None:
+            timings["paste"] = (now - paste_started) * 1000
+        try:
+            self._history.merge_timings(item["id"], timings)
+        except Exception as error:
+            print(f"Voisr history: timings not recorded: {error}", flush=True)
 
     def _transcribe_audio(self, wav, cfg):
         if self._transcribe_fn is not None:
@@ -1612,9 +1649,12 @@ class Api:
             except Exception as error:
                 # an untrimmed clip still transcribes
                 print(f"Voisr audio: trim failed: {error}", flush=True)
+        t_start = self._clock()
         try:
             raw = self._transcribe_audio(wav, cfg)
+            t_transcribed = self._clock()
             text = clean(raw, dictionary=cfg.get("dictionary", {}))
+            t_cleaned = self._clock()
         except Exception as error:
             return SessionResult.failure(
                 session.sequence, "transcription",
@@ -1627,7 +1667,12 @@ class Api:
         item = None
         warning = None
         try:
-            item = self._history.add(text, duration_s=duration)
+            # Written before pasting so the dictation is durable whatever
+            # the paste does. Paste and total are merged in afterwards.
+            item = self._history.add(
+                text, duration_s=duration, model=self._model_name(cfg),
+                timings_ms={"transcribe": (t_transcribed - t_start) * 1000,
+                            "cleanup": (t_cleaned - t_transcribed) * 1000})
             self._notify_dictation()
         except Exception as error:
             warning = f"history failed: {error}"[:250]
@@ -1636,7 +1681,10 @@ class Api:
         paste_error = None
         fallback_safe = True
         typing_generation = None
+        paste_started = None
+        paste_sent = [None]  # clock reading when the paste function sent Cmd-V
         if session.paste_requested and cfg.get("paste") and not self._quitting:
+            paste_started = self._clock()
             with self._paste_state_lock:
                 typing_generation = self._typing_generation
                 join = (
@@ -1646,7 +1694,10 @@ class Api:
                     and not self._last_paste_text[-1].isspace()
                 )
             try:
-                pasted = self._paste_fn((" " if join else "") + text)
+                pasted = self._paste_fn(
+                    (" " if join else "") + text,
+                    **({"on_sent": lambda: paste_sent.__setitem__(0, self._clock())}
+                       if self._paste_reports_sent else {}))
             except PasteDeliveryError as error:
                 pasted = error.pasted
                 fallback_safe = error.fallback_safe
@@ -1667,6 +1718,8 @@ class Api:
                 copied = True
             except Exception as error:
                 clipboard_error = error
+
+        self._record_delivery_timings(item, t_start, paste_started, paste_sent[0])
 
         fields = {"text": text, "copied": copied, "pasted": pasted}
         if item is not None:
@@ -1779,6 +1832,9 @@ class Api:
         # words and go to History), but nothing may paste or touch the
         # clipboard after the user has left the app.
         self._quitting = True
+        # An unfinished download is abandoned and its .part removed.
+        if self._model_downloader is not None:
+            self._model_downloader.cancel()
         self._recordings.close()
         if getattr(self, "_status_item", None) is not None:
             self._status_item.release()
@@ -2022,18 +2078,57 @@ class Api:
             return {"error": str(e)}
         return {"ok": True, "removed": removed}
 
+    def _models_path(self):
+        from voisr import transcriber
+        return Path(self._models_dir) if self._models_dir else transcriber.MODELS_DIR
+
+    def _downloader(self):
+        from voisr.models import ModelDownloader
+        with self._model_downloader_lock:
+            if self._model_downloader is None:
+                self._model_downloader = ModelDownloader(self._models_path())
+            return self._model_downloader
+
+    def _system_info(self):
+        from voisr.models import system_info
+        return (self._system_info_fn or system_info)()
+
+    def _active_model_id(self):
+        from voisr.models import id_from_path
+        from voisr.transcriber import resolve_model
+        p = resolve_model(self.get_config().get("model"), self._models_path())
+        return id_from_path(p) if p.is_file() else None
+
     def get_models(self):
-        from voisr.transcriber import MODELS_DIR, PREFERRED_MODELS
-        labels = {"small.en": "Small — best accuracy",
-                  "base.en": "Base — fastest"}
-        models = []
-        for name in PREFERRED_MODELS:
-            path = MODELS_DIR / f"ggml-{name}.bin"
-            installed = path.exists()
-            models.append({"value": name, "label": labels.get(name, name),
-                           "installed": installed,
-                           "bytes": path.stat().st_size if installed else 0})
-        return {"models": models, "active": self.get_config().get("model")}
+        from voisr.models import list_models
+        system = self._system_info()
+        active = self._active_model_id()
+        return {"models": list_models(self._models_path(), system, active),
+                "active": active, "system": system,
+                "download": self._downloader().progress()}
+
+    def download_model(self, model_id):
+        return self._downloader().start(model_id, self._system_info())
+
+    def get_download_progress(self):
+        return self._downloader().progress()
+
+    def delete_model(self, model_id):
+        from voisr.models import installed_paths
+        installed = installed_paths(self._models_path())
+        path = installed.get(model_id)
+        if path is None:
+            return {"error": "That model isn't installed."}
+        if len(installed) <= 1:
+            return {"error": "It's the only model installed; "
+                             "dictation needs at least one."}
+        if model_id == self._active_model_id():
+            return {"error": "That model is in use. Pick another one first."}
+        try:
+            path.unlink()
+        except OSError as e:
+            return {"error": str(e)}
+        return {"ok": True}
 
     def set_launch_at_login(self, enabled):
         try:
@@ -2170,7 +2265,7 @@ def install_dock_reopen(on_reopen, delegate_cls=None) -> bool:
 # tests/test_js_bridge_surface.py pins this to the V.api() calls in voisr/web/js.
 BRIDGE_METHODS = (
     "capture_hotkey", "clear_history", "copy_text", "delete_history_item",
-    "export_history", "get_config", "get_history", "get_hotkey_status",
+    "delete_model", "download_model", "export_history", "get_download_progress", "get_config", "get_history", "get_hotkey_status",
     "get_level", "get_models", "get_permissions", "get_pill_themes", "get_stats",
     "hotkey_display", "open_settings_pane", "relaunch_app",
     "reset_permission", "restore_history_item", "save_text_file",

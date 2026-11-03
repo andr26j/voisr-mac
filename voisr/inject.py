@@ -111,7 +111,7 @@ def _restore_after_ownership_check_failure(adapter, snapshot, owner_count,
 
 
 def _paste_with_adapter(text, *, adapter, post_cmd_v,
-                        applescript_cmd_v, sleeper) -> bool:
+                        applescript_cmd_v, sleeper, on_sent=None) -> bool:
     snapshot = adapter.snapshot()
     owner_count = adapter.write_text_if_unchanged(text, snapshot)
     try:
@@ -146,6 +146,8 @@ def _paste_with_adapter(text, *, adapter, post_cmd_v,
             ) from restore_error
         raise PasteDeliveryError(
             "paste was blocked; clipboard preserved", pasted=False)
+    if on_sent is not None:
+        on_sent()  # Cmd-V is out; only the clipboard-restore wait remains
     if snapshot.concealed:
         # A late Cmd-V would paste whatever is back on the clipboard; a
         # password must never be that. Leaving the dictation there instead
@@ -167,23 +169,30 @@ def _paste_with_adapter(text, *, adapter, post_cmd_v,
     return True
 
 
-def paste_at_cursor(text: str, restore_clipboard: bool = True) -> bool:
+def paste_at_cursor(text: str, restore_clipboard: bool = True,
+                    on_sent=None) -> bool:
     """Put text on the clipboard and paste it into the frontmost app.
 
     With restoration enabled (the default), a blocked paste raises a
     preservation-aware PasteDeliveryError. Set restore_clipboard=False to
     leave text available for a manual paste and receive False when blocked.
+    on_sent, if given, is called once Cmd-V has been sent, before the
+    clipboard-restore wait.
     """
     if not restore_clipboard:
         set_clipboard(text)
         try:
-            return _post_cmd_v() or _applescript_cmd_v()
+            sent = _post_cmd_v() or _applescript_cmd_v()
         except Exception:
             return False
+        if sent and on_sent is not None:
+            on_sent()
+        return sent
     return _paste_with_adapter(
         text,
         adapter=AppKitPasteboard(),
         post_cmd_v=_post_cmd_v,
         applescript_cmd_v=_applescript_cmd_v,
         sleeper=time.sleep,
+        on_sent=on_sent,
     )

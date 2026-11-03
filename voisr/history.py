@@ -60,6 +60,12 @@ def _finite_timestamp_number(value) -> bool:
         return False
 
 
+def _clean_timings(timings: dict) -> dict:
+    """Whole milliseconds, finite and nonnegative; anything else is dropped."""
+    return {str(k): int(round(v)) for k, v in timings.items()
+            if _finite_number(v) and v >= 0}
+
+
 def _valid_record(item) -> bool:
     return (
         isinstance(item, dict)
@@ -418,17 +424,44 @@ class HistoryStore:
             self._write_atomic(items)
             return result
 
-    def add(self, text: str, duration_s: float) -> dict:
+    def add(self, text: str, duration_s: float, model: str | None = None,
+            timings_ms: dict | None = None) -> dict:
+        """`model` and `timings_ms` are optional: lines written before they
+        existed stay valid and readers must treat both as possibly absent."""
         if not _finite_number(duration_s) or duration_s < 0:
             raise ValueError("duration_s must be a finite, nonnegative number")
         item = {"id": uuid.uuid4().hex, "ts": time.time(),
                 "text": text, "words": len(text.split()), "duration_s": duration_s}
+        if model:
+            item["model"] = str(model)
+        if timings_ms:
+            item["timings_ms"] = _clean_timings(timings_ms)
 
         def append(items):
             items.append(item)
             return item
 
         return self._mutate(append)
+
+    def merge_timings(self, item_id: str, timings_ms: dict) -> bool:
+        """Add later-stage timings (paste, total) to a record already on disk.
+        A record deleted in the meantime is not brought back. Returns whether
+        anything was written."""
+        extra = _clean_timings(timings_ms)
+
+        def merge(items):
+            for item in items:
+                if item["id"] == item_id:
+                    item["timings_ms"] = {**item.get("timings_ms", {}), **extra}
+                    return True
+            return False
+
+        with self._mutation_lock():
+            items = self._read()
+            if not merge(items):
+                return False
+            self._write_atomic(items)
+            return True
 
     def list(self) -> list[dict]:
         return sorted(self._read(), key=lambda i: i["ts"], reverse=True)
