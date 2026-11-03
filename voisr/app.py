@@ -5,6 +5,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from voisr import snippets
 from voisr.cleanup import clean
 from voisr.inject import paste_at_cursor, set_clipboard
 from voisr.pasteboard import PasteDeliveryError
@@ -16,7 +17,7 @@ DEFAULT_CONFIG = {"hotkey": "alt_r", "paste": True, "device": ":0", "dictionary"
                   "appearance": "system", "launch_at_login": False, "model": None,
                   "event_tap": "active", "model_unload": "min5",
                   "use_screen_context": True, "learn_from_edits": True,
-                  "dictionary_auto_add": True}
+                  "dictionary_auto_add": True, "snippets": {}}
 
 
 def _is_str(v):
@@ -58,7 +59,7 @@ CONFIG_VALIDATORS = {
     "model": _is_optional_str, "hotkey_vk": _is_vk, "hotkey_label": _is_str,
     "event_tap": _is_tap_mode, "model_unload": _is_unload,
     "use_screen_context": _is_bool, "learn_from_edits": _is_bool,
-    "dictionary_auto_add": _is_bool,
+    "dictionary_auto_add": _is_bool, "snippets": snippets.is_valid,
 }
 
 
@@ -89,6 +90,9 @@ def _salvage(data: dict, path) -> dict:
             out[key] = {k: w for k, w in value.items()
                         if isinstance(k, str) and k and isinstance(w, str)}
             print(f"voisr: dropped invalid dictionary entries in {path}", flush=True)
+        elif key == "snippets" and isinstance(value, dict):
+            out[key] = snippets.salvage(value)
+            print(f"voisr: dropped invalid snippets in {path}", flush=True)
         else:
             print(f"voisr: ignoring invalid {key} in {path}", flush=True)
     return out
