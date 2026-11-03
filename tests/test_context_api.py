@@ -941,3 +941,69 @@ def test_a_secure_press_capture_yields_no_terms_even_with_a_good_release(tmp_pat
     settle(api)
     assert api._session_terms(SimpleNamespace(sequence=1), tmp_path / "clip.wav") == []
     api.close()
+
+
+class _Server:
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.prompts = []
+
+    def configure(self, unload):
+        pass
+
+    def set_busy(self, busy):
+        pass
+
+    def prewarm(self, *a, **k):
+        pass
+
+    def shutdown(self):
+        pass
+
+    def unload(self):
+        pass
+
+    def transcribe(self, wav, model, prompt=None):
+        self.prompts.append(prompt)
+        if self.fail:
+            raise RuntimeError("server down")
+        return "hello world", {}
+
+
+@pytest.mark.parametrize("server, cli_runs", [
+    (_Server(), False),            # kept loaded: mixed term over loopback only
+    (_Server(fail=True), True),    # its fallback must not leak it
+    (None, True),                  # whisper-cli by choice
+])
+def test_a_mixed_term_never_reaches_the_cli_command_line(tmp_path, monkeypatch, server, cli_runs):
+    from voisr import transcriber
+
+    argv = []
+
+    class Done:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        argv.append(cmd)
+        out = cmd[cmd.index("--output-file") + 1]
+        with open(out + ".txt", "w") as f:
+            f.write("hello world")
+        return Done()
+
+    monkeypatch.setattr(transcriber.subprocess, "run", fake_run)
+    monkeypatch.setattr(transcriber, "find_binary", lambda name: "/bin/whisper-cli")
+    monkeypatch.setattr(transcriber, "resolve_model", lambda *a, **k: tmp_path / "m.bin")
+    (tmp_path / "m.bin").write_bytes(b"x")
+    box = textbox("ask about gpt4x with Priya today", caret=0)
+    api = make_api(tmp_path, FakeAX(box), transcribe_fn=None, warm_server=server)
+    out = dictate(api)
+    assert "error" not in out, out
+    if server is not None:
+        assert "gpt4x" in server.prompts[0]
+    assert bool(argv) is cli_runs
+    for cmd in argv:
+        joined = " ".join(cmd)
+        assert "gpt4x" not in joined
+        assert "Priya" in joined
+    api.close()

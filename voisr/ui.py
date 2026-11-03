@@ -11,7 +11,8 @@ from voisr import launch_agent, permissions, speech_gate
 from voisr.app import config_errors, load_config
 from voisr.ax_context import FocusTracker, make_ax_adapter
 from voisr.cleanup import clean
-from voisr.context_terms import context_terms, prompt_echoed, terms_for_clip
+from voisr.context_terms import (cli_safe_terms, context_terms, prompt_echoed,
+                                 terms_for_clip)
 from voisr.edit_learning import EditWatcher
 from voisr.history import HistoryStore
 from voisr.inject import paste_at_cursor, set_clipboard
@@ -1606,6 +1607,8 @@ class Api:
         return transcribe_routed(
             wav, resolve_model(cfg.get("model"), self._models_path()),
             prompt=glossary_prompt(cfg.get("dictionary"), terms),
+            # "" rather than None: no prompt at all, not the server's
+            cli_prompt=glossary_prompt(cfg.get("dictionary"), cli_safe_terms(terms)) or "",
             server=self._warm,
             # the setting now, not the one the dictation began under: a
             # queued dictation must not undo a change made in Settings since

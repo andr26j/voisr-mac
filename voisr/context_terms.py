@@ -3,7 +3,7 @@ Pure and local. Only short, name-shaped tokens get out of here, never a run of
 the text itself."""
 import re
 
-from voisr.ax_context import FocusContext
+from voisr.ax_context import BROWSERS, TERMINALS, FocusContext
 from voisr.common_words import is_common_word
 
 DEFAULT_LIMIT = 20
@@ -44,6 +44,18 @@ def _is_term(token: str, sentence_start: bool) -> bool:
             and not is_common_word(token))
 
 
+def is_mixed_term(term: str) -> bool:
+    """Letters and digits together: gpt4 and M1, but also what a visible
+    password or one-time code looks like, and nothing tells them apart."""
+    return any(c.isdigit() for c in term)
+
+
+def cli_safe_terms(terms) -> list[str]:
+    """What may go on whisper-cli's command line, where other processes of this
+    user can read it for as long as it runs."""
+    return [term for term in terms if not is_mixed_term(term)]
+
+
 def _tokens(text: str, sentence_start: bool = True):
     """(token, is first in its sentence) in reading order."""
     for raw in text.split():
@@ -73,6 +85,9 @@ def _caret_order(before: str, after: str) -> list[str]:
 def context_terms(focus: FocusContext | None, limit: int = DEFAULT_LIMIT) -> list[str]:
     if focus is None or focus.secure:
         return []
+    # A terminal or a web page is where a code or a generated password sits in
+    # plain view, so mixed tokens from there aren't worth having.
+    skip_mixed = focus.bundle_id in TERMINALS or focus.bundle_id in BROWSERS
     ordered = _terms_in(focus.selected_text)
     ordered += _caret_order(focus.before_text, focus.after_text)
     for text in focus.nearby_texts:
@@ -80,6 +95,8 @@ def context_terms(focus: FocusContext | None, limit: int = DEFAULT_LIMIT) -> lis
     ordered += _terms_in(focus.window_title)
     seen, out = set(), []
     for term in ordered:
+        if skip_mixed and is_mixed_term(term):
+            continue
         key = term.casefold()
         if key not in seen:
             seen.add(key)

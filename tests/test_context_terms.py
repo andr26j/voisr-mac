@@ -3,7 +3,8 @@ import pytest
 
 from voisr.ax_context import FocusContext
 from voisr.common_words import is_common_word, is_everyday_lowercase_word
-from voisr.context_terms import context_terms, prompt_echoed, terms_for_clip
+from voisr.context_terms import (cli_safe_terms, context_terms, prompt_echoed,
+                                 terms_for_clip)
 from voisr.ui import GLOSSARY_MAX_CHARS, GLOSSARY_MAX_TERMS, glossary_prompt
 
 
@@ -62,6 +63,29 @@ def test_dedupes_case_insensitively_and_limits():
 ])
 def test_nothing_from_no_capture_or_a_secure_one(focus):
     assert context_terms(focus) == []
+
+
+@pytest.mark.parametrize("bundle_id, keeps_mixed", [
+    ("com.apple.TextEdit", True),
+    ("com.tinyspeck.slackmacgap", True),
+    ("com.apple.Terminal", False),
+    ("com.googlecode.iterm2", False),
+    ("com.google.Chrome", False),
+    ("com.apple.Safari", False),
+])
+def test_mixed_tokens_are_dropped_from_terminals_and_browsers(bundle_id, keeps_mixed):
+    focus = FocusContext(bundle_id=bundle_id, before_text="",
+                         after_text="the code Ab3xK9 and M1 for Priya with getUserName")
+    terms = context_terms(focus)
+    assert ("Ab3xK9" in terms) is keeps_mixed
+    assert ("M1" in terms) is keeps_mixed
+    # legitimate terms keep working everywhere
+    assert "Priya" in terms and "getUserName" in terms
+
+
+def test_no_mixed_token_is_safe_for_the_command_line():
+    terms = ["Priya", "gpt4", "M1", "@user1", "getUserName", "max_retry", "v2_key"]
+    assert cli_safe_terms(terms) == ["Priya", "getUserName", "max_retry"]
 
 
 def test_short_clip_cap():
