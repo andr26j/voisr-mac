@@ -14,7 +14,8 @@ from voisr.transcriber import transcribe
 DEFAULT_CONFIG = {"hotkey": "alt_r", "paste": True, "device": ":0", "dictionary": {},
                   "show_widget": True, "pill_theme": "classic", "pill_color": None,
                   "appearance": "system", "launch_at_login": False, "model": None,
-                  "event_tap": "active", "model_unload": "min5"}
+                  "event_tap": "active", "model_unload": "min5",
+                  "use_screen_context": True}
 
 
 def _is_str(v):
@@ -55,6 +56,7 @@ CONFIG_VALIDATORS = {
     "appearance": _is_str, "launch_at_login": _is_bool,
     "model": _is_optional_str, "hotkey_vk": _is_vk, "hotkey_label": _is_str,
     "event_tap": _is_tap_mode, "model_unload": _is_unload,
+    "use_screen_context": _is_bool,
 }
 
 
@@ -193,6 +195,7 @@ def hotkey_mode(cfg, config_path) -> None:
     # by macOS and pynput never re-enables it).
     import time
 
+    from voisr.ax_context import make_ax_adapter
     from voisr.ui import (Api, HotkeyService, default_recorder, make_warm_server,
                           request_permissions)
 
@@ -201,7 +204,7 @@ def hotkey_mode(cfg, config_path) -> None:
     try:
         request_permissions()
         api = Api(config_path=config_path, recorder_factory=default_recorder,
-                  warm_server=make_warm_server())
+                  warm_server=make_warm_server(), ax_adapter=make_ax_adapter())
         service = HotkeyService(api)
         service.start()  # config-driven: prefers captured hotkey_vk
         print(f"Hold [{cfg['hotkey']}] to talk. Ctrl-C to quit. ({service.status})")

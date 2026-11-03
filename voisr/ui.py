@@ -9,6 +9,7 @@ from pathlib import Path
 
 from voisr import launch_agent, permissions, speech_gate
 from voisr.app import config_errors, load_config
+from voisr.ax_context import FocusTracker, make_ax_adapter
 from voisr.cleanup import clean
 from voisr.history import HistoryStore
 from voisr.inject import paste_at_cursor, set_clipboard
@@ -1458,7 +1459,7 @@ class Api:
                  mic_check=None,
                  grant_requester=None,
                  models_dir=None, model_downloader=None, system_info_fn=None,
-                 warm_server=None):
+                 warm_server=None, ax_adapter=None):
         self._config_path = Path(config_path)
         self._models_dir = models_dir  # None = transcriber.MODELS_DIR
         # Kept-loaded whisper-server; None = every dictation uses whisper-cli
@@ -1504,6 +1505,10 @@ class Api:
         self._config_lock = threading.RLock()
         self._config_cache = None  # (stat key, parsed config) or None
         self._config_notice = None  # set when a corrupt config was moved aside
+        # Read the screen only with an adapter: None (tests, unless they pass a
+        # fake) never touches the Accessibility API.
+        self._focus = (FocusTracker(ax_adapter, self._screen_context_on, clock=clock)
+                       if ax_adapter is not None else None)
         self._recordings = RecordingQueue(
             recorder_factory=recorder_factory,
             fallback_recorder_factory=fallback_recorder_factory,
@@ -1532,7 +1537,10 @@ class Api:
         once a recording is known to be a real dictation: HotkeyService does
         so when a press outlives its tap gate, when a double-tap latches
         hands-free, and at a toggle start. Own thread, so the hotkey path
-        never waits for it and it can never raise into it."""
+        never waits for it and it can never raise into it. The press capture
+        of the screen context starts here too, for the same reason: an
+        accidental tap should read nothing."""
+        self._capture_press()
         warm = self._warm
         if warm is None:
             return
@@ -1551,7 +1559,7 @@ class Api:
     def _prewarm_later(self, sequence):
         """A recording started with no hotkey gate in front of it: preload
         after PREWARM_DELAY_S unless it has ended by then."""
-        if self._warm is None:
+        if self._warm is None and self._focus is None:
             return
 
         def wait_then_go():
@@ -1564,6 +1572,46 @@ class Api:
 
         threading.Thread(target=wait_then_go, name="voisr-prewarm-wait",
                          daemon=True).start()
+
+    def _screen_context_on(self) -> bool:
+        return self.get_config().get("use_screen_context", True) is True
+
+    def _capture_press(self) -> None:
+        """Queue the capture on the AX worker. Never waits, never raises."""
+        focus = self._focus
+        if focus is None:
+            return
+        try:
+            with self._busy_lock:
+                sequence = self._active_sequence
+            if sequence is not None:
+                focus.capture_press(sequence)
+        except Exception as error:
+            print(f"Voisr: screen context skipped ({error.__class__.__name__})",
+                  flush=True)
+
+    def _capture_release(self, sequence) -> None:
+        """Same contract as _capture_press."""
+        if self._focus is None:
+            return
+        try:
+            self._focus.capture_release(sequence)
+        except Exception as error:
+            print(f"Voisr: screen context skipped ({error.__class__.__name__})",
+                  flush=True)
+
+    def _focus_details(self, sequence):
+        """(extra timings, history fields) for this dictation's captures: how
+        long they took on the AX worker, and which app. A denylisted app isn't
+        named in History. None of it ever stops a dictation."""
+        state = self._focus.session(sequence) if self._focus is not None else None
+        if state is None:
+            return {}, {}
+        timings = {"ax_context": state.ax_ms()}
+        focus = state.release_now() or state.press_now()
+        if focus is None or focus.secure or not focus.bundle_id:
+            return timings, {}
+        return timings, {"app": focus.bundle_id}
 
     def _model_name(self, cfg):
         """Model that transcribed this clip, or None when a test or caller
@@ -1651,6 +1699,8 @@ class Api:
             else:
                 self._sessions_in_flight.discard(sequence)
             busy = bool(self._sessions_in_flight)
+            if not in_flight and self._focus is not None:
+                self._focus.forget(sequence)  # its screen text goes with it
             if self._warm is not None:
                 # holds off the idle unload from key down to the last paste
                 self._warm.set_busy(busy)
@@ -1824,7 +1874,9 @@ class Api:
             except Exception as error:
                 clipboard_error = error
 
-        self._record_delivery_timings(item, t_start, paste_started, paste_sent[0])
+        extra_timings, details = self._focus_details(session.sequence)
+        self._record_delivery_timings(item, t_start, paste_started, paste_sent[0],
+                                      extra_timings, details)
 
         fields = {"text": text, "copied": copied, "pasted": pasted}
         if item is not None:
@@ -1914,6 +1966,7 @@ class Api:
             if claimed is not None:
                 self._mark_session(claimed, False)
         if sequence is not None:
+            self._capture_release(sequence)
             # Safety net for the paths that never reach _process_session --
             # a recorder whose stop() throws is completed straight from the
             # queue worker. Retiring twice is a no-op.
@@ -1944,6 +1997,8 @@ class Api:
         if self._model_downloader is not None:
             self._model_downloader.cancel()
         self._recordings.close()
+        if self._focus is not None:
+            self._focus.close()
         if self._warm is not None:
             self._warm.shutdown()
         if getattr(self, "_status_item", None) is not None:
@@ -2466,7 +2521,8 @@ def main():
     service = None
     try:
         api = Api(mic_check=permissions.microphone_granted,
-                  warm_server=make_warm_server())
+                  warm_server=make_warm_server(),
+                  ax_adapter=make_ax_adapter())
         widget = RecordingWidget(level_source=api.current_level)
         service = HotkeyService(api, widget=widget, fallback_check=listen_tap_granted,
                                 key_state=hotkey_key_down)
