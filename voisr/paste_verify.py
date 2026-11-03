@@ -8,6 +8,9 @@ from voisr.ax_context import FocusContext, MAX_VALUE_CHARS
 # Added to the clipboard restore at most; the spec's C.
 VERIFY_BUDGET_S = 0.15
 MIN_OLD_CLIPBOARD = 3  # a short old clipboard turns up in any text by chance
+# How much a field may grow, against the pasted text, and still be that text
+# after an app reformatted it.
+MIN_GROWTH, MAX_GROWTH = 0.5, 2.0
 
 _LOOKALIKES = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"', "–": "-", "—": "-"})
 
@@ -41,6 +44,16 @@ def _count(haystack: str, needle: str) -> int:
     return haystack.count(needle) if needle else 0
 
 
+def _squeeze(normal: str) -> str:
+    """No case and no whitespace: what is left after an app has reformatted."""
+    return "".join(normal.split()).casefold()
+
+
+def _grew_by_about(before: str, after: str, text: str) -> bool:
+    grown = len(after) - len(before)
+    return len(text) * MIN_GROWTH <= grown <= len(text) * MAX_GROWTH
+
+
 def verify_paste(before: str | None, after: str | None, text: str,
                  old_clipboard: str | None) -> Verdict:
     """None means unreadable, which is not the same as empty. An empty `after`
@@ -58,7 +71,17 @@ def verify_paste(before: str | None, after: str | None, text: str,
     old = _normal(old_clipboard) if old_clipboard else ""
     if len(old) >= MIN_OLD_CLIPBOARD and _count(after_n, old) > _count(before_n, old):
         return Verdict("stale_clipboard")
-    return Verdict("not_found")
+    # Apps strip newlines, change case and auto-format. Calling that a miss
+    # would lose the user's clipboard and have them paste twice, so only a field
+    # that clearly didn't change is one.
+    before_s, after_s, wanted_s = _squeeze(before_n), _squeeze(after_n), _squeeze(wanted)
+    if _count(after_s, wanted_s) > _count(before_s, wanted_s):
+        return skipped("transformed")
+    if after_s == before_s:
+        return Verdict("not_found")
+    if _grew_by_about(before_s, after_s, wanted_s):
+        return skipped("transformed")
+    return skipped("field_changed")
 
 
 def check_delivery(before: FocusContext | None, after: FocusContext | None,

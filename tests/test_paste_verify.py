@@ -19,13 +19,24 @@ from voisr.pasteboard import PasteboardItemSnapshot, PasteboardSnapshot
     ("a", "a it’s “fine”", "it's \"fine\"", None, "verified", None),     # smart quotes
     # stale clipboard
     ("start ", "start OLD COPY", "hello", "OLD COPY", "stale_clipboard", None),
-    # not found
+    # a truly missed paste: the field clearly didn't change
     ("start ", "start ", "hello", None, "not_found", None),
-    ("start ", "start typed", "hello", "OLD", "not_found", None),
-    # the text was already there, and no more of it now
-    ("hello", "hello", "hello", None, "not_found", None),
+    ("start", "start  \n", "hello", "OLD", "not_found", None),
+    ("hello", "hello", "hello", None, "not_found", None),       # already there
+    # the app changed the paste: not a miss
+    ("a ", "a Hello There", "hello there", None, "skipped", "transformed"),   # case
+    ("a ", "a hello there", "Hello There", None, "skipped", "transformed"),
+    ("a ", "a helloworld", "hello\nworld", None, "skipped", "transformed"),   # newline
+    ("a ", "a h e l l o", "hello", None, "skipped", "transformed"),           # spacing
+    ("a ", "a * call Sam", "call Sam", None, "verified", None),
+    ("a ", "a 1. Buy some milk!", "buy milk", None, "skipped", "transformed"), # grew by about
+    ("a ", "a colour of it", "color of it", None, "skipped", "transformed"),  # autocorrect
+    # changed, but not by anything like the paste: still not a provable miss
+    ("start ", "start x", "hello there friend", "OLD", "skipped", "field_changed"),
+    ("long text here ", "long", "hello", None, "skipped", "field_changed"),
+    ("a ", "a " + "y" * 90, "hello", None, "skipped", "field_changed"),
     # an old clipboard too short to mean anything
-    ("start ", "start ab", "hello", "ab", "not_found", None),
+    ("start ", "start ab", "hello", "ab", "skipped", "field_changed"),
     # unreadable is not empty
     (None, "x", "hello", None, "skipped", "unreadable"),
     ("x", None, "hello", None, "skipped", "unreadable"),
