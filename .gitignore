@@ -8,6 +8,7 @@ __pycache__/
 
 # runtime data (created by the app)
 data/*.jsonl
+data/whisper-server.json*
 
 # your own settings and dictionary: the app creates it, nothing ships one
 config.json
