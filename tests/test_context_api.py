@@ -330,3 +330,192 @@ def test_a_capture_that_has_not_finished_is_not_waited_for(tmp_path, monkeypatch
     assert seen == [[]] and "error" not in out
     ax.release.set()
     api.close()
+
+
+def verifying_paste(box, land=True):
+    """The field gets the text when "Cmd-V" goes out, as a real one would."""
+    def paste(text, on_sent=None, verifier=None):
+        if land:
+            box.attrs["AXValue"] = box.attrs["AXValue"] + text
+        if on_sent:
+            on_sent()
+        keep = verifier("OLD COPY") if verifier else False
+        paste.kept = keep
+        return True
+    paste.kept = None
+    return paste
+
+
+def test_verified_is_recorded_with_its_time(tmp_path):
+    box = textbox("start ")
+    api = make_api(tmp_path, FakeAX(box), paste_fn=verifying_paste(box))
+    out = dictate(api)
+    assert out["delivery"] == "verified" and out["pasted"] is True
+    assert "manual_paste" not in out
+    item = api.get_history()[0]
+    assert item["delivery"] == "verified"
+    assert "verify" in item["timings_ms"]
+    api.close()
+
+
+def test_a_missed_paste_asks_for_a_manual_one(tmp_path):
+    box = textbox("start ")
+    paste = verifying_paste(box, land=False)
+    written = []
+    api = make_api(tmp_path, FakeAX(box), paste_fn=paste)
+    api._clipboard_fn = written.append
+    out = dictate(api)
+    assert paste.kept is True
+    assert out["delivery"] == "not_found" and out["manual_paste"] is True
+    assert out["pasted"] is False and out["copied"] is True and "error" not in out
+    assert api.get_history()[0]["delivery"] == "not_found"
+    assert written == [], "the paste already left it on the clipboard"
+    assert api._last_paste_text is None, "no join onto text that didn't land"
+    api.close()
+
+
+def test_a_skip_records_its_reason_and_changes_nothing(tmp_path):
+    box = textbox("")     # stays empty: proves nothing
+    paste = verifying_paste(box, land=False)
+    api = make_api(tmp_path, FakeAX(box), paste_fn=paste)
+    out = dictate(api)
+    assert paste.kept is False and out["pasted"] is True
+    item = api.get_history()[0]
+    assert (item["delivery"], item["delivery_reason"]) == ("skipped", "empty_field")
+    api.close()
+
+
+def test_verification_off_reads_nothing(tmp_path):
+    box = textbox("start ")
+    ax = FakeAX(box)
+    api = make_api(tmp_path, ax, paste_fn=verifying_paste(box))
+    api.set_config({"use_screen_context": False})
+    out = dictate(api)
+    assert ax.calls == [] and ax.front_calls == 0
+    assert out["pasted"] is True
+    item = api.get_history()[0]
+    assert (item["delivery"], item["delivery_reason"]) == ("skipped", "context_off")
+    api.close()
+
+
+def test_a_hung_app_at_verify_time_is_bounded_and_restores(tmp_path):
+    from voisr.paste_verify import VERIFY_BUDGET_S
+
+    box = textbox("start ")
+    release = threading.Event()
+
+    class HangsLater(FakeAX):
+        hang = False
+
+        def focused_element(self, timeout_s):
+            if self.hang:
+                release.wait(10)
+            return super().focused_element(timeout_s)
+
+    ax = HangsLater(box)
+    spent = {}
+
+    def paste(text, on_sent=None, verifier=None):
+        ax.hang = True
+        started = time.monotonic()
+        spent["keep"] = verifier("OLD")
+        spent["s"] = time.monotonic() - started
+        return True
+
+    api = make_api(tmp_path, ax, paste_fn=paste)
+    out = dictate(api)
+    assert spent["keep"] is False
+    assert spent["s"] < VERIFY_BUDGET_S + 0.1
+    item = api.get_history()[0]
+    assert (item["delivery"], item["delivery_reason"]) == ("skipped", "timeout")
+    assert out["pasted"] is True
+    release.set()
+    api.close()
+
+
+def test_verification_does_not_move_total_or_paste_timing(tmp_path):
+    box = textbox("start ")
+    now = [0.0]
+
+    def clock():
+        return now[0]
+
+    def paste(text, on_sent=None, verifier=None):
+        now[0] += 0.01
+        on_sent()
+        now[0] += 1.0     # the grace
+        verifier("OLD")
+        return True
+
+    api = make_api(tmp_path, FakeAX(box), paste_fn=paste, clock=clock)
+    dictate(api)
+    timings = api.get_history()[0]["timings_ms"]
+    assert timings["paste"] == 10
+    assert timings["total"] == 10
+    api.close()
+
+
+def test_a_concealed_clipboard_is_recorded_as_skipped(tmp_path):
+    def paste(text, on_sent=None, verifier=None):
+        return True  # returned without calling the verifier
+
+    api = make_api(tmp_path, FakeAX(textbox("x")), paste_fn=paste)
+    dictate(api)
+    item = api.get_history()[0]
+    assert (item["delivery"], item["delivery_reason"]) == ("skipped", "concealed_clipboard")
+    api.close()
+
+
+def test_a_broken_verifier_inside_the_api_never_loses_the_dictation(tmp_path, monkeypatch):
+    box = textbox("x")
+    api = make_api(tmp_path, FakeAX(box), paste_fn=verifying_paste(box))
+
+    def explode(*a, **k):
+        raise RuntimeError("no")
+
+    monkeypatch.setattr("voisr.ui.check_delivery", explode)
+    paste = verifying_paste(box)
+    api._paste_fn = paste
+    out = dictate(api)
+    assert out["text"] == "Hello world" and out["pasted"] is True
+    assert paste.kept is False
+    item = api.get_history()[0]
+    assert (item["delivery"], item["delivery_reason"]) == ("skipped", "error")
+    api.close()
+
+
+def test_the_pill_says_copied_on_a_missed_paste(tmp_path):
+    box = textbox("start ")
+    api = make_api(tmp_path, FakeAX(box), paste_fn=verifying_paste(box, land=False))
+
+    class Widget:
+        calls = []
+
+        def show_recording(self, theme="classic", color=None):
+            self.calls.append("recording")
+
+        def show_processing(self):
+            self.calls.append("processing")
+
+        def show_done(self):
+            self.calls.append("done")
+
+        def show_error(self):
+            self.calls.append("error")
+
+        def show_copied(self):
+            self.calls.append("copied")
+
+        def hide(self):
+            self.calls.append("hide")
+
+    widget = Widget()
+    service = HotkeyService(api, widget=widget, hide_delay=0, tap_gate_s=0)
+    service.press()
+    settle(api)
+    service.release()
+    deadline = time.monotonic() + 3
+    while widget.calls[-1:] != ["hide"] and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert widget.calls == ["recording", "processing", "copied", "hide"]
+    api.close()

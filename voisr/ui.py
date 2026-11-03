@@ -15,6 +15,7 @@ from voisr.context_terms import context_terms, prompt_echoed, terms_for_clip
 from voisr.history import HistoryStore
 from voisr.inject import paste_at_cursor, set_clipboard
 from voisr.keytap import TAP_MODES
+from voisr.paste_verify import VERIFY_BUDGET_S, check_delivery, skipped
 from voisr.pasteboard import PasteDeliveryError
 from voisr.recorder import Recorder
 from voisr.recording_queue import (
@@ -440,7 +441,8 @@ class RecordingWidget:
             print(f"Voisr widget: build failed: {e}", flush=True)
 
     def _set(self, state: str, theme: str | None = None,
-             color: str | None = None, is_current=None, if_current=None) -> None:
+             color: str | None = None, is_current=None, if_current=None,
+             label: str | None = None) -> None:
         try:
             from PyObjCTools import AppHelper
 
@@ -462,6 +464,10 @@ class RecordingWidget:
                         safe = sanitize_pill_color(color)
                         self._webview.evaluateJavaScript_completionHandler_(
                             f'setColor("{safe}")' if safe else "setColor(null)", None)
+                    if label is not None:
+                        # json.dumps: a word from the user's text as a JS string
+                        self._webview.evaluateJavaScript_completionHandler_(
+                            f"setLabel({json.dumps(label)})", None)
                     self._panel.setAlphaValue_(1.0)   # window stays resident; the pill animates in
                     self._webview.evaluateJavaScript_completionHandler_(
                         f'setState("{state}")', None)
@@ -556,6 +562,10 @@ class RecordingWidget:
     def show_error(self, is_current=None, if_current=None):
         self._set("error", is_current=is_current, if_current=if_current)
 
+    def show_copied(self, is_current=None, if_current=None):
+        self._set("label", label="Copied — press ⌘V", is_current=is_current,
+                  if_current=if_current)
+
     def hide(self, is_current=None, if_current=None):
         try:
             from PyObjCTools import AppHelper
@@ -642,6 +652,7 @@ class HotkeyService:
     """Global push-to-talk listener driving the shared Api record path."""
 
     PANE_REOPEN_S = 60  # a refused permission's pane opens at most this often
+    COPIED_HOLD = 3  # "Copied — press ⌘V" stays this many times hide_delay
 
     def __init__(self, api, widget=None, hide_delay=1.2,
                  permissions_check=None, poll_interval=3.0,
@@ -1077,12 +1088,17 @@ class HotkeyService:
             with self._state_lock:
                 if not show or epoch != self._epoch:
                     return
+                # a request to do something needs longer than a checkmark
+                hold = self._hide_delay
                 if "error" in result:
                     self._widget_action("show_error", epoch)
+                elif result.get("manual_paste"):
+                    self._widget_action("show_copied", epoch)
+                    hold = hold and hold * self.COPIED_HOLD
                 else:
                     self._widget_action("show_done", epoch)
-            if self._hide_delay:
-                time.sleep(self._hide_delay)
+            if hold:
+                time.sleep(hold)
             with self._state_lock:
                 if epoch == self._epoch:
                     self._widget_action("hide", epoch)
@@ -1492,8 +1508,11 @@ class Api:
         try:
             self._paste_reports_sent = "on_sent" in inspect.signature(
                 paste_fn).parameters
+            self._paste_takes_verifier = "verifier" in inspect.signature(
+                paste_fn).parameters
         except (TypeError, ValueError):
             self._paste_reports_sent = False
+            self._paste_takes_verifier = False
         self._clipboard_fn = clipboard_fn
         # None = no check, so tests never probe the runner's real TCC state
         self._mic_check = mic_check
@@ -1628,6 +1647,37 @@ class Api:
         if focus is None or focus.secure or not focus.bundle_id:
             return timings, {}
         return timings, {"app": focus.bundle_id}
+
+    def _make_verifier(self, session, text, check: dict):
+        """What the paste calls after its grace, with the old clipboard's text;
+        True leaves the dictation on the clipboard. Fills `check` for later:
+        the verdict, the two captures, and the read's time. Only reads, for at
+        most VERIFY_BUDGET_S. Skipped entirely when off or with no baseline."""
+        focus = self._focus
+        state = focus.session(session.sequence)
+
+        def verify(old_clipboard):
+            started = self._clock()
+            before = after = None
+            if not self._screen_context_on():
+                verdict = skipped("context_off")
+            else:
+                before = state.release_now() if state is not None else None
+                if before is None:
+                    verdict = skipped("no_baseline")
+                else:
+                    try:
+                        after = focus.read_now(VERIFY_BUDGET_S)
+                        verdict = check_delivery(before, after, text, old_clipboard)
+                    except Exception as error:
+                        print(f"Voisr: paste check skipped ({error.__class__.__name__})",
+                              flush=True)
+                        verdict = skipped("error")
+            check.update(verdict=verdict, before=before, after=after,
+                         ms=(self._clock() - started) * 1000)
+            return verdict.missed
+
+        return verify
 
     def _model_name(self, cfg):
         """Model that transcribed this clip, or None when a test or caller
@@ -1888,6 +1938,8 @@ class Api:
         typing_generation = None
         paste_started = None
         paste_sent = [None]  # clock reading when the paste function sent Cmd-V
+        check = {}  # filled by the verifier, when there is one
+        checking = self._focus is not None and self._paste_takes_verifier
         if session.paste_requested and cfg.get("paste") and not self._quitting:
             paste_started = self._clock()
             with self._paste_state_lock:
@@ -1902,22 +1954,30 @@ class Api:
                 pasted = self._paste_fn(
                     (" " if join else "") + text,
                     **({"on_sent": lambda: paste_sent.__setitem__(0, self._clock())}
-                       if self._paste_reports_sent else {}))
+                       if self._paste_reports_sent else {}),
+                    **({"verifier": self._make_verifier(session, text, check)}
+                       if checking else {}))
             except PasteDeliveryError as error:
                 pasted = error.pasted
                 fallback_safe = error.fallback_safe
                 paste_error = error
             except Exception as error:
                 paste_error = error
-            if pasted:
+            if pasted and checking and "verdict" not in check:
+                # the paste returned without waiting: a concealed clipboard
+                check["verdict"] = skipped("concealed_clipboard")
+            if pasted and not (check.get("verdict") and check["verdict"].missed):
                 with self._paste_state_lock:
                     self._last_paste_text = text
                     self._last_paste_ts = self._clock()
                     self._last_paste_typing_generation = typing_generation
 
-        copied = pasted
+        verdict = check.get("verdict")
+        manual_paste = bool(pasted and verdict and verdict.missed)
+        copied = pasted  # a missed paste left the dictation on the clipboard
+        pasted = pasted and not manual_paste
         clipboard_error = None
-        if not pasted and fallback_safe and not self._quitting:
+        if not copied and fallback_safe and not self._quitting:
             try:
                 self._clipboard_fn(text)
                 copied = True
@@ -1925,10 +1985,18 @@ class Api:
                 clipboard_error = error
 
         extra_timings, details = self._focus_details(session.sequence)
+        if verdict is not None:
+            details.update(verdict.fields())
+            if "ms" in check:
+                extra_timings["verify"] = check["ms"]
         self._record_delivery_timings(item, t_start, paste_started, paste_sent[0],
                                       extra_timings, details)
 
         fields = {"text": text, "copied": copied, "pasted": pasted}
+        if verdict is not None:
+            fields["delivery"] = verdict.status
+        if manual_paste:
+            fields["manual_paste"] = True
         if item is not None:
             fields["item"] = item
         if warning is not None:

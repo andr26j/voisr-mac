@@ -90,6 +90,29 @@
     visibility: visible;
     transition: opacity 120ms linear;
   }
+  /* words instead of bars, for the rare thing an icon can't say */
+  .pill-label {
+    position: absolute;
+    inset: 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #FFFFFF;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 120ms linear, visibility 0s linear 120ms;
+    pointer-events: none;
+  }
+  .pill-label span { overflow: hidden; text-overflow: ellipsis; }
+  .pill[data-state="label"] .pill-label {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 120ms linear;
+  }
   /* the check draws itself once the bars have folded into the centre */
   .icon-done polyline { stroke-dasharray: 24; stroke-dashoffset: 24; }
   .pill[data-state="done"] .icon-done polyline { animation: draw 240ms var(--ease) 120ms forwards; }
@@ -189,6 +212,7 @@
     <span class="icon icon-done" aria-label="Dictation ready">
       <svg viewBox="0 0 24 24" fill="none" stroke="#7FD19A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 12 9 17 20 6"/></svg>
     </span>
+    <div class="pill-label"><span id="pill-label"></span></div>
     <span class="icon icon-error" aria-label="Dictation failed">
       <svg viewBox="0 0 24 24" fill="none" stroke="#F08C72" stroke-width="3" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="14"/><circle cx="12" cy="19" r="1.4" fill="#F08C72" stroke="none"/></svg>
     </span>
@@ -329,6 +353,9 @@
     kick();
   }
   window.setState = setState;
+
+  /* textContent: the label can hold a word from the user's own text */
+  window.setLabel = (text) => { document.getElementById("pill-label").textContent = text; };
 
   function hide() {
     state = "idle";
