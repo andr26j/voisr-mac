@@ -9,6 +9,9 @@ from voisr.common_words import is_common_word
 DEFAULT_LIMIT = 20
 SHORT_CLIP_S = 2.0
 SHORT_CLIP_TERMS = 5
+MOSTLY_TERMS = 0.6
+# Quick speech runs near 15 letters a second, and names are harder to rush.
+MAX_LETTERS_PER_S = 20
 _MAX_TERM = 32
 _MAX_MIXED = 16  # a longer run of letters and digits is more likely a key
 _STRIP = ".,:;!?()[]{}<>\"'“”‘’`*|"
@@ -111,9 +114,29 @@ def terms_for_clip(terms: list[str], wav_seconds: float) -> list[str]:
     return terms[:SHORT_CLIP_TERMS] if wav_seconds < SHORT_CLIP_S else terms
 
 
-def prompt_echoed(raw: str, terms) -> bool:
+def _mostly_terms_unsupported(raw: str, terms, seconds: float) -> bool:
+    """Output made up mostly of context terms that this clip couldn't have held.
+    Two rules, so a sentence with a name or two in it never trips them: all of
+    a short clip being terms, or three or more terms and most of the output,
+    from a short clip or faster than anyone speaks."""
+    words = [word.strip(_STRIP).casefold() for word in raw.split()]
+    words = [word for word in words if word]
+    known = {term.casefold().lstrip("@#") for term in terms}
+    matched = sum(word.lstrip("@#") in known for word in words)
+    if not words or matched < 2:
+        return False
+    short = seconds < SHORT_CLIP_S
+    if matched == len(words) and short:
+        return True
+    letters = sum(c.isalnum() for word in words for c in word)
+    too_fast = letters > MAX_LETTERS_PER_S * max(seconds, 0.1)
+    return matched >= 3 and matched / len(words) >= MOSTLY_TERMS and (short or too_fast)
+
+
+def prompt_echoed(raw: str, terms, seconds: float | None = None) -> bool:
     """Did whisper recite the glossary instead of the speech? The word itself,
-    or three context terms in a row in prompt order."""
+    three context terms in a row in prompt order, or, knowing the clip's length
+    in seconds, output that is mostly terms and more than that clip can hold."""
     if re.search(r"\bglossary\s*:", raw, re.IGNORECASE):
         return True
     terms = list(terms)
@@ -121,4 +144,4 @@ def prompt_echoed(raw: str, terms) -> bool:
         run = r"\W+".join(re.escape(t) for t in terms[i:i + 3])
         if re.search(run, raw, re.IGNORECASE):
             return True
-    return False
+    return seconds is not None and _mostly_terms_unsupported(raw, terms, seconds)

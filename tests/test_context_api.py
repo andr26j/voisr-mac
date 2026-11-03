@@ -1007,3 +1007,24 @@ def test_a_mixed_term_never_reaches_the_cli_command_line(tmp_path, monkeypatch, 
         assert "gpt4x" not in joined
         assert "Priya" in joined
     api.close()
+
+
+@pytest.mark.parametrize("raw, retries", [
+    ("Priya, Zedwick, and Mina, all Priya Mina Zedwick Raman Priya Mina.", True),
+    ("Send the Priya report to Mina today, she asked for it this morning.", False),
+])
+def test_only_unsupported_term_soup_is_redone(tmp_path, monkeypatch, raw, retries):
+    calls = []
+
+    def fake(wav, cfg, terms=()):
+        calls.append(list(terms))
+        return (raw if terms else "the real words"), {"mode": "cli", "timings": {}}
+
+    box = textbox("x Priya met Zedwick and Mina with Raman", caret=0)
+    api = make_api(tmp_path, FakeAX(box), transcribe_fn=None)
+    monkeypatch.setattr(api, "_default_transcribe", fake)
+    monkeypatch.setattr("voisr.ui.wav_seconds", lambda wav: 1.5)
+    out = dictate(api)
+    assert len(calls) == (2 if retries else 1)
+    assert ("real words" in out["text"].lower()) is retries
+    api.close()

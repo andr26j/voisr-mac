@@ -134,6 +134,40 @@ def test_prompt_echo(raw, echoed):
     assert prompt_echoed(raw, ["Priya", "Zed", "Mina"]) is echoed
 
 
+TERMS = ["Priya", "Zedwick", "Mina", "Raman", "Kestrelway", "Quindle"]
+
+
+@pytest.mark.parametrize("raw, seconds", [
+    # nothing but terms from a clip too short to be anything else
+    ("Priya, Mina.", 0.8),
+    ("Zedwick Raman", 1.5),
+    ("Priya. Priya. Priya.", 1.0),
+    # mostly terms, out of order so the run rule misses them
+    ("Mina and Priya, also Raman.", 1.5),
+    # far more than the clip can hold, even past the short-clip cap
+    ("Kestrelway Quindle Zedwick Raman and Priya Mina Kestrelway Quindle", 2.5),
+])
+def test_output_that_is_mostly_terms_the_clip_cant_hold_is_an_echo(raw, seconds):
+    assert prompt_echoed(raw, TERMS, seconds) is True
+
+
+@pytest.mark.parametrize("raw, seconds", [
+    # normal dictation with one or two on-screen names
+    ("Priya", 0.8),                                  # just the name
+    ("Thanks Priya", 1.0),
+    ("Thanks Priya Raman", 1.2),
+    ("Send it to Priya.", 1.2),
+    ("Send it to Priya and Mina today.", 2.5),
+    ("Please ask Priya to review the Kestrelway dashboard before Friday.", 4.0),
+    # names only, but said at a speaking pace over a real length of clip
+    ("Priya Raman", 2.5),
+    ("Mina and Priya, also Raman.", 4.0),
+    ("", 1.0),
+])
+def test_normal_dictation_with_a_name_or_two_is_not_an_echo(raw, seconds):
+    assert prompt_echoed(raw, TERMS, seconds) is False
+
+
 def test_common_words_catch_inflections():
     for word in ("Tuesday", "tuesdays", "stopped", "replies", "liking", "THE"):
         assert is_common_word(word), word

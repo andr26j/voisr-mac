@@ -1906,7 +1906,7 @@ class Api:
             print(f"Voisr: transcription with context terms failed "
                   f"({error.__class__.__name__}); retrying without", flush=True)
             return self._transcribe_audio(wav, cfg)
-        if not prompt_echoed(raw, terms):
+        if not prompt_echoed(raw, terms, wav_seconds(wav)):
             return raw, info
         print("Voisr: transcript echoed the glossary; retrying without context terms",
               flush=True)
