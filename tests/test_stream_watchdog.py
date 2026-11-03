@@ -2,8 +2,13 @@
 A device that sends only exact zeros for 6 s is reopened once, and never
 after the recording has ended: that would turn the mic indicator on with
 nobody dictating."""
+import threading
+import time
 import wave
 
+import pytest
+
+from voisr import stream_recorder
 from voisr.stream_recorder import StreamRecorder
 
 ZEROS = bytes(1280)          # 40 ms of exact zeros
@@ -161,3 +166,137 @@ def test_audio_after_the_reopen_is_kept(tmp_path):
     streams.made[1].feed(VOICE, 2)
     rec.stop()
     assert frames(tmp_path / "a.wav") == 5 * 640
+
+
+# ----- a stop that deadlocks inside macOS (see the top of stream_recorder.py)
+
+
+class HangingStream(FakeStream):
+    """stop() blocks until the test ends, like the real CoreAudio deadlock."""
+
+    def __init__(self, callback):
+        super().__init__(callback)
+        self.release = threading.Event()
+
+    def stop(self):
+        self.release.wait(10)
+
+
+@pytest.fixture
+def wedge(monkeypatch):
+    """A clean process-wide flag, with notices recorded instead of sent."""
+    notices = []
+    monkeypatch.setattr(stream_recorder, "_mic_wedged", threading.Event())
+    monkeypatch.setattr(stream_recorder, "_abandoned_streams", [])
+    monkeypatch.setattr(stream_recorder, "_notify_wedged",
+                        lambda: notices.append(1))
+    unregistered = []
+    monkeypatch.setattr(stream_recorder.atexit, "unregister", unregistered.append)
+    monkeypatch.setattr(StreamRecorder, "STOP_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(StreamRecorder, "STARTUP_SETTLE_S", 0.0)
+    return notices, unregistered
+
+
+def hanging_recorder():
+    made = []
+
+    def factory(_rate, callback):
+        made.append(HangingStream(callback))
+        return made[-1]
+
+    return StreamRecorder(stream_factory=factory, timer_factory=Timers()), made
+
+
+def test_a_deadlocked_stop_still_saves_the_dictation(tmp_path, wedge):
+    rec, made = hanging_recorder()
+    wav = tmp_path / "a.wav"
+    rec.start(wav)
+    made[0].feed(b"\x01\x00" * 100)
+    try:
+        started = time.monotonic()
+        rec.stop()
+        assert time.monotonic() - started < 2
+        assert frames(wav) == 100
+    finally:
+        made[0].release.set()
+
+
+def test_a_deadlocked_stop_warns_once_and_clears_the_exit_handler(tmp_path, wedge):
+    notices, unregistered = wedge
+    rec, made = hanging_recorder()
+    rec.start(tmp_path / "a.wav")
+    rec.stop()
+    # a second stuck stream, already flagged: nothing new to say
+    other = HangingStream(rec._on_audio)
+    rec._stream = other
+    rec._close_stream()
+    for stream in (*made, other):
+        stream.release.set()
+    assert notices == [1]
+    assert len(unregistered) == 1
+
+
+def test_after_a_deadlock_new_streams_are_refused_so_the_fallback_runs(tmp_path, wedge):
+    rec, made = hanging_recorder()
+    rec.start(tmp_path / "a.wav")
+    rec.stop()
+    made[0].release.set()
+    next_rec, more = hanging_recorder()
+    with pytest.raises(RuntimeError):
+        next_rec.start(tmp_path / "b.wav")
+    assert more == []  # no stream was opened
+
+
+def test_cancel_returns_from_a_deadlocked_stop(tmp_path, wedge):
+    rec, made = hanging_recorder()
+    rec.start(tmp_path / "a.wav")
+    started = time.monotonic()
+    rec.cancel()
+    made[0].release.set()
+    assert time.monotonic() - started < 2
+    assert stream_recorder._mic_wedged.is_set()
+
+
+def test_no_reopen_after_the_stop_deadlocks(tmp_path, wedge):
+    rec, made = hanging_recorder()
+    timers = rec._timer_factory
+    rec.start(tmp_path / "a.wav")
+    timers.made[-1].fire()
+    made[0].release.set()
+    assert len(made) == 1
+
+
+def test_a_healthy_stop_is_not_abandoned(tmp_path, wedge):
+    rec, streams, _ = make()
+    rec.start(tmp_path / "a.wav")
+    rec.stop()
+    assert streams.made[0].stopped and streams.made[0].closed
+    assert not stream_recorder._mic_wedged.is_set()
+
+
+def test_a_stop_error_still_reaches_the_caller(tmp_path, wedge):
+    class Broken(FakeStream):
+        def stop(self):
+            raise OSError("device gone")
+
+    rec = StreamRecorder(stream_factory=lambda _r, cb: Broken(cb),
+                         timer_factory=Timers())
+    rec.start(tmp_path / "a.wav")
+    with pytest.raises(OSError):
+        rec.stop()
+    assert not stream_recorder._mic_wedged.is_set()
+
+
+def test_stop_waits_for_the_first_audio_but_not_after_it(tmp_path, monkeypatch, wedge):
+    monkeypatch.setattr(StreamRecorder, "STARTUP_SETTLE_S", 0.2)
+    rec, streams, _ = make()
+    rec.start(tmp_path / "a.wav")
+    started = time.monotonic()
+    rec.stop()
+    assert time.monotonic() - started >= 0.2  # still starting up: it waited
+
+    rec.start(tmp_path / "b.wav")
+    streams.made[-1].feed(b"\x01\x00" * 10)
+    started = time.monotonic()
+    rec.stop()
+    assert time.monotonic() - started < 0.15

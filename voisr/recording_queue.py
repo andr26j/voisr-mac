@@ -75,6 +75,10 @@ class RecordingQueue:
     """
 
     DEFAULT_MAX_IN_FLIGHT = 8
+    # A recorder's stop() that outlasts this is treated as lost, so one wedged
+    # recorder can't hold the queue, the pill and Quit forever. Well above any
+    # healthy stop, including the recorders' own time limits.
+    DEFAULT_CAPTURE_STOP_LIMIT_S = 30.0
 
     def __init__(
         self,
@@ -84,6 +88,7 @@ class RecordingQueue:
         clock: Callable[[], float] = time.monotonic,
         temp_path_factory: Callable[[], Path] = make_temp_wav,
         max_in_flight: int = DEFAULT_MAX_IN_FLIGHT,
+        capture_stop_limit_s: float = DEFAULT_CAPTURE_STOP_LIMIT_S,
     ):
         if isinstance(max_in_flight, bool) or not isinstance(max_in_flight, int):
             raise ValueError("max_in_flight must be a positive integer")
@@ -102,6 +107,7 @@ class RecordingQueue:
         self._start_done.set()
         self._next_sequence = 1
         self._max_in_flight = max_in_flight
+        self._capture_stop_limit_s = capture_stop_limit_s
         self._in_flight = 0
         self._pending = queue_module.Queue()
         self._finalizers = set()
@@ -174,7 +180,7 @@ class RecordingQueue:
             finalizing = self._capture_finalizing
 
         if finalizing is not None:
-            finalizing.capture_ready.wait()
+            finalizing.capture_ready.wait(self._capture_stop_limit_s)
 
         with self._lock:
             recorder = None
@@ -298,7 +304,10 @@ class RecordingQueue:
                 if item is _STOP:
                     return
                 session = item
-                session.capture_ready.wait()
+                if not session.capture_ready.wait(self._capture_stop_limit_s):
+                    session.capture_error = SessionResult.failure(
+                        session.sequence, "stop",
+                        "the microphone didn't stop — quit and reopen Voisr")
                 result = session.capture_error
                 if result is None:
                     try:
@@ -351,7 +360,9 @@ class RecordingQueue:
             if not finalizers:
                 break
             for finalizer in finalizers:
-                finalizer.join()
+                finalizer.join(self._capture_stop_limit_s)
+            if any(finalizer.is_alive() for finalizer in finalizers):
+                break  # wedged in stop(): a daemon thread can't hold up Quit
 
         self._start_done.wait()
 

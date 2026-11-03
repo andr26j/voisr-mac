@@ -1,7 +1,50 @@
+import atexit
 import math
 import operator
+import subprocess
 import threading
 import wave
+
+# Stopping a PortAudio stream can deadlock inside macOS for good: the stopping
+# thread holds the AudioUnit's lock and wants the IO thread's, while the IO
+# thread, in PortAudio's start/stop listener, holds its own and wants the
+# AudioUnit's. Nothing can interrupt that, so such a stream is abandoned and
+# every later recording in this process uses the ffmpeg fallback: opening
+# another stream could wait on the same locks. Only a restart clears it.
+_mic_wedged = threading.Event()
+_abandoned_streams = []  # kept referenced: collecting one could close it
+
+WEDGED_NOTICE = ("The microphone got stuck. Your dictation is safe. "
+                 "Quit and reopen Voisr to fix it.")
+
+
+def _notify_wedged() -> None:
+    """Best effort: the pill has no room for this, and it is easy to miss."""
+    print(f"Voisr audio: {WEDGED_NOTICE}", flush=True)
+    try:
+        subprocess.Popen(
+            ["/usr/bin/osascript", "-e",
+             f'display notification "{WEDGED_NOTICE}" with title "Voisr"'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+def _abandon_stream(stream) -> None:
+    _abandoned_streams.append(stream)
+    first = not _mic_wedged.is_set()
+    _mic_wedged.set()
+    if not first:
+        return
+    try:
+        # sounddevice's exit handler closes PortAudio, which would hang Quit
+        # on this same deadlock
+        import sounddevice as sd
+        atexit.unregister(sd._exit_handler)
+    except Exception:
+        pass
+    _notify_wedged()
+
 
 # Speaking voice fills the meter: a quiet room sits under the floor, a raised
 # voice reaches the ceiling. Linear in decibels between the two.
@@ -49,6 +92,14 @@ class StreamRecorder:
     # else means the stream is wedged: reopen it once (spec item 5).
     ZERO_REOPEN_S = 6.0
 
+    # How long to wait for a stopping stream before abandoning it. Real stops
+    # take milliseconds; this only ever catches the deadlock above.
+    STOP_TIMEOUT_S = 3.0
+    # A stream stopped before its first audio is still starting up, when the
+    # IO thread is most likely to be in the start/stop listener. Wait this
+    # long for that first block, which costs only very short presses.
+    STARTUP_SETTLE_S = 0.3
+
     def __init__(self, stream_factory=None, timer_factory=threading.Timer):
         self._lock = threading.Lock()
         self._frames = []
@@ -67,6 +118,7 @@ class StreamRecorder:
         self._heard = False  # a non-zero sample arrived this recording
         self._reopened = False
         self._watchdog = None
+        self._first_audio = threading.Event()
 
     @property
     def reopened(self) -> bool:
@@ -80,6 +132,7 @@ class StreamRecorder:
         return self._level
 
     def _on_audio(self, indata, frames, time_info, status):
+        self._first_audio.set()
         if not self._recording:
             return
         chunk = bytes(indata)
@@ -113,6 +166,8 @@ class StreamRecorder:
     def start(self, out_path) -> None:
         if self._recording:
             raise RuntimeError("already recording")
+        if _mic_wedged.is_set():
+            raise RuntimeError("the mic stream is stuck until Voisr restarts")
         with self._lock:
             self._frames = []
             self._bytes = 0
@@ -133,6 +188,7 @@ class StreamRecorder:
         watchdog.start()
 
     def _open_stream(self):
+        self._first_audio.clear()
         stream = self._stream_factory(self.SAMPLERATE, self._on_audio)
         try:
             stream.start()
@@ -158,6 +214,8 @@ class StreamRecorder:
                 self._close_stream()
             except Exception:
                 pass
+            if _mic_wedged.is_set():
+                return
             try:
                 self._stream = self._open_stream()
             except Exception as error:
@@ -198,10 +256,27 @@ class StreamRecorder:
         stream, self._stream = self._stream, None
         if stream is None:
             return
-        try:
-            stream.stop()
-        finally:
-            stream.close()
+        self._first_audio.wait(self.STARTUP_SETTLE_S)
+        errors = []
+
+        def stop_and_close():
+            try:
+                try:
+                    stream.stop()
+                finally:
+                    stream.close()
+            except Exception as error:
+                errors.append(error)
+
+        closer = threading.Thread(target=stop_and_close,
+                                  name="voisr-mic-close", daemon=True)
+        closer.start()
+        closer.join(self.STOP_TIMEOUT_S)
+        if closer.is_alive():
+            _abandon_stream(stream)
+            return
+        if errors:
+            raise errors[0]
 
     def cancel(self) -> None:
         """Close the mic and discard buffered audio; safe to repeat."""

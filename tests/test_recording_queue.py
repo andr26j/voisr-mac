@@ -793,3 +793,34 @@ def test_temp_wav_failure_is_a_structured_start_error(tmp_path):
             raise AssertionError("start should report temporary-file failure")
     finally:
         queue.close()
+
+
+def test_a_stop_that_never_returns_fails_that_dictation_and_frees_the_queue(tmp_path):
+    never = threading.Event()
+    processed = []
+
+    class Stuck(FakeRecorder):
+        def stop(self):
+            never.wait(10)
+            return ""
+
+    recorders = [Stuck(), FakeRecorder()]
+    paths = iter(tmp_path / f"{i}.wav" for i in range(2))
+    queue = RecordingQueue(
+        recorder_factory=lambda: recorders.pop(0),
+        fallback_recorder_factory=None,
+        processor=lambda s: processed.append(s.sequence) or SessionResult.success(s.sequence),
+        temp_path_factory=lambda: next(paths),
+        capture_stop_limit_s=0.05,
+    )
+    try:
+        queue.start()
+        stuck = queue.release(False, {}).result(timeout=2)
+        assert stuck.stage == "stop"
+        assert "didn't stop" in stuck.data["error"]
+        queue.start()  # also must not wait forever on the stuck finalizer
+        assert queue.release(False, {}).result(timeout=2).stage is None
+        assert processed == [2]
+        queue.close()  # a wedged finalizer can't hold up Quit
+    finally:
+        never.set()
