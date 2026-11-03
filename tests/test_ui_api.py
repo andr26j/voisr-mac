@@ -1492,7 +1492,7 @@ def test_history_is_written_before_paste_and_survives_timing_failure(tmp_path):
     seen = {}
 
     class Store(HistoryStore):
-        def merge_timings(self, *a, **k):
+        def merge_fields(self, *a, **k):
             raise OSError("disk full")
 
     store = Store(tmp_path / "h.jsonl")

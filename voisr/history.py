@@ -15,6 +15,12 @@ from pathlib import Path
 
 TYPING_WPM = 40  # the baseline Time saved is measured against
 
+# What may be added to a record after it is written: a verdict, a bundle id, a
+# count. Never text from another app; see merge_fields.
+_MERGEABLE_FIELDS = {"app": str, "delivery": str, "delivery_reason": str,
+                     "edit_end_reason": str, "words_corrected": int}
+_MERGED_STR_MAX = 200
+
 _PATH_LOCKS_GUARD = threading.Lock()
 _PATH_LOCKS: weakref.WeakValueDictionary[str, threading.RLock] = (
     weakref.WeakValueDictionary()
@@ -64,6 +70,17 @@ def _clean_timings(timings: dict) -> dict:
     """Whole milliseconds, finite and nonnegative; anything else is dropped."""
     return {str(k): int(round(v)) for k, v in timings.items()
             if _finite_number(v) and v >= 0}
+
+
+def _clean_fields(fields: dict) -> dict:
+    """Only the known fields, of the right type; anything else is dropped."""
+    clean = {}
+    for key, value in fields.items():
+        kind = _MERGEABLE_FIELDS.get(key)
+        if kind is None or type(value) is not kind:
+            continue
+        clean[key] = value[:_MERGED_STR_MAX] if kind is str else value
+    return clean
 
 
 def _valid_record(item) -> bool:
@@ -448,15 +465,23 @@ class HistoryStore:
         return self._mutate(append)
 
     def merge_timings(self, item_id: str, timings_ms: dict) -> bool:
-        """Add later-stage timings (paste, total) to a record already on disk.
-        A record deleted in the meantime is not brought back. Returns whether
-        anything was written."""
-        extra = _clean_timings(timings_ms)
+        return self.merge_fields(item_id, timings_ms=timings_ms)
+
+    def merge_fields(self, item_id: str, *, timings_ms: dict | None = None,
+                     fields: dict | None = None) -> bool:
+        """Add later-stage timings (paste, total, verify) and delivery details
+        (see _MERGEABLE_FIELDS) to a record already on disk. All optional, and
+        readers must treat them as possibly absent. A record deleted in the
+        meantime is not brought back. Returns whether anything was written."""
+        extra = _clean_timings(timings_ms or {})
+        details = _clean_fields(fields or {})
 
         def merge(items):
             for item in items:
                 if item["id"] == item_id:
-                    item["timings_ms"] = {**item.get("timings_ms", {}), **extra}
+                    if extra:
+                        item["timings_ms"] = {**item.get("timings_ms", {}), **extra}
+                    item.update(details)
                     return True
             return False
 

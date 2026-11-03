@@ -1574,7 +1574,8 @@ class Api:
         from voisr.transcriber import resolve_model
         return id_from_path(resolve_model(cfg.get("model"), self._models_path()))
 
-    def _record_delivery_timings(self, item, t_start, paste_started, paste_sent=None):
+    def _record_delivery_timings(self, item, t_start, paste_started, paste_sent=None,
+                                 extra_timings=None, fields=None):
         """Best effort, after delivery: the paste has already happened and the
         history line already exists, so a failure here costs only the numbers.
         paste_sent is when Cmd-V went out; the clipboard-restore wait after it
@@ -1583,11 +1584,11 @@ class Api:
         if item is None:
             return
         now = paste_sent if paste_sent is not None else self._clock()
-        timings = {"total": (now - t_start) * 1000}
+        timings = {"total": (now - t_start) * 1000, **(extra_timings or {})}
         if paste_started is not None:
             timings["paste"] = (now - paste_started) * 1000
         try:
-            self._history.merge_timings(item["id"], timings)
+            self._history.merge_fields(item["id"], timings_ms=timings, fields=fields)
         except Exception as error:
             print(f"Voisr history: timings not recorded: {error}", flush=True)
 
