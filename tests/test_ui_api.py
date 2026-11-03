@@ -1517,3 +1517,56 @@ def test_no_paste_records_total_without_paste_time(tmp_path):
     api.stop_recording()
     t = api._history.list()[0]["timings_ms"]
     assert "total" in t and "paste" not in t
+
+
+def test_paste_timings_stop_at_cmd_v_not_the_clipboard_restore_wait(tmp_path):
+    # the fake's "restore wait" jumps the clock 1 s after reporting Cmd-V sent
+    state = {"t": 100.0}
+
+    def clock():
+        state["t"] += 0.25
+        return state["t"]
+
+    def paste(text, on_sent=None):
+        on_sent()
+        state["t"] += 1.0  # PASTE_GRACE_S
+        return True
+
+    api = make_api(tmp_path, clock=clock, paste_fn=paste)
+    api.start_recording()
+    api.stop_recording(paste=True)
+    t = api._history.list()[0]["timings_ms"]
+    assert t["paste"] < 1000 and t["total"] < 2500
+    assert t["total"] >= t["transcribe"] + t["cleanup"] + t["paste"]
+
+
+def test_a_paste_function_that_cannot_report_still_gets_timings(tmp_path):
+    api = make_api(tmp_path, clock=_ticking_clock(), paste_fn=lambda text: True)
+    api.start_recording()
+    api.stop_recording(paste=True)
+    assert {"paste", "total"} <= set(api._history.list()[0]["timings_ms"])
+
+
+def test_downloader_creation_is_shared_across_threads(tmp_path):
+    api, _ = _models_api(tmp_path)
+    seen, barrier = [], threading.Barrier(8)
+
+    def grab():
+        barrier.wait()
+        seen.append(api._downloader())
+
+    threads = [threading.Thread(target=grab) for _ in range(8)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert len({id(d) for d in seen}) == 1
+
+
+def test_model_name_uses_the_registry_id(tmp_path, monkeypatch):
+    from voisr import transcriber
+    api, mdir = _models_api(tmp_path, installed=("medium.en-q5_0",))
+    api._transcribe_fn = None
+    monkeypatch.setattr(transcriber, "MODELS_DIR", mdir)
+    real = transcriber.resolve_model
+    monkeypatch.setattr(transcriber, "resolve_model",
+                        lambda name=None, models_dir=mdir: real(name, models_dir))
+    assert api._model_name({"model": "medium.en-q5_0"}) == "medium.en-q5_0"

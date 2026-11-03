@@ -11,8 +11,10 @@ and the Settings list will show it; nothing else changes.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import platform
+import ssl
 import shutil
 import subprocess
 import threading
@@ -115,6 +117,17 @@ def installed_paths(models_dir: Path = MODELS_DIR) -> dict[str, Path]:
     return found
 
 
+def ssl_context() -> ssl.SSLContext:
+    """python.org's Python ships no CA bundle, so urllib fails TLS against
+    Hugging Face; use certifi's, which requirements.txt pins."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+@functools.lru_cache(maxsize=1)
 def system_info() -> dict:
     """Chip and memory of this Mac, read at runtime."""
     memory_gb = None
@@ -216,6 +229,7 @@ class ModelDownloader:
         self._thread: threading.Thread | None = None
         self._cancel = threading.Event()
         self._state: dict = {}
+        self._seq = 0  # one per download, so the page reports each outcome once
 
     def start(self, model_id: str, system: dict | None = None) -> dict:
         m = self._registry.get(model_id)
@@ -234,8 +248,9 @@ class ModelDownloader:
             if msg:
                 return {"error": msg}
             self._cancel.clear()
+            self._seq += 1
             self._state = {"id": m.id, "state": "downloading", "done": 0,
-                           "total": m.bytes, "error": None}
+                           "total": m.bytes, "error": None, "seq": self._seq}
             self._thread = threading.Thread(target=self._run, args=(m,),
                                             name="model-download", daemon=True)
             self._thread.start()
@@ -276,7 +291,8 @@ class ModelDownloader:
             done = 0
             req = urllib.request.Request(f"{self._base}/{m.filename}",
                                          headers={"User-Agent": "Voisr"})
-            with urllib.request.urlopen(req, timeout=30) as resp, \
+            with urllib.request.urlopen(req, timeout=30,
+                                        context=ssl_context()) as resp, \
                     open(part, "wb") as out:
                 while True:
                     if self._cancel.is_set():

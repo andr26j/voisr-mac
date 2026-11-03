@@ -64,3 +64,38 @@ def test_summarize():
             {"clip": "b", "seconds": 3.0, "reference": "c d", "hypothesis": "c x"}]
     s = bench.summarize("base.en", rows, 300.0)
     assert (s["clips"], s["wer"], s["median_s"], s["peak_mb"]) == (2, 0.25, 2.0, 300.0)
+
+
+def _wav(path, samples):
+    import array, wave
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+        w.writeframes(array.array("h", samples).tobytes())
+
+
+def test_prepare_clip_trims_a_copy_and_never_the_corpus_file(tmp_path):
+    import math
+    corpus, work = tmp_path / "c", tmp_path / "w"
+    corpus.mkdir(); work.mkdir()
+    tone = [int(8000 * math.sin(i / 5)) for i in range(16000)]
+    wav = corpus / "a.wav"
+    _wav(wav, [0] * 32000 + tone + [0] * 32000)
+    before = wav.read_bytes()
+    out = bench.prepare_clip(wav, work)
+    assert out is not None and out.parent == work
+    assert wav.read_bytes() == before
+    assert out.stat().st_size < len(before)
+
+
+def test_prepare_clip_drops_what_the_gate_rejects(tmp_path):
+    wav = tmp_path / "silent.wav"
+    _wav(wav, [0] * 16000)
+    work = tmp_path / "w"; work.mkdir()
+    assert bench.prepare_clip(wav, work) is None
+
+
+def test_summarize_ignores_gated_rows_for_latency():
+    rows = [{"clip": "a", "seconds": 2.0, "reference": "a", "hypothesis": "a"},
+            {"clip": "b", "seconds": None, "gated": True, "reference": "b", "hypothesis": ""}]
+    s = bench.summarize("m", rows, None)
+    assert s["median_s"] == 2.0 and s["wer"] == 0.5

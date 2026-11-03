@@ -47,8 +47,10 @@ import json
 import re
 import resource
 import statistics
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -127,7 +129,7 @@ def installed_models(models_dir: Path) -> list[str]:
 
 
 def summarize(model: str, rows: list[dict], peak_mb: float | None) -> dict:
-    latencies = [r["seconds"] for r in rows]
+    latencies = [r["seconds"] for r in rows if r["seconds"] is not None]
     return {
         "model": model,
         "clips": len({r["clip"] for r in rows}),
@@ -136,6 +138,25 @@ def summarize(model: str, rows: list[dict], peak_mb: float | None) -> dict:
         "p95_s": percentile(latencies, 95),
         "peak_mb": peak_mb,
     }
+
+
+def prepare_clip(wav: Path, workdir: Path) -> Path | None:
+    """The audio the app would really transcribe: gated, then trimmed, on a
+    copy (trim_wav edits in place; the corpus files must never change).
+    None when the app's speech gate would reject the clip."""
+    from voisr import speech_gate
+    copy = Path(workdir) / wav.name
+    shutil.copyfile(wav, copy)
+    span = speech_gate.gate_wav(copy)
+    if span is None:
+        return copy  # unreadable to the gate: the app skips it and transcribes
+    if span.verdict in ("all_zeros", "no_speech"):
+        return None
+    try:
+        speech_gate.trim_wav(copy, span.start, span.end)
+    except Exception:
+        pass  # an untrimmed clip still transcribes
+    return copy
 
 
 def run_model(model: str, clips, runs: int, config: dict, models_dir: Path) -> dict:
@@ -147,17 +168,28 @@ def run_model(model: str, clips, runs: int, config: dict, models_dir: Path) -> d
 
     dictionary = config.get("dictionary", {})
     prompt = glossary_prompt(dictionary)
-    path = Path(models_dir) / f"ggml-{model}.bin"
-    transcribe(clips[0][0], model_path=path, prompt=prompt)  # warm-up, not timed
+    from voisr.models import filename_for
+    path = Path(models_dir) / filename_for(model)
     rows = []
-    for wav, reference in clips:
-        for _ in range(runs):
-            started = time.perf_counter()
-            raw = transcribe(wav, model_path=path, prompt=prompt)
-            seconds = time.perf_counter() - started
-            rows.append({"clip": wav.name, "seconds": seconds,
-                         "reference": reference,
-                         "hypothesis": clean(raw, dictionary=dictionary)})
+    with tempfile.TemporaryDirectory(prefix="voisr-bench-") as work:
+        prepared = [(wav, prepare_clip(wav, Path(work)), ref) for wav, ref in clips]
+        usable = [p for _, p, _ in prepared if p is not None]
+        if usable:
+            transcribe(usable[0], model_path=path, prompt=prompt)  # warm-up, not timed
+        for wav, audio, reference in prepared:
+            if audio is None:
+                # the app would refuse this clip, so there is nothing to
+                # time; it still counts against accuracy (empty result)
+                rows.append({"clip": wav.name, "seconds": None, "gated": True,
+                             "reference": reference, "hypothesis": ""})
+                continue
+            for _ in range(runs):
+                started = time.perf_counter()
+                raw = transcribe(audio, model_path=path, prompt=prompt)
+                seconds = time.perf_counter() - started
+                rows.append({"clip": wav.name, "seconds": seconds,
+                             "reference": reference,
+                             "hypothesis": clean(raw, dictionary=dictionary)})
     peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss / (1024 * 1024)
     result = summarize(model, rows, peak)
     result["rows"] = rows

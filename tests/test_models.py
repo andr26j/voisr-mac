@@ -215,3 +215,26 @@ def test_unknown_blocked_and_installed_models_are_refused(tmp_path, server):
     intel = Model("i", "e", "I", "d", "ggml-i.bin", 5, "0" * 64, 4, True, "MIT")
     d2 = ModelDownloader(tmp_path, server["url"], registry=(intel,))
     assert "Apple Silicon" in d2.start("i", {"apple_silicon": False})["error"]
+
+
+def test_ssl_context_uses_certifi_bundle():
+    import ssl
+    certifi = pytest.importorskip("certifi")
+    ctx = models.ssl_context()
+    assert isinstance(ctx, ssl.SSLContext) and ctx.verify_mode == ssl.CERT_REQUIRED
+    assert "certifi" in certifi.where()
+
+
+def test_requirements_pin_certifi():
+    reqs = (Path(__file__).resolve().parent.parent / "requirements.txt").read_text()
+    assert any(l.startswith("certifi==") for l in reqs.splitlines())
+
+
+def test_system_info_is_cached(monkeypatch):
+    calls = []
+    monkeypatch.setattr(models.subprocess, "run",
+                        lambda *a, **k: calls.append(a) or type("R", (), {"stdout": "8589934592"})())
+    models.system_info.cache_clear()
+    models.system_info(); models.system_info()
+    assert len(calls) == 2  # memsize + brand string, once
+    models.system_info.cache_clear()

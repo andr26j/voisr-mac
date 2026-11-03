@@ -566,3 +566,44 @@ test("a download in progress disables other Download buttons", (t) => {
   assert.match(textOf(a), /Downloading… 50%/);
   assert.ok(buttons(b)[0].getAttribute("disabled") !== null);
 });
+
+test("a download outcome that arrives before the first render is reported once", (t) => {
+  const toasts = [];
+  const s = mountSettings(t, {});
+  s.V.ui.toast = (m) => toasts.push(m);
+  const view = { models: [ROW({ id: "a" })], system: {},
+    download: { state: "error", error: "Checksum mismatch", seq: 3, id: "a" } };
+  s.V.views.settings.renderModels(view);
+  s.V.views.settings.renderModels(view);
+  assert.deepEqual(toasts, ["Checksum mismatch"]);
+  s.V.views.settings.renderModels({ ...view, download: { state: "done", seq: 4, id: "a" } });
+  assert.deepEqual(toasts, ["Checksum mismatch", "Model downloaded"]);
+});
+
+test("deleting a Custom model needs a second click after a real pause; a registry model does not", async (t) => {
+  const calls = [];
+  const s = mountSettings(t, {
+    delete_model: async (id) => { calls.push(id); return { ok: true }; },
+    get_models: async () => ({ models: [], system: {}, download: { state: "idle" } }),
+    get_config: async () => ({}), get_hotkey_status: async () => null,
+    hotkey_display: async () => ({}),
+  }, ["setTimeout", "Date"]);
+  s.V.views.settings.renderModels({
+    models: [ROW({ id: "mine", installed: true, custom: true }),
+             ROW({ id: "reg", installed: true })],
+    system: {}, download: { state: "idle" } });
+  const [mine, reg] = s["model-list"].children;
+  const del = (row) => buttons(row).find((b) => b.dataset.act === "delete");
+  const click = (b) => s["model-list"].dispatch("click", { target: b });
+
+  await click(del(reg));
+  assert.deepEqual(calls, ["reg"]);
+
+  await click(del(mine));                       // arms
+  assert.deepEqual(calls, ["reg"]);
+  await click(del(mine));                       // too soon: ignored
+  assert.deepEqual(calls, ["reg"]);
+  t.mock.timers.tick(700);
+  await click(del(mine));                       // confirmed
+  assert.deepEqual(calls, ["reg", "mine"]);
+});

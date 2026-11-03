@@ -240,17 +240,18 @@ window.Voisr = window.Voisr || {};
       m.custom ? "Custom" : "", benchmarkText(m.benchmark)].filter(Boolean).join(" · ");
     const buttons = [];
     if (m.installed && !m.active) {
-      buttons.push(el("button", { type: "button", class: "btn-secondary",
+      buttons.push(el("button", { type: "button", class: "btn-secondary model-btn",
         data: { act: "use", id: m.id }, text: "Use" }));
     }
     if (!m.installed && !m.custom) {
-      buttons.push(el("button", { type: "button", class: "btn-secondary",
+      buttons.push(el("button", { type: "button", class: "btn-secondary model-btn",
         data: { act: "download", id: m.id }, text: "Download",
         disabled: (m.blocked || busy) ? true : null }));
     }
     if (m.installed && !m.active) {
-      buttons.push(el("button", { type: "button", class: "btn-danger",
-        data: { act: "delete", id: m.id }, text: "Delete" }));
+      buttons.push(el("button", { type: "button", class: "btn-danger model-btn",
+        data: { act: "delete", id: m.id, custom: m.custom ? "1" : "0" },
+        text: "Delete" }));
     }
     return el("div", { class: "model-row" + (m.active ? " active" : ""),
         data: { id: m.id } },
@@ -281,7 +282,20 @@ window.Voisr = window.Voisr || {};
         .filter(Boolean);
       note.textContent = bits.length ? `This Mac: ${bits.join(", ")}.` : "";
     }
+    reportDownloadOutcome(models.download);
     if (models.download && models.download.state === "downloading") pollDownload();
+  }
+
+  /* A download can finish while Settings is closed or before its first
+     render. The server keeps the last outcome and numbers each download, so
+     the page reports a given outcome once -- not on every later render. */
+  let reportedDownloadSeq = 0;
+  function reportDownloadOutcome(d) {
+    if (!d || !d.seq || d.seq === reportedDownloadSeq) return;
+    if (d.state === "error") V.ui.toast(d.error || "Download failed");
+    else if (d.state === "done") V.ui.toast("Model downloaded");
+    else return;
+    reportedDownloadSeq = d.seq;
   }
 
   let downloadPoll = null;
@@ -296,14 +310,24 @@ window.Voisr = window.Voisr || {};
         pollDownload();
         return;
       }
-      if (d && d.state === "error") V.ui.toast(d.error || "Download failed");
-      else if (d && d.state === "done") V.ui.toast("Model downloaded");
+      reportDownloadOutcome(d);
       render();
     }, 1000);
   }
 
+  /* A Custom model is the user's own file, and deleting it is permanent, so
+     it asks twice -- the same arm/confirm as Clear history. Registry models
+     can be downloaded again and stay one click. */
+  let modelArmed = null;  // { id, at, timer }
+
+  function disarmModelDelete(btn) {
+    if (modelArmed) clearTimeout(modelArmed.timer);
+    modelArmed = null;
+    if (btn) { btn.classList.remove("armed"); btn.textContent = "Delete"; }
+  }
+
   async function onModelClick(e) {
-    const btn = e.target.closest("button");
+    const btn = e.target.closest(".model-btn");
     if (!btn || !btn.dataset || !btn.dataset.act) return;
     const { act, id } = btn.dataset;
     if (act === "use") {
@@ -313,6 +337,18 @@ window.Voisr = window.Voisr || {};
       const res = await V.ui.tryApi(V.api().download_model(id), "Download model");
       if (res && res.error) V.ui.toast(res.error);
     } else if (act === "delete") {
+      if (btn.dataset.custom === "1") {
+        if (!modelArmed || modelArmed.id !== id) {
+          disarmModelDelete();
+          btn.classList.add("armed");
+          btn.textContent = "Click again to delete the file";
+          modelArmed = { id, at: Date.now(),
+            timer: setTimeout(() => disarmModelDelete(btn), 4000) };
+          return;
+        }
+        if (Date.now() - modelArmed.at < 600) return;  // a double-click isn't consent
+        disarmModelDelete(btn);
+      }
       const res = await V.ui.tryApi(V.api().delete_model(id), "Delete model");
       if (res && res.error) V.ui.toast(res.error);
     }

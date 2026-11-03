@@ -1,4 +1,5 @@
 import functools
+import inspect
 import json
 import re
 import threading
@@ -1414,6 +1415,7 @@ class Api:
         self._config_path = Path(config_path)
         self._models_dir = models_dir  # None = transcriber.MODELS_DIR
         self._model_downloader = model_downloader
+        self._model_downloader_lock = threading.Lock()
         self._system_info_fn = system_info_fn
         self._history = history or HistoryStore(ROOT / "data" / "history.jsonl")
         self._transcribe_fn = transcribe_fn
@@ -1421,6 +1423,11 @@ class Api:
         self._hotkey_service = hotkey_service
         self._capture_fn = capture_fn
         self._paste_fn = paste_fn
+        try:
+            self._paste_reports_sent = "on_sent" in inspect.signature(
+                paste_fn).parameters
+        except (TypeError, ValueError):
+            self._paste_reports_sent = False
         self._clipboard_fn = clipboard_fn
         # None = no check, so tests never probe the runner's real TCC state
         self._mic_check = mic_check
@@ -1465,15 +1472,19 @@ class Api:
         injected its own transcribe function and no model was involved."""
         if self._transcribe_fn is not None:
             return None
+        from voisr.models import id_from_path
         from voisr.transcriber import resolve_model
-        return resolve_model(cfg.get("model")).stem.removeprefix("ggml-")
+        return id_from_path(resolve_model(cfg.get("model")))
 
-    def _record_delivery_timings(self, item, t_start, t_cleaned, paste_started):
+    def _record_delivery_timings(self, item, t_start, paste_started, paste_sent=None):
         """Best effort, after delivery: the paste has already happened and the
-        history line already exists, so a failure here costs only the numbers."""
+        history line already exists, so a failure here costs only the numbers.
+        paste_sent is when Cmd-V went out; the clipboard-restore wait after it
+        (inject.PASTE_GRACE_S) is not time the user waited for their text. When
+        the paste function doesn't report it, fall back to now."""
         if item is None:
             return
-        now = self._clock()
+        now = paste_sent if paste_sent is not None else self._clock()
         timings = {"total": (now - t_start) * 1000}
         if paste_started is not None:
             timings["paste"] = (now - paste_started) * 1000
@@ -1671,6 +1682,7 @@ class Api:
         fallback_safe = True
         typing_generation = None
         paste_started = None
+        paste_sent = [None]  # clock reading when the paste function sent Cmd-V
         if session.paste_requested and cfg.get("paste") and not self._quitting:
             paste_started = self._clock()
             with self._paste_state_lock:
@@ -1682,7 +1694,10 @@ class Api:
                     and not self._last_paste_text[-1].isspace()
                 )
             try:
-                pasted = self._paste_fn((" " if join else "") + text)
+                pasted = self._paste_fn(
+                    (" " if join else "") + text,
+                    **({"on_sent": lambda: paste_sent.__setitem__(0, self._clock())}
+                       if self._paste_reports_sent else {}))
             except PasteDeliveryError as error:
                 pasted = error.pasted
                 fallback_safe = error.fallback_safe
@@ -1704,7 +1719,7 @@ class Api:
             except Exception as error:
                 clipboard_error = error
 
-        self._record_delivery_timings(item, t_start, t_cleaned, paste_started)
+        self._record_delivery_timings(item, t_start, paste_started, paste_sent[0])
 
         fields = {"text": text, "copied": copied, "pasted": pasted}
         if item is not None:
@@ -2069,9 +2084,10 @@ class Api:
 
     def _downloader(self):
         from voisr.models import ModelDownloader
-        if self._model_downloader is None:
-            self._model_downloader = ModelDownloader(self._models_path())
-        return self._model_downloader
+        with self._model_downloader_lock:
+            if self._model_downloader is None:
+                self._model_downloader = ModelDownloader(self._models_path())
+            return self._model_downloader
 
     def _system_info(self):
         from voisr.models import system_info

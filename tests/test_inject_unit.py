@@ -369,3 +369,24 @@ def test_a_password_is_restored_when_the_paste_never_happened():
 def test_the_restore_waits_long_enough_for_a_busy_app():
     # 300 ms was shorter than an Electron app's stall on a large paste
     assert inject.PASTE_GRACE_S >= 1.0
+
+
+def test_on_sent_fires_after_cmd_v_and_before_the_restore_wait():
+    adapter = FakeAdapter()
+    order = []
+    inject._paste_with_adapter(
+        "hello", adapter=adapter, post_cmd_v=lambda: order.append("v") or True,
+        applescript_cmd_v=lambda: False, sleeper=lambda s: order.append("sleep"),
+        on_sent=lambda: order.append("sent"))
+    assert order == ["v", "sent", "sleep"]
+
+
+def test_on_sent_is_not_called_when_the_paste_is_blocked():
+    adapter = FakeAdapter()
+    called = []
+    with pytest.raises(inject.PasteDeliveryError):
+        inject._paste_with_adapter(
+            "hello", adapter=adapter, post_cmd_v=lambda: False,
+            applescript_cmd_v=lambda: False, sleeper=lambda s: None,
+            on_sent=lambda: called.append(1))
+    assert called == []
