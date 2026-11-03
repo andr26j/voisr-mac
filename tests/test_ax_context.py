@@ -294,6 +294,44 @@ def test_tracker_forgets_a_finished_dictation():
     tracker.close()
 
 
+def test_a_capture_after_forget_cannot_bring_the_session_back():
+    ax = FakeAX(textbox("text"))
+    tracker = FocusTracker(ax, enabled=lambda: True)
+    tracker.forget(7)
+    tracker.capture_press(7)
+    tracker.capture_release(7)
+    assert tracker.session(7) is None and tracker._sessions == {}
+    tracker.worker.submit(lambda: None).result(timeout=2)
+    assert ax.calls == [] and ax.front_calls == 0
+    tracker.close()
+
+
+def test_a_capture_queued_before_forget_reads_nothing():
+    release = threading.Event()
+    ax = FakeAX(textbox("text"))
+    tracker = FocusTracker(ax, enabled=lambda: True)
+    tracker.worker.submit(lambda: release.wait(5))   # keeps the next job queued
+    tracker.capture_press(3)
+    tracker.forget(3)
+    release.set()
+    tracker.worker.submit(lambda: None).result(timeout=2)
+    assert ax.calls == [] and ax.front_calls == 0
+    tracker.close()
+
+
+def test_retired_tracking_stays_bounded_and_still_refuses_old_sequences():
+    tracker = FocusTracker(FakeAX(textbox("text")), enabled=lambda: True)
+    for sequence in range(1, 1000):
+        tracker.forget(sequence)
+    assert len(tracker._retired) <= tracker.MAX_RETIRED
+    tracker.capture_press(1)     # long gone
+    tracker.capture_press(999)
+    assert tracker._sessions == {}
+    tracker.capture_press(1000)  # a new dictation still works
+    assert tracker.session(1000) is not None
+    tracker.close()
+
+
 def _done(capture):
     from concurrent.futures import Future
     future = Future()

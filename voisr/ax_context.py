@@ -388,6 +388,7 @@ class SessionFocus:
     release: Future | None = None
     press_ms: float = 0.0
     release_ms: float = 0.0
+    retired: bool = False  # the dictation is over; a capture still queued skips
 
     @staticmethod
     def _finished(future) -> FocusContext | None:
@@ -435,6 +436,8 @@ class FocusTracker:
     `enabled` is read inside each job, so turning use_screen_context off stops
     even a capture already queued."""
 
+    MAX_RETIRED = 64
+
     def __init__(self, adapter, enabled: Callable[[], bool], worker: AXWorker | None = None,
                  budget_s: float = DEFAULT_BUDGET_S,
                  clock: Callable[[], float] = time.monotonic):
@@ -445,6 +448,11 @@ class FocusTracker:
         self._clock = clock
         self._lock = threading.Lock()
         self._sessions: dict[int, SessionFocus] = {}
+        # Retired sequences, so a capture queued just after forget() can't
+        # bring one back and keep its screen text until Quit. Bounded: session
+        # sequences only go up, so everything at or below the floor is retired.
+        self._retired: set[int] = set()
+        self._retired_floor = 0
 
     def enabled(self) -> bool:
         try:
@@ -453,7 +461,7 @@ class FocusTracker:
             return False
 
     def _run_capture(self, state: SessionFocus, slot: str, textbox_only: bool):
-        if not self.enabled():
+        if state.retired or not self.enabled():
             return None
         started = self._clock()
         try:
@@ -462,14 +470,17 @@ class FocusTracker:
         finally:
             setattr(state, f"{slot}_ms", (self._clock() - started) * 1000)
 
-    def _state(self, sequence) -> SessionFocus:
+    def _state(self, sequence) -> SessionFocus | None:
+        """None for a dictation that is already over."""
+        if sequence <= self._retired_floor or sequence in self._retired:
+            return None
         return self._sessions.setdefault(sequence, SessionFocus())
 
     def capture_press(self, sequence) -> None:
         """Once per dictation. Only queues; never blocks its caller."""
         with self._lock:
             state = self._state(sequence)
-            if state.press is not None:
+            if state is None or state.press is not None:
                 return
             state.press = self.worker.submit(
                 lambda: self._run_capture(state, "press", False))
@@ -477,7 +488,7 @@ class FocusTracker:
     def capture_release(self, sequence) -> None:
         with self._lock:
             state = self._state(sequence)
-            if state.release is not None:
+            if state is None or state.release is not None:
                 return
             state.release = self.worker.submit(
                 lambda: self._run_capture(state, "release", True))
@@ -489,7 +500,14 @@ class FocusTracker:
     def forget(self, sequence) -> None:
         """The dictation is over; its screen text goes with it."""
         with self._lock:
-            self._sessions.pop(sequence, None)
+            state = self._sessions.pop(sequence, None)
+            if state is not None:
+                state.retired = True
+            self._retired.add(sequence)
+            if len(self._retired) > self.MAX_RETIRED:
+                oldest = min(self._retired)
+                self._retired.discard(oldest)
+                self._retired_floor = max(self._retired_floor, oldest)
 
     def read_now(self, budget_s: float) -> FocusContext | None:
         """A textbox capture on the worker, waited for at most budget_s. None
