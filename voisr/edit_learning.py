@@ -290,6 +290,19 @@ class EditWatcher:
                 self._thread.start()
             self._cond.notify_all()
 
+    def end_for_snippet(self, focus) -> None:
+        """A snippet is about to land. It must never read as an edit, so windows
+        on its field end now, on what they have seen so far and the release
+        capture, which was taken before it. Not knowing the field ends them all."""
+        known = focus.element_id if focus is not None else None
+        with self._cond:
+            for other in list(self._windows):
+                if not other.done and known in (None, other.element_id):
+                    self._ended.append(self._finish_locked(
+                        other, "next_paste",
+                        closing=self._closing_read(other, focus) if known else None))
+            self._cond.notify_all()
+
     def _schedule_locked(self, window: _Window) -> None:
         due = window.started + READ_AT_S[window.next_read]
         heapq.heappush(self._heap, (due, next(self._order), window))

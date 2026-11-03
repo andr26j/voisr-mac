@@ -26,6 +26,8 @@ from voisr.recording_queue import (
     RecordingSession,
     SessionResult,
 )
+from voisr.snippets import (SnippetError, find_snippet, tidy_trigger, trigger_hints,
+                            trigger_warning, with_saved)
 from voisr.status_item import StatusItem
 from voisr.suggestions import (ACCEPTED, AUTO_ADDED, DISMISSED, PENDING, SuggestionStore,
                                dictionary_allows, ready_to_auto_add)
@@ -326,12 +328,13 @@ def _glossary_text(terms) -> str:
     return "Glossary: " + ", ".join(terms) + "."
 
 
-def glossary_prompt(dictionary, context_terms=()) -> str | None:
-    """Bias whisper toward the user's spellings: 'Glossary: A, B, C.' Dictionary
-    terms keep priority; terms from the screen only fill what budget is left,
-    and only ever bias recognition (clean() does not substitute them)."""
+def glossary_prompt(dictionary, context_terms=(), triggers=()) -> str | None:
+    """Bias whisper toward the user's spellings: 'Glossary: A, B, C.' Snippet
+    triggers are kept first when over budget, then Dictionary terms; terms from
+    the screen only fill what budget is left, and only ever bias
+    recognition (clean() does not substitute them)."""
     seen = []
-    for written in reversed(list((dictionary or {}).values())):
+    for written in reversed([*(dictionary or {}).values(), *triggers]):
         if written not in seen:
             seen.append(written)
         if len(seen) >= GLOSSARY_MAX_TERMS:
@@ -1605,13 +1608,15 @@ class Api:
         any terms read off the screen.
         Returns (text, info): see transcriber.transcribe_routed."""
         from voisr.transcriber import resolve_model, transcribe_routed
+        triggers = trigger_hints(cfg.get("snippets"))
         if self._warm is not None:
             self._warm.configure(self.get_config().get("model_unload", "min5"))
         return transcribe_routed(
             wav, resolve_model(cfg.get("model"), self._models_path()),
-            prompt=glossary_prompt(cfg.get("dictionary"), terms),
+            prompt=glossary_prompt(cfg.get("dictionary"), terms, triggers),
             # "" rather than None: no prompt at all, not the server's
-            cli_prompt=glossary_prompt(cfg.get("dictionary"), cli_safe_terms(terms)) or "",
+            cli_prompt=glossary_prompt(cfg.get("dictionary"), cli_safe_terms(terms),
+                                       triggers) or "",
             server=self._warm,
             # the setting now, not the one the dictation began under: a
             # queued dictation must not undo a change made in Settings since
@@ -1719,6 +1724,18 @@ class Api:
         except Exception as error:
             print(f"Voisr: edit learning skipped ({error.__class__.__name__})", flush=True)
 
+    def _end_learning_for_snippet(self, session) -> None:
+        """Before the text can reach a field, where a window still open on the
+        last dictation would read it as the user's edit. Copied rather than
+        pasted, it can be pasted there by hand, so this doesn't wait to find out."""
+        if self._edit_watcher is None:
+            return
+        try:
+            state = self._focus.session(session.sequence)
+            self._edit_watcher.end_for_snippet(state.release_now() if state is not None else None)
+        except Exception as error:
+            print(f"Voisr: edit learning skipped ({error.__class__.__name__})", flush=True)
+
     def _edit_window_ended(self, result) -> None:
         """Watcher thread. Only counts and corrected pairs get this far."""
         if result.item_id is not None:
@@ -1822,6 +1839,32 @@ class Api:
         """Bridge: never suggested or auto-added again."""
         if not isinstance(pair_id, str) or not self._suggestions.set_status(pair_id, DISMISSED):
             return {"error": "that suggestion has gone"}
+        return {"ok": True}
+
+    def get_snippets(self):
+        """Bridge: the Snippets page's rows, with any warning about the trigger."""
+        return [{"trigger": trigger, "text": text, "warning": trigger_warning(trigger)}
+                for trigger, text in (self.get_config().get("snippets") or {}).items()]
+
+    def save_snippet(self, old_trigger, trigger, text):
+        """Bridge: add one (old_trigger None) or replace one. The one place that
+        decides what may be saved, so the page can't disagree with matching."""
+        with self._config_lock:
+            snippets = self.get_config().get("snippets") or {}
+            try:
+                saved = with_saved(snippets, old_trigger, trigger, text)
+            except SnippetError as error:
+                return {"error": str(error)}
+            self._update_config({"snippets": saved})
+        tidy = tidy_trigger(trigger)
+        return {"ok": True, "trigger": tidy, "warning": trigger_warning(tidy)}
+
+    def delete_snippet(self, trigger):
+        """Bridge. Removing one that has already gone is not a failure."""
+        with self._config_lock:
+            snippets = dict(self.get_config().get("snippets") or {})
+            if isinstance(trigger, str) and snippets.pop(trigger, None) is not None:
+                self._update_config({"snippets": snippets})
         return {"ok": True}
 
     def _make_verifier(self, session, text, check: dict):
@@ -2083,8 +2126,14 @@ class Api:
             raw, info = self._transcribe_with_terms(wav, cfg, terms)
             t_transcribed = self._clock()
             fired = {}
-            text = clean(raw, dictionary=cfg.get("dictionary", {}),
-                         on_replace=lambda key: fired.__setitem__(key, fired.get(key, 0) + 1))
+            # Before clean(): a snippet matches what Whisper heard, and its text
+            # is pasted as saved, with no cleanup or Dictionary changes.
+            snippet = find_snippet(raw, cfg.get("snippets"))
+            if snippet is not None:
+                text = snippet.text
+            else:
+                text = clean(raw, dictionary=cfg.get("dictionary", {}),
+                             on_replace=lambda key: fired.__setitem__(key, fired.get(key, 0) + 1))
             t_cleaned = self._clock()
         except Exception as error:
             return SessionResult.failure(
@@ -2094,15 +2143,19 @@ class Api:
             return SessionResult.failure(
                 session.sequence, "transcription",
                 "nothing transcribed — try speaking a bit longer")
+        if snippet is not None:
+            self._end_learning_for_snippet(session)
 
         item = None
         warning = None
         try:
             # Written before pasting so the dictation is durable whatever
             # the paste does. Paste and total are merged in afterwards.
+            # A snippet's row is its trigger: personal details stay out of it.
             item = self._history.add(
-                text, duration_s=duration, model=self._model_name(cfg),
-                mode=info["mode"],
+                text if snippet is None else snippet.trigger,
+                duration_s=duration, model=self._model_name(cfg),
+                mode=info["mode"], snippet=snippet is not None,
                 timings_ms={"transcribe": (t_transcribed - t_start) * 1000,
                             "cleanup": (t_cleaned - t_transcribed) * 1000,
                             **info["timings"]})
@@ -2122,8 +2175,11 @@ class Api:
             paste_started = self._clock()
             with self._paste_state_lock:
                 typing_generation = self._typing_generation
+                # A snippet is exact: a leading space can get an email address
+                # refused by the field it was pasted into.
                 join = (
-                    self._last_paste_text
+                    snippet is None
+                    and self._last_paste_text
                     and typing_generation == self._last_paste_typing_generation
                     and self._clock() - self._last_paste_ts <= self.SPACE_JOIN_WINDOW_S
                     and not self._last_paste_text[-1].isspace()
@@ -2171,7 +2227,8 @@ class Api:
                                       extra_timings, details)
 
         self._bump_used(fired)
-        self._open_edit_window(item, text, check, terms)
+        if snippet is None:
+            self._open_edit_window(item, text, check, terms)
 
         fields = {"text": text, "copied": copied, "pasted": pasted}
         if verdict is not None:

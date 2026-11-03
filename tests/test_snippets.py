@@ -4,8 +4,10 @@ import json
 import pytest
 
 from voisr.app import DEFAULT_CONFIG, config_errors, load_config
-from voisr.snippets import (SnippetError, find_snippet, is_valid, normalize_trigger, salvage,
-                            trigger_warning, with_saved)
+from voisr.snippets import (MAX_TRIGGER_HINTS, SnippetError, find_snippet, is_valid,
+                            normalize_trigger, salvage, trigger_hints, trigger_warning,
+                            with_saved)
+from voisr.ui import GLOSSARY_MAX_CHARS, GLOSSARY_MAX_TERMS, glossary_prompt
 
 SAVED = {"my email": "andre@example.com", "Review Prompt": "Please review:\n\n- this\n"}
 
@@ -135,3 +137,34 @@ def test_bad_entries_on_disk_go_and_good_ones_stay(tmp_path, capsys):
 def test_salvage_keeps_the_entry_a_match_would_have_used():
     both = {"my email": "first", "MY EMAIL": "second"}
     assert find_snippet("my email", both).text == salvage(both)["my email"]
+
+
+# ---- hints
+
+
+def test_triggers_go_in_the_prompt_and_the_text_never_does():
+    prompt = glossary_prompt({"tariq": "Tareq"}, ["Zendesk"], trigger_hints(SAVED))
+    assert prompt == "Glossary: Tareq, my email, Review Prompt, Zendesk."
+    assert "example.com" not in prompt
+
+
+def test_no_snippets_leaves_the_prompt_as_it_was():
+    assert glossary_prompt({"tariq": "Tareq"}, ["Zendesk"], trigger_hints({})) == \
+        glossary_prompt({"tariq": "Tareq"}, ["Zendesk"])
+    assert glossary_prompt({}, [], trigger_hints(None)) is None
+
+
+def test_hints_are_capped_so_the_dictionary_keeps_room():
+    many = {f"phrase number {i}": "x" for i in range(MAX_TRIGGER_HINTS + 5)}
+    hints = trigger_hints(many)
+    assert len(hints) == MAX_TRIGGER_HINTS and hints[-1] == f"phrase number {MAX_TRIGGER_HINTS + 4}"
+    assert trigger_hints({"long " * 20: "x"}) == []
+    dictionary = {f"k{i}": f"Term{i}" for i in range(GLOSSARY_MAX_TERMS)}
+    prompt = glossary_prompt(dictionary, (), hints)
+    assert prompt.count(",") + 1 == GLOSSARY_MAX_TERMS and "Term39" in prompt and hints[0] in prompt
+
+
+def test_triggers_outlast_the_dictionary_when_the_prompt_is_too_long():
+    dictionary = {f"k{i}": "word" * 12 + str(i) for i in range(30)}
+    prompt = glossary_prompt(dictionary, (), ["my email"])
+    assert prompt.endswith("my email.") and len(prompt) <= GLOSSARY_MAX_CHARS

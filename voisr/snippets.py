@@ -8,6 +8,10 @@ from voisr.cleanup import NON_SPEECH_RE
 
 _APOSTROPHES = str.maketrans({"’": "'", "‘": "'"})
 _OUTER_PUNCTUATION = re.compile(r"^[\W_]+|[\W_]+$")
+# Triggers are too short to survive Whisper without a hint: 81-84% came out
+# exact without, 100% with (scripts/bench_triggers.py, synthetic voices).
+MAX_TRIGGER_HINTS = 20      # the rest of the prompt is the Dictionary's
+MAX_TRIGGER_HINT_CHARS = 60
 SHORT_TRIGGER_LETTERS = 6  # fewer, or a single word, is easy to say by accident
 # What Whisper tends to make of a stray noise on its own.
 _NOISE_PHRASES = {"thank you", "thanks", "thank you very much", "thanks for watching",
@@ -47,6 +51,13 @@ def find_snippet(raw: str, snippets) -> Snippet | None:
     return None
 
 
+def trigger_hints(snippets) -> list[str]:
+    """Triggers for the Whisper prompt, the newest last and so kept first. Only
+    triggers: the saved text never goes near a prompt."""
+    fitting = [trigger for trigger in (snippets or {}) if len(trigger) <= MAX_TRIGGER_HINT_CHARS]
+    return fitting[-MAX_TRIGGER_HINTS:]
+
+
 def _entry_ok(trigger, text) -> bool:
     return (isinstance(trigger, str) and isinstance(text, str)
             and bool(normalize_trigger(trigger)) and bool(text.strip()))
@@ -71,6 +82,10 @@ def salvage(snippets: dict) -> dict:
     return good
 
 
+def tidy_trigger(trigger: str) -> str:
+    return " ".join(trigger.split())
+
+
 def with_saved(snippets: dict, old_trigger, trigger, text) -> dict:
     """A copy with this snippet saved in place of old_trigger (None for a new
     one), or SnippetError. Only the trigger is tidied; the text stays exact."""
@@ -78,12 +93,12 @@ def with_saved(snippets: dict, old_trigger, trigger, text) -> dict:
         raise SnippetError("a snippet needs a phrase to say")
     if not isinstance(text, str) or not text.strip():
         raise SnippetError("a snippet needs text to paste")
-    trigger = " ".join(trigger.split())
+    trigger = tidy_trigger(trigger)
     key = normalize_trigger(trigger)
     for other in snippets:
         if other != old_trigger and normalize_trigger(other) == key:
             raise SnippetError(f"“{other}” already uses that phrase")
-    if old_trigger not in snippets:
+    if not isinstance(old_trigger, str) or old_trigger not in snippets:
         return {**snippets, trigger: text}
     return {(trigger if name == old_trigger else name): (text if name == old_trigger else saved)
             for name, saved in snippets.items()}
