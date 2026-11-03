@@ -119,6 +119,17 @@ class EditResult:
 
 
 @dataclass
+class _Ended:
+    """A finished window, waiting for the watcher thread to work out and hand
+    over its result. final is None when its reads yield nothing."""
+    item_id: str | None
+    reason: str
+    pasted: str = field(default="", repr=False)
+    final: str | None = field(default=None, repr=False)
+    terms: tuple[str, ...] = field(default=(), repr=False)
+
+
+@dataclass
 class _Window:
     item_id: str | None
     element: Any = field(repr=False)
@@ -162,28 +173,30 @@ class EditWatcher:
         self._heap: list = []
         self._order = itertools.count()
         self._windows: list[_Window] = []
+        self._ended: list[_Ended] = []  # for the watcher thread to deliver
         self._thread = None
         self._stopped = False
 
     def watch(self, item_id, focus, element_id, pasted: str, terms=()) -> None:
         """Open a window. `focus` is the release capture, read for its anchors;
         `pasted` is the text as sent. A second paste into the same element ends
-        the first window: its anchors no longer hold."""
+        the first window: its anchors no longer hold. Called on the dictation
+        queue, so this only records it: the differ, the file writes, the word
+        list and the config write all happen on the watcher thread."""
         before_anchor, after_anchor = anchors_from(focus)
         now = self._clock()
         window = _Window(item_id=item_id, element=focus.element, element_id=element_id,
                          bundle_id=focus.bundle_id, pasted=pasted.strip(),
                          before_anchor=before_anchor, after_anchor=after_anchor,
                          terms=tuple(terms), last_final=pasted.strip(), started=now)
-        ended = []
         with self._cond:
             if self._stopped:
                 return
-            for other in self._windows:
+            for other in list(self._windows):
                 if other.element_id == element_id and not other.done:
-                    ended.append(self._finish_locked(other, "next_paste"))
+                    self._ended.append(self._finish_locked(other, "next_paste"))
             while len(self._windows) >= MAX_WINDOWS:
-                ended.append(self._finish_locked(self._windows[0], "too_many"))
+                self._ended.append(self._finish_locked(self._windows[0], "too_many"))
             self._windows.append(window)
             self._schedule_locked(window)
             if self._autostart and self._thread is None:
@@ -191,30 +204,31 @@ class EditWatcher:
                                                 daemon=True)
                 self._thread.start()
             self._cond.notify_all()
-        for result in ended:
-            self._deliver(result)
 
     def _schedule_locked(self, window: _Window) -> None:
         due = window.started + READ_AT_S[window.next_read]
         heapq.heappush(self._heap, (due, next(self._order), window))
 
-    def _finish_locked(self, window: _Window, reason: str, *, keep: bool = True) -> EditResult:
+    def _finish_locked(self, window: _Window, reason: str, *, keep: bool = True) -> _Ended:
         window.done = True
         if window in self._windows:
             self._windows.remove(window)
-        pairs, corrected = [], 0
+        result = _Ended(window.item_id, reason)
         if keep and window.last_final is not None:
-            pairs, corrected = diff_candidates(window.pasted, window.last_final, window.terms)
-        result = EditResult(window.item_id, reason, pairs, corrected)
+            result.pasted, result.final = window.pasted, window.last_final
+            result.terms = window.terms
         # the text goes now; the object may sit in the heap until its next due
         window.pasted = window.last_final = window.before_anchor = window.after_anchor = ""
         window.terms = ()
         window.element = None
         return result
 
-    def _deliver(self, result: EditResult) -> None:
+    def _deliver(self, ended: _Ended) -> None:
         try:
-            self._on_end(result)
+            pairs, corrected = [], 0
+            if ended.final is not None:
+                pairs, corrected = diff_candidates(ended.pasted, ended.final, ended.terms)
+            self._on_end(EditResult(ended.item_id, ended.reason, pairs, corrected))
         except Exception as error:
             print(f"Voisr: edit learning skipped ({error.__class__.__name__})", flush=True)
 
@@ -279,6 +293,7 @@ class EditWatcher:
     def tick(self, now: float | None = None) -> None:
         """Run everything due. The thread calls this; so do tests."""
         now = self._clock() if now is None else now
+        self._deliver_ended()
         while True:
             with self._cond:
                 if not self._heap or self._heap[0][0] > now:
@@ -303,13 +318,21 @@ class EditWatcher:
                     window, reason, keep=reason not in ("rewrite", "setting_off", "secure"))
             self._deliver(result)
 
+    def _deliver_ended(self) -> None:
+        with self._cond:
+            ended, self._ended = self._ended, []
+        for result in ended:
+            self._deliver(result)
+
     def _run(self) -> None:
         while True:
             with self._cond:
                 if self._stopped:
                     return
                 wait = 3600.0
-                if self._heap:
+                if self._ended:
+                    wait = 0.0
+                elif self._heap:
                     wait = max(0.0, self._heap[0][0] - self._clock())
                 if wait > 0:
                     self._cond.wait(wait)
@@ -327,4 +350,5 @@ class EditWatcher:
             for window in list(self._windows):
                 self._finish_locked(window, "quit", keep=False)
             self._heap.clear()
+            self._ended.clear()
             self._cond.notify_all()

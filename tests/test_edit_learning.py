@@ -345,6 +345,8 @@ def test_next_paste_into_the_same_element_ends_the_first_window():
     focus = FocusContext(bundle_id="com.example.app", before_text="start ", after_text=" end",
                          element=box, element_id=box.id, caret_known=True)
     watcher.watch("item2", focus, box.id, "more", ())
+    assert results == [], "delivery belongs to the watcher thread"
+    watcher.tick()
     assert results[0].item_id == "item1" and results[0].reason == "next_paste"
     assert results[0].pairs == [("voiser", "Voisr")]
 
@@ -420,3 +422,37 @@ def test_the_thread_runs_a_window_end_to_end():
         time.sleep(0.01)
     watcher.stop()
     assert results and results[0].pairs == [("voiser", "Voisr")]
+
+
+def test_an_ended_window_is_delivered_on_the_watcher_thread_not_the_callers():
+    import threading
+    import time
+
+    box = textbox("start Voisr is great end")
+    delivered = threading.Event()
+    gate = threading.Event()
+    threads = []
+
+    def slow_on_end(result):
+        threads.append(threading.current_thread().name)
+        gate.wait(5)     # file writes, the word list, a config write
+        delivered.set()
+
+    class Worker:
+        def submit(self, fn):
+            from concurrent.futures import Future
+            future = Future()
+            future.set_result(fn())
+            return future
+
+    watcher = EditWatcher(FakeAX(box), Worker(), lambda: True, slow_on_end, budget_s=1.0)
+    focus = FocusContext(bundle_id="com.example.app", before_text="start ", after_text=" end",
+                         element=box, element_id=box.id, caret_known=True)
+    watcher.watch("first", focus, box.id, "voiser is great", ())
+    started = time.monotonic()
+    watcher.watch("second", focus, box.id, "more", ())   # ends the first
+    assert time.monotonic() - started < 0.5, "the dictation queue waited on delivery"
+    gate.set()
+    assert delivered.wait(5)
+    assert threads == ["voisr-edit-watch"]
+    watcher.stop()
