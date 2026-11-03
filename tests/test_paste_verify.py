@@ -190,3 +190,15 @@ def test_a_blocked_paste_never_verifies():
 
 def test_paste_at_cursor_takes_a_verifier():
     assert "verifier" in inspect.signature(inject.paste_at_cursor).parameters
+
+
+def test_old_clipboard_text_inside_a_reformatted_paste_is_not_a_miss():
+    text = "Dear team,\nplease review the diff.\nThanks"
+    landed = "Dear team, Please review the diff. Thanks!"
+    verdict = verify_paste("", landed, text, old_clipboard="review")
+    assert not verdict.missed
+
+
+def test_a_real_stale_clipboard_is_still_caught():
+    verdict = verify_paste("", "OLD COPY", "my saved text", old_clipboard="OLD COPY")
+    assert verdict.status == "stale_clipboard"

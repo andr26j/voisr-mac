@@ -69,7 +69,10 @@ def verify_paste(before: str | None, after: str | None, text: str,
     if _count(after_n, wanted) > _count(before_n, wanted):
         return Verdict("verified")
     old = _normal(old_clipboard) if old_clipboard else ""
-    if len(old) >= MIN_OLD_CLIPBOARD and _count(after_n, old) > _count(before_n, old):
+    # Old clipboard text inside the pasted text (likely in a long snippet) proves
+    # nothing: the paste itself would add it.
+    if (len(old) >= MIN_OLD_CLIPBOARD and old not in wanted
+            and _count(after_n, old) > _count(before_n, old)):
         return Verdict("stale_clipboard")
     # Apps strip newlines, change case and auto-format. Calling that a miss
     # would lose the user's clipboard and have them paste twice, so only a field
