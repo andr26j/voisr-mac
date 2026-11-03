@@ -1396,3 +1396,35 @@ def test_daily_carries_time_saved_per_day(tmp_path):
     assert daily[-1]["saved_seconds"] == 40
     assert daily[-2]["saved_seconds"] == 0
     assert all("saved_seconds" in d for d in daily)
+
+
+def test_old_lines_without_model_or_timings_stay_valid(tmp_path):
+    path = tmp_path / "h.jsonl"
+    path.write_text(json.dumps({"id": "old", "ts": 1.0, "text": "hi there",
+                                "words": 2, "duration_s": 1.5}) + "\n")
+    store = HistoryStore(path)
+    assert [i["id"] for i in store.list()] == ["old"]
+    assert store.stats()["dictations"] == 1
+    assert store.merge_timings("old", {"total": 12.4}) is True
+    assert store.list()[0]["timings_ms"] == {"total": 12}
+
+
+def test_add_records_model_and_whole_ms_timings(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    item = store.add("hello", 1.0, model="small.en",
+                     timings_ms={"transcribe": 812.6, "cleanup": 0.4,
+                                 "bad": float("nan"), "neg": -1})
+    assert item["model"] == "small.en"
+    assert item["timings_ms"] == {"transcribe": 813, "cleanup": 0}
+    assert store.list()[0]["timings_ms"] == item["timings_ms"]
+    assert "model" not in store.add("x", 1.0) and "timings_ms" not in store.add("y", 1.0)
+
+
+def test_merge_timings_keeps_earlier_keys_and_does_not_resurrect(tmp_path):
+    store = HistoryStore(tmp_path / "h.jsonl")
+    item = store.add("hello", 1.0, timings_ms={"transcribe": 100})
+    assert store.merge_timings(item["id"], {"paste": 20, "total": 130})
+    assert store.list()[0]["timings_ms"] == {"transcribe": 100, "paste": 20, "total": 130}
+    store.delete(item["id"])
+    assert store.merge_timings(item["id"], {"total": 1}) is False
+    assert store.list() == []

@@ -12,3 +12,7 @@ data/*.jsonl
 # brainstorming session artifacts
 .superpowers/
 .worktrees/
+
+# local benchmark corpus and results (your voice and words)
+bench_corpus/
+bench_results/

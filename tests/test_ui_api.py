@@ -274,7 +274,7 @@ def test_history_failure_warns_but_still_delivers(tmp_path):
         recorder_factory=FakeRecorder,
         transcribe_fn=lambda wav: "still usable",
         clipboard_fn=copied.append,
-        clock=iter([1.0, 2.0]).__next__,
+        clock=iter([1.0, 2.0] + [3.0] * 20).__next__,
     )
     try:
         api.start_recording()
@@ -1386,3 +1386,55 @@ def test_relaunch_app_cancels_the_waiter_if_quitting_fails(tmp_path, monkeypatch
     api.attach_window(StuckWindow())
     assert api.relaunch_app() == {"ok": False, "error": "couldn't quit"}
     assert Proc.killed is True
+
+
+def _ticking_clock(step=0.25):
+    state = {"t": 100.0}
+
+    def now():
+        state["t"] += step
+        return state["t"]
+    return now
+
+
+def test_history_item_gets_stage_timings_after_paste(tmp_path):
+    api = make_api(tmp_path, clock=_ticking_clock(), paste_fn=lambda text: True)
+    api.start_recording()
+    api.stop_recording(paste=True)
+    item = api._history.list()[0]
+    t = item["timings_ms"]
+    assert set(t) == {"transcribe", "cleanup", "paste", "total"}
+    assert t["transcribe"] == 250 and t["cleanup"] == 250
+    assert t["total"] >= t["transcribe"] + t["cleanup"] + t["paste"]
+    assert "model" not in item  # injected transcriber: no model to name
+
+
+def test_history_is_written_before_paste_and_survives_timing_failure(tmp_path):
+    seen = {}
+
+    class Store(HistoryStore):
+        def merge_timings(self, *a, **k):
+            raise OSError("disk full")
+
+    store = Store(tmp_path / "h.jsonl")
+
+    def paste(text):
+        seen["in_history_before_paste"] = [i["text"] for i in store.list()]
+        return True
+
+    api = make_api(tmp_path, history=store, paste_fn=paste, clock=_ticking_clock())
+    api.start_recording()
+    out = api.stop_recording(paste=True)
+    assert seen["in_history_before_paste"] == ["Hello world"]
+    assert out.get("pasted") is True
+    assert "error" not in out
+    assert [i["text"] for i in store.list()] == ["Hello world"]
+    assert "paste" not in store.list()[0]["timings_ms"]
+
+
+def test_no_paste_records_total_without_paste_time(tmp_path):
+    api = make_api(tmp_path, clock=_ticking_clock())
+    api.start_recording()
+    api.stop_recording()
+    t = api._history.list()[0]["timings_ms"]
+    assert "total" in t and "paste" not in t

@@ -1456,6 +1456,28 @@ class Api:
         return _transcribe(wav, model_path=resolve_model(cfg.get("model")),
                            prompt=glossary_prompt(cfg.get("dictionary")))
 
+    def _model_name(self, cfg):
+        """Model that transcribed this clip, or None when a test or caller
+        injected its own transcribe function and no model was involved."""
+        if self._transcribe_fn is not None:
+            return None
+        from voisr.transcriber import resolve_model
+        return resolve_model(cfg.get("model")).stem.removeprefix("ggml-")
+
+    def _record_delivery_timings(self, item, t_start, t_cleaned, paste_started):
+        """Best effort, after delivery: the paste has already happened and the
+        history line already exists, so a failure here costs only the numbers."""
+        if item is None:
+            return
+        now = self._clock()
+        timings = {"total": (now - t_start) * 1000}
+        if paste_started is not None:
+            timings["paste"] = (now - paste_started) * 1000
+        try:
+            self._history.merge_timings(item["id"], timings)
+        except Exception as error:
+            print(f"Voisr history: timings not recorded: {error}", flush=True)
+
     def _transcribe_audio(self, wav, cfg):
         if self._transcribe_fn is not None:
             return self._transcribe_fn(wav)
@@ -1612,9 +1634,12 @@ class Api:
             except Exception as error:
                 # an untrimmed clip still transcribes
                 print(f"Voisr audio: trim failed: {error}", flush=True)
+        t_start = self._clock()
         try:
             raw = self._transcribe_audio(wav, cfg)
+            t_transcribed = self._clock()
             text = clean(raw, dictionary=cfg.get("dictionary", {}))
+            t_cleaned = self._clock()
         except Exception as error:
             return SessionResult.failure(
                 session.sequence, "transcription",
@@ -1627,7 +1652,12 @@ class Api:
         item = None
         warning = None
         try:
-            item = self._history.add(text, duration_s=duration)
+            # Written before pasting so the dictation is durable whatever
+            # the paste does. Paste and total are merged in afterwards.
+            item = self._history.add(
+                text, duration_s=duration, model=self._model_name(cfg),
+                timings_ms={"transcribe": (t_transcribed - t_start) * 1000,
+                            "cleanup": (t_cleaned - t_transcribed) * 1000})
             self._notify_dictation()
         except Exception as error:
             warning = f"history failed: {error}"[:250]
@@ -1636,7 +1666,9 @@ class Api:
         paste_error = None
         fallback_safe = True
         typing_generation = None
+        paste_started = None
         if session.paste_requested and cfg.get("paste") and not self._quitting:
+            paste_started = self._clock()
             with self._paste_state_lock:
                 typing_generation = self._typing_generation
                 join = (
@@ -1667,6 +1699,8 @@ class Api:
                 copied = True
             except Exception as error:
                 clipboard_error = error
+
+        self._record_delivery_timings(item, t_start, t_cleaned, paste_started)
 
         fields = {"text": text, "copied": copied, "pasted": pasted}
         if item is not None:
