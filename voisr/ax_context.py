@@ -512,7 +512,20 @@ class MacAXAdapter:
         return self._describe(self._workspace.sharedWorkspace().frontmostApplication())
 
     def focused_element(self, timeout_s):
-        return self.attribute(self._system, "AXFocusedUIElement", timeout_s)
+        """System-wide first: it sees a panel that has focus without its app
+        being frontmost. It can also just refuse (seen as an instant
+        kAXErrorCannotComplete on macOS 27, for any app), so fall back to
+        asking the frontmost app."""
+        started = time.monotonic()
+        element = self.attribute(self._system, "AXFocusedUIElement", timeout_s)
+        if element is not UNREADABLE:
+            return element
+        pid = self.frontmost()[2]
+        if pid is None:
+            return UNREADABLE
+        return self.attribute(self._hi.AXUIElementCreateApplication(pid),
+                              "AXFocusedUIElement",
+                              timeout_s - (time.monotonic() - started))
 
     def attribute(self, element, name, timeout_s):
         hi = self._hi

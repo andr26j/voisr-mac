@@ -15,7 +15,8 @@ DEFAULT_CONFIG = {"hotkey": "alt_r", "paste": True, "device": ":0", "dictionary"
                   "show_widget": True, "pill_theme": "classic", "pill_color": None,
                   "appearance": "system", "launch_at_login": False, "model": None,
                   "event_tap": "active", "model_unload": "min5",
-                  "use_screen_context": True}
+                  "use_screen_context": True, "learn_from_edits": True,
+                  "dictionary_auto_add": True}
 
 
 def _is_str(v):
@@ -56,7 +57,8 @@ CONFIG_VALIDATORS = {
     "appearance": _is_str, "launch_at_login": _is_bool,
     "model": _is_optional_str, "hotkey_vk": _is_vk, "hotkey_label": _is_str,
     "event_tap": _is_tap_mode, "model_unload": _is_unload,
-    "use_screen_context": _is_bool,
+    "use_screen_context": _is_bool, "learn_from_edits": _is_bool,
+    "dictionary_auto_add": _is_bool,
 }
 
 

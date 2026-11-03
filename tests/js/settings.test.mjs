@@ -638,3 +638,38 @@ test("a successful 'keep model loaded' save becomes the one a later failure rest
   await settle();
   assert.equal(s["unload-select"].value, "hour1");
 });
+
+test("context switches show their dependency: off leaves nothing claiming to be on", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const env = loadVoisr(["js/ui.js", "js/api.js", "js/views/settings.js"]);
+  const saved = [];
+  env.window.pywebview = { api: {
+    clear_history: async () => ({ removed: 0 }),
+    set_config: async (u) => { saved.push(u); return { use_screen_context: false }; },
+  } };
+  const nodes = {};
+  for (const id of [...SETTINGS_IDS, "screen-context-toggle", "learn-toggle", "auto-add-toggle"]) {
+    nodes[id] = makeNode(id.endsWith("toggle") ? "input" : "div");
+    env.register(id, nodes[id]);
+  }
+  nodes["color-popover"].hidden = true;
+  env.V.views.settings.init();
+  const show = env.V.views.settings.showContext;
+  const state = () => ["screen-context-toggle", "learn-toggle", "auto-add-toggle"].map(
+    (id) => [nodes[id].checked, !!nodes[id].disabled]);
+
+  show({});   // defaults: all on
+  assert.deepEqual(state(), [[true, false], [true, false], [true, false]]);
+  show({ learn_from_edits: false });
+  assert.deepEqual(state(), [[true, false], [false, false], [false, true]]);
+  show({ use_screen_context: false });
+  assert.deepEqual(state(), [[false, false], [false, true], [false, true]]);
+  show({ dictionary_auto_add: false });
+  assert.deepEqual(state(), [[true, false], [true, false], [false, false]]);
+
+  nodes["screen-context-toggle"].checked = false;
+  nodes["screen-context-toggle"].dispatch("change", { target: nodes["screen-context-toggle"] });
+  await settle();
+  assert.deepEqual(saved, [{ use_screen_context: false }]);
+  assert.deepEqual(state(), [[false, false], [false, true], [false, true]]);
+});

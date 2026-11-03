@@ -84,7 +84,7 @@ if [ -d "$APPSUP" ]; then
 
   KEEP_HISTORY=""; KEEP_SETTINGS=""
   if [ -e "$HISTORY" ]; then
-    want_delete "Delete your dictation history ($HISTORY)?" || KEEP_HISTORY=1
+    want_delete "Delete your dictation history and learned corrections ($HISTORY)?" || KEEP_HISTORY=1
   fi
   if [ ${#SETTINGS[@]} -gt 0 ]; then
     want_delete "Delete your settings and custom dictionary ($APPSUP/config.json)?" || KEEP_SETTINGS=1

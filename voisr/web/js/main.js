@@ -144,6 +144,14 @@ window.Voisr = window.Voisr || {};
       if (!$("#view-home").hidden) V.views.home.render();
       if (!$("#view-history").hidden) V.views.history.render();
     });
+    // pushed from Python when a correction was learned; added is what went
+    // into the dictionary unasked, which the pill has also said if it could
+    window.addEventListener("voisr:dictionary-changed", (e) => {
+      for (const { written } of (e.detail && e.detail.added) || []) {
+        V.ui.toast(`Added ${written} to Dictionary`);
+      }
+      if (!$("#view-dictionary").hidden) V.views.dictionary.render();
+    });
     $("#hotkey-capture").addEventListener("click", async (e) => {
       const btn = e.currentTarget;
       if (btn.disabled) return;

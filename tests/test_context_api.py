@@ -519,3 +519,380 @@ def test_the_pill_says_copied_on_a_missed_paste(tmp_path):
         time.sleep(0.02)
     assert widget.calls == ["recording", "processing", "copied", "hide"]
     api.close()
+
+
+def learning_api(tmp_path, box, ax=None, **config):
+    """Each dictate() pastes `voiser is great` into box; correct() fixes it and
+    runs the window to its end."""
+    ax = ax or FakeAX(box)
+    api = make_api(tmp_path, ax, transcribe_fn=lambda wav: "voiser is great",
+                   paste_fn=verifying_paste(box))
+    # the system dictionary isn't what these tests are about
+    api.set_config({**config})
+    return api, ax
+
+
+def correct(api, box, typed="Voisr is great"):
+    box.attrs["AXValue"] = box.attrs["AXValue"].replace("Voiser is great", typed)
+    box.attrs["AXValue"] = box.attrs["AXValue"].replace("voiser is great", typed)
+    run_windows(api)
+
+
+def run_windows(api):
+    from voisr.edit_learning import READ_AT_S
+
+    watcher = api._edit_watcher
+    with watcher._cond:
+        windows = list(watcher._windows)
+    far = time.monotonic() + 10_000
+    for offset in range(len(READ_AT_S) + 1):
+        watcher.tick(far)
+    # a window whose schedule was walked past has ended
+    assert all(w.done for w in windows)
+
+
+@pytest.fixture
+def no_system_dictionary(monkeypatch):
+    monkeypatch.setattr("voisr.suggestions.is_everyday_lowercase_word", lambda w: False)
+    from voisr import suggestions
+    original = suggestions.auto_add_kind
+
+    def checked(heard, written, **kwargs):
+        kwargs.setdefault("everyday", lambda w: False)
+        return original(heard, written, **kwargs)
+
+    monkeypatch.setattr(suggestions, "auto_add_kind", checked)
+
+
+def test_first_sighting_is_a_suggestion_second_is_auto_added(tmp_path, no_system_dictionary):
+    box = textbox("")
+    api, _ = learning_api(tmp_path, box)
+    dictate(api)
+    correct(api, box)
+    item = api.get_history()[0]
+    assert item["edit_end_reason"] == "window_complete"
+    assert item["words_corrected"] == 1
+    state = api.get_suggestions()
+    assert [(p["heard"], p["written"], p["seen"]) for p in state["pending"]] == [
+        ("Voiser", "Voisr", 1)]
+    assert api.get_config()["dictionary"] == {}
+
+    box.attrs["AXValue"] = ""
+    dictate(api)
+    correct(api, box)
+    assert api.get_config()["dictionary"] == {"voiser": "Voisr"}
+    state = api.get_suggestions()
+    assert state["pending"] == []
+    assert state["auto_added"] == {"voiser": "Voisr"}
+    api.close()
+
+
+def test_the_auto_add_toggle_keeps_it_a_suggestion(tmp_path, no_system_dictionary):
+    box = textbox("")
+    api, _ = learning_api(tmp_path, box, dictionary_auto_add=False)
+    for _ in range(3):
+        box.attrs["AXValue"] = ""
+        dictate(api)
+        correct(api, box)
+    assert api.get_config()["dictionary"] == {}
+    assert api.get_suggestions()["pending"][0]["seen"] == 3
+    api.close()
+
+
+def test_a_removed_auto_added_entry_is_never_added_again(tmp_path, no_system_dictionary):
+    box = textbox("")
+    api, _ = learning_api(tmp_path, box)
+    for _ in range(2):
+        box.attrs["AXValue"] = ""
+        dictate(api)
+        correct(api, box)
+    assert "voiser" in api.get_config()["dictionary"]
+
+    api.set_config({"dictionary": {}})  # the Dictionary row's one Remove button
+    for _ in range(3):
+        box.attrs["AXValue"] = ""
+        dictate(api)
+        correct(api, box)
+    assert api.get_config()["dictionary"] == {}
+    assert api.get_suggestions()["pending"] == []
+    api.close()
+
+
+def test_a_dismissed_pair_is_never_suggested_or_added(tmp_path, no_system_dictionary):
+    box = textbox("")
+    api, _ = learning_api(tmp_path, box)
+    dictate(api)
+    correct(api, box)
+    pair = api.get_suggestions()["pending"][0]
+    assert api.dismiss_suggestion(pair["id"]) == {"ok": True}
+    for _ in range(3):
+        box.attrs["AXValue"] = ""
+        dictate(api)
+        correct(api, box)
+    assert api.get_config()["dictionary"] == {}
+    assert api.get_suggestions()["pending"] == []
+    api.close()
+
+
+def test_accept_adds_it_whatever_its_kind(tmp_path):
+    box = textbox("")
+    api, _ = learning_api(tmp_path, box)
+    dictate(api)
+    correct(api, box)
+    pair = api.get_suggestions()["pending"][0]
+    assert api.accept_suggestion(pair["id"]) == {"ok": True}
+    assert api.get_config()["dictionary"] == {"voiser": "Voisr"}
+    assert api.get_suggestions()["pending"] == []
+    assert api.get_suggestions()["auto_added"] == {}
+    assert "error" in api.accept_suggestion("gone")
+    assert "error" in api.dismiss_suggestion("gone")
+    assert "error" in api.accept_suggestion(5)
+    api.close()
+
+
+def test_tuesday_to_thursday_never_qualifies_end_to_end(tmp_path):
+    box = textbox("")
+    api, _ = learning_api(tmp_path, box)
+    api._transcribe_fn = lambda wav: "see you Tuesday then"
+    for _ in range(3):
+        box.attrs["AXValue"] = ""
+        dictate(api)
+        correct_to = box.attrs["AXValue"].replace("Tuesday", "Thursday")
+        box.attrs["AXValue"] = correct_to
+        run_windows(api)
+    assert api.get_config()["dictionary"] == {}
+    pending = api.get_suggestions()["pending"]
+    assert [(p["heard"], p["written"]) for p in pending] == [("Tuesday", "Thursday")]
+    api.close()
+
+
+def test_only_the_word_pair_reaches_disk(tmp_path, no_system_dictionary):
+    box = textbox("confidential project context ")
+    api, _ = learning_api(tmp_path, box)
+    dictate(api)
+    correct(api, box)
+    on_disk = "".join(p.read_text() for p in tmp_path.iterdir()
+                      if p.is_file() and not p.name.endswith(".lock"))
+    assert "confidential" not in on_disk
+    assert "Voisr" in (tmp_path / "suggestions.json").read_text()
+    api.close()
+
+
+@pytest.mark.parametrize("setting", [{"use_screen_context": False},
+                                     {"learn_from_edits": False}])
+def test_either_setting_opens_no_window(tmp_path, setting):
+    box = textbox("")
+    api, ax = learning_api(tmp_path, box, **setting)
+    dictate(api)
+    assert api._edit_watcher._windows == []
+    assert "edit_end_reason" not in api.get_history()[0]
+    api.close()
+
+
+def test_learning_off_still_verifies(tmp_path):
+    box = textbox("")
+    api, _ = learning_api(tmp_path, box, learn_from_edits=False)
+    assert dictate(api)["delivery"] == "verified"
+    api.close()
+
+
+def test_switching_screen_context_off_ends_an_open_window(tmp_path):
+    box = textbox("")
+    api, ax = learning_api(tmp_path, box)
+    dictate(api)
+    assert len(api._edit_watcher._windows) == 1
+    api.set_config({"use_screen_context": False})
+    ax.calls.clear()
+    box.attrs["AXValue"] = "Voisr is great"
+    run_windows(api)
+    assert ax.calls == []
+    assert api.get_suggestions()["pending"] == []
+    assert api.get_history()[0]["edit_end_reason"] == "setting_off"
+    api.close()
+
+
+def test_a_failed_paste_opens_no_window(tmp_path):
+    box = textbox("start ")
+    api = make_api(tmp_path, FakeAX(box), paste_fn=verifying_paste(box, land=False))
+    dictate(api)
+    assert api._edit_watcher._windows == []
+    api.close()
+
+
+def test_a_failure_in_learning_never_touches_the_dictation(tmp_path, monkeypatch):
+    box = textbox("")
+    api, _ = learning_api(tmp_path, box)
+    monkeypatch.setattr(api._edit_watcher, "watch",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no")))
+    out = dictate(api)
+    assert out["pasted"] is True and "error" not in out
+    api.close()
+
+
+def test_a_failing_store_never_touches_the_dictation_or_the_watcher(tmp_path, monkeypatch):
+    box = textbox("")
+    api, _ = learning_api(tmp_path, box)
+    dictate(api)
+    monkeypatch.setattr(api._suggestions, "observe",
+                        lambda pairs: (_ for _ in ()).throw(OSError("disk full")))
+    correct(api, box)     # would raise here if the watcher didn't contain it
+    assert api.get_history()[0]["edit_end_reason"] == "window_complete"
+    api.close()
+
+
+def test_used_counts_bump_when_an_entry_fires(tmp_path):
+    api = make_api(tmp_path, FakeAX(textbox("")),
+                   transcribe_fn=lambda wav: "voiser and voiser")
+    api.set_config({"dictionary": {"voiser": "Voisr"}})
+    dictate(api)
+    deadline = time.monotonic() + 2
+    while not api.get_suggestions()["used"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert api.get_suggestions()["used"] == {"voiser": 2}
+    api.close()
+
+
+def test_the_notice_goes_to_the_pill_when_idle(tmp_path, no_system_dictionary):
+    box = textbox("")
+    api, _ = learning_api(tmp_path, box)
+    calls = []
+
+    class Widget:
+        def show_notice(self, text):
+            calls.append(("notice", text))
+
+        def hide(self):
+            calls.append(("hide",))
+
+        def show_recording(self, theme="classic", color=None):
+            pass
+
+        def show_processing(self):
+            pass
+
+        def show_done(self):
+            pass
+
+        def show_error(self):
+            pass
+
+    service = HotkeyService(api, widget=Widget(), hide_delay=0, tap_gate_s=0)
+    service.NOTICE_HOLD_S = 0
+    api.attach_hotkey_service(service)
+    for _ in range(2):
+        box.attrs["AXValue"] = ""
+        dictate(api)
+        correct(api, box)
+    deadline = time.monotonic() + 2
+    while ("hide",) not in calls and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert ("notice", "Added Voisr to Dictionary") in calls
+    assert ("hide",) in calls
+    api.close()
+
+
+def test_the_notice_waits_while_a_dictation_is_in_flight(tmp_path):
+    api = make_api(tmp_path)
+    calls = []
+
+    class Widget:
+        def show_notice(self, text):
+            calls.append(text)
+
+        def hide(self):
+            pass
+
+    service = HotkeyService(api, widget=Widget(), hide_delay=0)
+    service.NOTICE_RETRY_S = 0.01
+    service.NOTICE_HOLD_S = 0
+    api._sessions_in_flight.add(99)
+    service.show_notice("Added X to Dictionary")
+    time.sleep(0.05)
+    assert calls == []
+    api._sessions_in_flight.discard(99)
+    deadline = time.monotonic() + 2
+    while not calls and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert calls == ["Added X to Dictionary"]
+    api.close()
+
+
+def test_a_word_cannot_break_out_of_the_dashboard_event(tmp_path):
+    from voisr.suggestions import Pair
+
+    scripts = []
+
+    class Window:
+        def evaluate_js(self, js):
+            scripts.append(js)
+
+    api = make_api(tmp_path)
+    api.attach_window(Window())
+    bad = 'x"}));alert(1);//'
+    api._notify_dictionary([Pair("id", "heard", bad)])
+    deadline = time.monotonic() + 2
+    while not scripts and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert '\\"' in scripts[0], "the word must be a JSON-escaped string"
+    api.close()
+
+
+def test_new_settings_are_validated():
+    from voisr.app import DEFAULT_CONFIG, config_errors
+
+    for key in ("use_screen_context", "learn_from_edits", "dictionary_auto_add"):
+        assert DEFAULT_CONFIG[key] is True
+        assert config_errors({key: False}) == []
+        assert config_errors({key: "yes"})
+
+
+def test_no_screen_text_reaches_the_log_even_when_things_fail(tmp_path, capsys, monkeypatch):
+    secret = "Hushword"
+    box = textbox(f"around {secret} text ")
+
+    class Failing(FakeAX):
+        def owner(self, element):
+            return super().owner(element)
+
+    def bad_transcribe(wav, cfg, terms=()):
+        if terms:
+            raise RuntimeError(f"failed with prompt {terms}")
+        return "ok", {"mode": "cli", "timings": {}}
+
+    def bad_paste(text, on_sent=None, verifier=None):
+        verifier("OLD")
+        return True
+
+    api = make_api(tmp_path, Failing(box), transcribe_fn=None, paste_fn=bad_paste)
+    monkeypatch.setattr(api, "_default_transcribe", bad_transcribe)
+    monkeypatch.setattr("voisr.ui.check_delivery",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError(f"bad {secret}")))
+    dictate(api)
+    api.close()
+    captured = capsys.readouterr()
+    assert secret not in captured.out + captured.err
+    for path in tmp_path.iterdir():
+        if path.is_file():
+            assert secret not in path.read_text(errors="replace"), path.name
+
+
+def test_the_hotkey_path_only_queues_work(tmp_path):
+    # the worker takes every AX call; press and release just hand it over
+    ax = FakeAX(textbox("text"))
+    api = make_api(tmp_path, ax)
+    seen = []
+    original = api._focus.worker.submit
+
+    def spy(fn):
+        seen.append(threading.current_thread().name)
+        return original(fn)
+
+    api._focus.worker.submit = spy
+    api.start_recording(prewarm=False)
+    assert seen == [] and ax.calls == [], "nothing before the press is a real dictation"
+    started = time.monotonic()
+    api.prewarm_now()
+    api._release_recording(paste=False).result(timeout=5)
+    assert time.monotonic() - started < 1
+    assert len(seen) == 2
+    api.close()

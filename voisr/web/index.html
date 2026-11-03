@@ -176,6 +176,10 @@
         </div>
         <p class="sub">When the transcriber mishears a name or term, map what it heard to what you meant. Every variant counts.</p>
       </header>
+      <div class="card" id="dict-suggestions" hidden>
+        <div class="card-head"><h2>Suggestions from your corrections</h2></div>
+        <ul id="dict-suggestion-list" class="item-list"></ul>
+      </div>
       <div class="card">
         <form id="dict-form" class="dict-form">
           <div class="field">
@@ -327,9 +331,39 @@
         <div class="setting-row">
           <div>
             <h3>Privacy</h3>
-            <p class="setting-desc">Audio is recorded to a temp file, transcribed by whisper.cpp on this Mac, then deleted. No network calls, no accounts, no telemetry.</p>
+            <p class="setting-desc">Audio is recorded to a temp file, transcribed by whisper.cpp on this Mac, then deleted. No accounts, no telemetry, and your audio and text never leave this Mac.</p>
           </div>
           <span class="pill pill-good">Local only</span>
+        </div>
+        <div class="setting-row">
+          <div>
+            <h3>Read the text around your cursor</h3>
+            <p class="setting-desc">While you dictate, Voisr reads the app you are in: the field you are typing in, the window title and nearby labels. That spells names on screen correctly and checks that your paste landed. The text stays in memory for that dictation and is never saved. It never reads password fields or password managers. Off: Voisr reads no text from other apps.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="screen-context-toggle">
+            <span class="slider" aria-hidden="true"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <div>
+            <h3>Learn from my corrections</h3>
+            <p class="setting-desc">For up to a minute after a paste, Voisr re-reads that field to spot words you fixed, and suggests them in Dictionary. Only the corrected words are saved. Needs reading the text around your cursor.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="learn-toggle">
+            <span class="slider" aria-hidden="true"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <div>
+            <h3>Add safe corrections automatically</h3>
+            <p class="setting-desc">After you make the same fix twice, Voisr adds it to Dictionary without asking, if it only changes capitals or the spelling of one unusual word. Never common words or numbers. Everything else waits for you to accept it, and Dictionary marks what was added so you can remove it.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="auto-add-toggle">
+            <span class="slider" aria-hidden="true"></span>
+          </label>
         </div>
         <div class="setting-row">
           <div>

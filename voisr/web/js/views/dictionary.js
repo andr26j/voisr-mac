@@ -4,7 +4,7 @@ window.Voisr = window.Voisr || {};
   const SEARCH_AT = 10;
   let filter = "";
 
-  function entryRow(spoken, written) {
+  function entryRow(spoken, written, { auto, used }) {
     const value = V.ui.el("span", {
       class: "dict-written", text: written,
       contenteditable: "plaintext-only", role: "textbox",
@@ -43,9 +43,15 @@ window.Voisr = window.Voisr || {};
       V.ui.el("div", { class: "item-text dict-pair" },
         V.ui.el("span", { class: "dict-spoken", text: spoken }),
         V.ui.el("span", { class: "dict-arrow", html: V.ui.ICONS.arrow }),
-        value),
+        value,
+        auto ? V.ui.el("span", {
+          class: "dict-auto", text: "Auto-added",
+          title: "Voisr added this after seeing you make the same correction twice. Remove it and it won't come back.",
+        }) : null,
+        used ? V.ui.el("span", { class: "dict-used", text: `used ${used}×` }) : null),
       V.ui.el("button", {
-        class: "icon-btn danger", "aria-label": "Remove entry",
+        class: "icon-btn danger",
+        "aria-label": auto ? "Remove auto-added entry" : "Remove entry",
         html: V.ui.ICONS.trash,
         on: { click: () => removeEntry(spoken, written) },
       }));
@@ -90,6 +96,48 @@ window.Voisr = window.Voisr || {};
     });
   }
 
+  function suggestionRow(pair) {
+    async function act(call, label, done) {
+      if (!await V.ui.tryApi(call, label)) return;
+      if (done) V.ui.toast(done);
+      render();
+    }
+    return V.ui.el("li", { class: "item-row" },
+      V.ui.el("div", { class: "item-text dict-pair" },
+        V.ui.el("span", { class: "dict-spoken", text: pair.heard }),
+        V.ui.el("span", { class: "dict-arrow", html: V.ui.ICONS.arrow }),
+        V.ui.el("span", { class: "dict-suggested", text: pair.written }),
+        pair.seen > 1 ? V.ui.el("span", { class: "dict-used", text: `seen ${pair.seen}×` }) : null),
+      V.ui.el("button", {
+        type: "button", class: "btn-secondary", text: "Accept",
+        on: { click: () => act(V.api().accept_suggestion(pair.id), "Accept suggestion",
+                               `Added: ${pair.heard} → ${pair.written}`) },
+      }),
+      V.ui.el("button", {
+        type: "button", class: "btn-secondary", text: "Dismiss",
+        on: { click: () => act(V.api().dismiss_suggestion(pair.id), "Dismiss suggestion") },
+      }));
+  }
+
+  /* Suggestions are extra: an entry list must still draw if these fail. */
+  async function loadSuggestions() {
+    try {
+      return await V.api().get_suggestions();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function renderSuggestions(state) {
+    const card = document.getElementById("dict-suggestions");
+    if (!card) return;
+    const pending = (state && state.pending) || [];
+    card.hidden = pending.length === 0;
+    V.lists.sync(document.getElementById("dict-suggestion-list"), pending.map((p) => ({
+      key: p.id, sig: `${p.seen}`, build: () => suggestionRow(p),
+    })));
+  }
+
   /* One data source, so the same rule as history's render(): on a failed
      load keep the last good list rather than blanking the pane. */
   async function render({ animate } = {}) {
@@ -101,8 +149,13 @@ window.Voisr = window.Voisr || {};
   }
 
   async function renderInner(animate) {
-    const cfg = await V.ui.tryApi(V.api().get_config(), "Load dictionary");
+    const [cfg, extra] = await Promise.all([
+      V.ui.tryApi(V.api().get_config(), "Load dictionary"), loadSuggestions(),
+    ]);
     if (!cfg) return;
+    renderSuggestions(extra);
+    const auto = (extra && extra.auto_added) || {};
+    const used = (extra && extra.used) || {};
     const all = Object.entries(cfg.dictionary || {});
     const search = document.getElementById("dict-search");
     search.hidden = all.length < SEARCH_AT;
@@ -118,9 +171,12 @@ window.Voisr = window.Voisr || {};
     document.getElementById("dict-empty").hidden = shown.length > 0;
     // keyed: an add, edit or removal moves only that row (js/lists.js);
     // a filter keystroke applies instantly
-    V.lists.sync(document.getElementById("dict-list"), shown.map(([s, w]) => ({
-      key: s, sig: w, build: () => entryRow(s, w),
-    })), { animate: animate !== false });
+    V.lists.sync(document.getElementById("dict-list"), shown.map(([s, w]) => {
+      const facts = { auto: auto[s.toLowerCase()] === w, used: used[s.toLowerCase()] || 0 };
+      return {
+        key: s, sig: `${w}|${facts.auto}|${facts.used}`, build: () => entryRow(s, w, facts),
+      };
+    }), { animate: animate !== false });
   }
 
   async function addEntry(e) {

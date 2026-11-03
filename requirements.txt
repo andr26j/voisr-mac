@@ -4,3 +4,4 @@ pynput==1.8.2
 pywebview==6.2.1
 sounddevice==0.5.5
 pyobjc-framework-AVFoundation==12.2.1
+pyobjc-framework-ApplicationServices==12.2.1

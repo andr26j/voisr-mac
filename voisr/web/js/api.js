@@ -13,7 +13,8 @@ window.Voisr = window.Voisr || {};
       { id: "a2", ts: now - 7200, text: "Draft a follow-up about the Brunswick site visit next week.", words: 10, duration_s: 6 },
       { id: "a3", ts: now - 90000, text: "Remember to book the trailer for Saturday morning.", words: 8, duration_s: 4 },
     ];
-    let mockCfg = { hotkey: "alt_r", paste: true, show_widget: true, device: ":0", pill_theme: "classic", pill_color: null, dictionary: { trademake: "TradeMate", "trade mate": "TradeMate" }, model: "small.en", launch_at_login: false, model_unload: "min5" };
+    let mockCfg = { hotkey: "alt_r", paste: true, show_widget: true, device: ":0", pill_theme: "classic", pill_color: null, dictionary: { trademake: "TradeMate", "trade mate": "TradeMate" }, model: "small.en", launch_at_login: false, model_unload: "min5", use_screen_context: true, learn_from_edits: true, dictionary_auto_add: true };
+    let mockSuggestions = [{ id: "s1", heard: "trade mate", written: "TradeMate", seen: 1 }];
     let recording = false;
     // mirrors voisr/ui.py's HOTKEY_OPTIONS, to resolve a human label for
     // hotkey_display() below.
@@ -46,6 +47,19 @@ window.Voisr = window.Voisr || {};
       }),
       get_config: async () => JSON.parse(JSON.stringify(mockCfg)),
       set_config: async (u) => Object.assign(mockCfg, u),
+      // mirrors Api.get_suggestions() and friends in voisr/ui.py
+      get_suggestions: async () => ({ pending: [...mockSuggestions],
+        auto_added: { trademake: "TradeMate" }, used: { trademake: 3 } }),
+      accept_suggestion: async (id) => {
+        const hit = mockSuggestions.find((p) => p.id === id);
+        if (hit) mockCfg.dictionary[hit.heard] = hit.written;
+        mockSuggestions = mockSuggestions.filter((p) => p.id !== id);
+        return { ok: true };
+      },
+      dismiss_suggestion: async (id) => {
+        mockSuggestions = mockSuggestions.filter((p) => p.id !== id);
+        return { ok: true };
+      },
       // mirrors Api.take_config_notice() in voisr/ui.py: {} unless a corrupt
       // config.json was moved aside at load.
       take_config_notice: async () => ({}),
