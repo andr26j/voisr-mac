@@ -33,7 +33,6 @@ import uuid
 from pathlib import Path
 
 from voisr.paths import find_binary
-from voisr.transcriber import _timeout_for
 
 # Handy's ModelUnloadTimeout choices; "Immediately" keeps per-dictation cli.
 DEFAULT_UNLOAD = "min5"
@@ -172,14 +171,17 @@ def _alive(pid) -> bool:
     return True
 
 
-def cleanup_stale(state_path) -> list[int]:
-    """Kill a whisper-server (and guard) a dead earlier Voisr left behind.
+def state_files(state_path) -> list[Path]:
+    """Every per-guard state file next to `state_path` (BASE.<guard pid>)."""
+    base = Path(state_path)
+    try:
+        return sorted(p for p in base.parent.glob(base.name + ".*")
+                      if p.name[len(base.name) + 1:].isdigit())
+    except OSError:
+        return []
 
-    Only what the state file names, and only when the process still has the
-    start time recorded and the expected command line, and the Voisr that
-    owned it is gone. A whisper-server the user started is never listed in
-    the file, so it is never touched. Returns the pids stopped."""
-    path = Path(state_path)
+
+def _cleanup_one(path: Path) -> list[int]:
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
         owner, guard, server = state["owner"], state["guard"], state["server"]
@@ -216,6 +218,20 @@ def cleanup_stale(state_path) -> list[int]:
     return stopped
 
 
+def cleanup_stale(state_path) -> list[int]:
+    """Kill any whisper-server (and guard) a dead earlier Voisr left behind.
+
+    Each guard wrote its own state file, so two guards that overlapped are
+    both found. Only what a file names is touched, and only when the process
+    still has the recorded start time and the expected command line, and the
+    Voisr that owned it is gone. A whisper-server the user started is in no
+    file, so it is never touched. Returns the pids stopped."""
+    stopped = []
+    for path in state_files(state_path):
+        stopped += _cleanup_one(path)
+    return stopped
+
+
 class _Process:
     """A running guard + server pair."""
 
@@ -229,12 +245,15 @@ class _Process:
         return self.popen.poll() is None
 
     def _own_server_pid(self):
-        """The server pid, but only if the state file still belongs to this
-        process's guard. A newer guard may have rewritten it since."""
+        """The server pid from this guard's own state file (BASE.<guard pid>),
+        which no other guard writes."""
         guard = getattr(self.popen, "pid", None)
+        if guard is None:
+            return None
         try:
-            state = json.loads(Path(self.state_path).read_text(encoding="utf-8"))
-            if guard is not None and state.get("guard") == guard:
+            state = json.loads(
+                Path(f"{self.state_path}.{guard}").read_text(encoding="utf-8"))
+            if state.get("guard") == guard:
                 return state.get("server")
         except (OSError, ValueError, AttributeError):
             pass
@@ -346,11 +365,12 @@ class WhisperServer:
             self._last_activity = self._clock()
             self._ensure_loading_locked(str(model_path))
 
-    def transcribe(self, wav_path, model_path, prompt=None, unload=None):
+    def transcribe(self, wav_path, model_path, prompt=None):
         """Text for `wav_path` from the warm server, loading it if needed.
-        Returns (text, info) with info {"model_wait": ms}. Raises ServerError."""
-        if unload is not None:
-            self.configure(unload)
+        Returns (text, info) with info {"model_wait": ms}. Raises ServerError.
+        The unload setting is not taken from the caller: a queued dictation
+        carries the setting from when it began, and must not overwrite a
+        newer one (the Api calls configure() when Settings changes)."""
         model_path = str(model_path)
         if not uses_server(self._unload):
             raise ServerError("kept-loaded mode is off")
@@ -369,7 +389,8 @@ class WhisperServer:
                 proc = self._proc
                 if self._closed:
                     raise ServerError("server shut down")
-                if proc is not None and proc.model == model_path and self._ready:
+                if (proc is not None and proc.model == model_path
+                        and self._ready and proc.alive()):
                     break
                 if self._failed_at is not None:
                     raise ServerError("server failed to load")
@@ -377,7 +398,7 @@ class WhisperServer:
                 self._ensure_loading_locked(model_path)
                 left = deadline - self._clock()
                 if left <= 0:
-                    self._fail_locked(proc)
+                    self._fail_locked()
                     raise ServerError("server not ready in time")
                 self._cond.wait(min(left, 0.25))
             proc.inflight += 1
@@ -394,7 +415,9 @@ class WhisperServer:
                       "token_timestamps": "false"}
             if prompt:
                 fields["prompt"] = prompt
-            text = self._infer(port, wav, fields, _timeout_for(wav_path))
+            # Bounded tighter than whisper-cli's two minutes: a hung server
+            # holds the queue for this long before the cli fallback runs.
+            text = self._infer(port, wav, fields, 30 + 2 * len(wav) / 32000)
         except ServerError as error:
             self._request_failed(proc, error)
             raise
@@ -413,10 +436,11 @@ class WhisperServer:
 
     def forget_model(self, model_path) -> None:
         """A model file is being deleted or replaced: drop it if loaded."""
+        model_path = str(model_path)
         with self._cond:
-            current = self._proc.model if self._proc else None
-            current = current or next(iter(self._loading), None)
-        if current is not None and str(current) == str(model_path):
+            hit = ((self._proc is not None and self._proc.model == model_path)
+                   or model_path in self._loading)
+        if hit:
             self.unload()
 
     def shutdown(self) -> None:
@@ -472,7 +496,7 @@ class WhisperServer:
         if detached is not None:
             detached.stop()
 
-    def _fail_locked(self, proc) -> None:
+    def _fail_locked(self) -> None:
         self._failed_at = self._clock()
         detached = self._detach_locked()
         if detached is not None:

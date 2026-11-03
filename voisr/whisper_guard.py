@@ -1,6 +1,6 @@
 """Runs one child process and makes sure it dies with Voisr.
 
-    python whisper_guard.py --owner PID --state FILE -- COMMAND [ARG...]
+    python whisper_guard.py --owner PID --state BASE -- COMMAND [ARG...]
 
 whisper-server is a C++ program that cannot watch its parent, so a Voisr that
 is force quit or crashes would leave it holding hundreds of MB. Voisr starts it
@@ -8,7 +8,9 @@ through this guard instead. The guard keeps the read end of a pipe whose write
 end only Voisr holds: when Voisr exits for any reason, SIGKILL included, the
 kernel closes that end and the guard sees end-of-file. It also notices a
 changed parent pid and the child exiting by itself. Then it stops the child
-(SIGTERM, then SIGKILL) and removes the state file.
+(SIGTERM, then SIGKILL) and removes its state file. The state file is
+BASE.<guard pid>: one per guard, so a newer guard never overwrites an older
+one's record of its server.
 
 Standard library only and no imports from voisr, so it runs with `python -I`.
 """
@@ -63,7 +65,7 @@ def main(argv) -> int:
         sep = argv.index("--")
         opts, command = argv[:sep], argv[sep + 1:]
         owner = int(opts[opts.index("--owner") + 1])
-        state = opts[opts.index("--state") + 1]
+        state = f'{opts[opts.index("--state") + 1]}.{os.getpid()}'
     except (ValueError, IndexError):
         print("usage: whisper_guard.py --owner PID --state FILE -- COMMAND...",
               file=sys.stderr)

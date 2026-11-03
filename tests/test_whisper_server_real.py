@@ -45,7 +45,8 @@ def wait_for(predicate, timeout):
 
 
 def server_pid(state):
-    return json.loads(Path(state).read_text())["server"]
+    from voisr.whisper_server import state_files
+    return json.loads(state_files(state)[0].read_text())["server"]
 
 
 def test_prompt_reaches_the_server_and_biases_spelling(tmp_path, spoken_wav):
@@ -74,7 +75,8 @@ def test_server_listens_on_loopback_only_and_quit_frees_it(tmp_path, spoken_wav)
     assert "127.0.0.1:" in out and "*:" not in out and "0.0.0.0" not in out, out
     server.shutdown()
     assert wait_for(lambda: not alive(pid), 6)
-    assert not state.exists()
+    from voisr.whisper_server import state_files
+    assert not state_files(state)
 
 
 CHILD = """
@@ -97,7 +99,8 @@ def test_sigkilled_parent_leaves_no_whisper_server(tmp_path):
     pid = guard = None
     try:
         assert parent.stdout.readline().strip() == "loaded"
-        info = json.loads(state.read_text())
+        from voisr.whisper_server import state_files
+        info = json.loads(state_files(state)[0].read_text())
         pid, guard = info["server"], info["guard"]
         assert alive(pid) and alive(guard)
         os.kill(parent.pid, signal.SIGKILL)

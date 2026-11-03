@@ -89,8 +89,7 @@ def transcribe_routed(wav_path, model_path, prompt=None, server=None,
             {"mode": "cli", "timings": {}}
     attempt = time.monotonic()
     try:
-        text, extra = server.transcribe(wav_path, model_path, prompt=prompt,
-                                        unload=unload)
+        text, extra = server.transcribe(wav_path, model_path, prompt=prompt)
         return text, {"mode": "warm", "timings": extra}
     except Exception as error:   # any failure: the dictation must not be lost
         spent = (time.monotonic() - attempt) * 1000
