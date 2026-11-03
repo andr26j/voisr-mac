@@ -302,6 +302,32 @@ mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
   margin-bottom: 6px;
 }
 
+.snippet-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+
+.snippet-actions { display: flex; align-items: center; gap: 12px; }
+.snippet-note { color: var(--warning); font-size: 13px; }
+.snippet-row { align-items: flex-start; }
+.snippet-trigger { font-weight: 600; }
+.snippet-preview {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 2px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.snippet-warning { color: var(--warning); font-size: 12px; margin-top: 2px; }
+
 .dict-pair { display: flex; align-items: center; gap: 10px; }
 
 .dict-arrow { color: var(--muted); flex-shrink: 0; width: 14px; height: 14px; }

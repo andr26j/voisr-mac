@@ -47,6 +47,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
         Dictionary
       </button>
+      <button class="nav-item" data-view="snippets">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h9"/><path d="m3 5 2 1-2 1z"/><path d="m3 11 2 1-2 1z"/><path d="m3 17 2 1-2 1z"/></svg>
+        Snippets
+      </button>
       <button class="nav-item" data-view="settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
         Settings
@@ -194,6 +198,33 @@
         </form>
         <ul id="dict-list" class="item-list"></ul>
         <p id="dict-empty" class="empty" hidden>No entries yet. Add one above.</p>
+      </div>
+    </section>
+
+    <!-- SNIPPETS -->
+    <section class="view" id="view-snippets" hidden>
+      <header class="page-head">
+        <h1>Snippets</h1>
+        <p class="sub">Say a short phrase as a whole dictation and Voisr pastes your saved text instead, exactly as you wrote it. History shows only the phrase. In a sentence, the phrase stays as spoken.</p>
+      </header>
+      <div class="card">
+        <form id="snippet-form" class="snippet-form">
+          <div class="field">
+            <label for="snippet-trigger">When I say</label>
+            <input id="snippet-trigger" type="text" placeholder="my email" autocomplete="off" required>
+          </div>
+          <div class="field">
+            <label for="snippet-text">Paste this</label>
+            <textarea id="snippet-text" rows="5" placeholder="you@example.com" spellcheck="false"></textarea>
+          </div>
+          <div class="snippet-actions">
+            <button type="submit" id="snippet-save" class="btn-primary">Add</button>
+            <button type="button" id="snippet-cancel" class="btn-secondary" hidden>Cancel</button>
+            <p id="snippet-note" class="snippet-note" role="status"></p>
+          </div>
+        </form>
+        <ul id="snippet-list" class="item-list"></ul>
+        <p id="snippet-empty" class="empty" hidden>No snippets yet. Add one above.</p>
       </div>
     </section>
 
@@ -395,6 +426,7 @@
 <script src="js/views/home.js"></script>
 <script src="js/views/history.js"></script>
 <script src="js/views/dictionary.js"></script>
+<script src="js/views/snippets.js"></script>
 <script src="js/views/settings.js"></script>
 <script src="js/main.js"></script>
 </body>

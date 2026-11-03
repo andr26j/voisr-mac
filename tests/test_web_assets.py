@@ -6,7 +6,7 @@ INDEX = WEB / "index.html"
 
 JS_FILES = ["js/api.js", "js/ui.js", "js/lists.js", "js/palette.js",
             "js/meter.js", "js/dock-meter.js", "js/views/home.js", "js/views/history.js",
-            "js/views/dictionary.js", "js/views/settings.js", "js/main.js"]
+            "js/views/dictionary.js", "js/views/snippets.js", "js/views/settings.js", "js/main.js"]
 CSS_FILES = ["css/tokens.css", "css/base.css",
              "css/components.css", "css/views.css"]
 

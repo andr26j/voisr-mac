@@ -124,6 +124,7 @@ window.Voisr = window.Voisr || {};
     register({ id: "home", title: "Go to Home", run: () => V.show("home") });
     register({ id: "history", title: "Go to History", run: () => V.show("history") });
     register({ id: "dictionary", title: "Go to Dictionary", run: () => V.show("dictionary") });
+    register({ id: "snippets", title: "Go to Snippets", run: () => V.show("snippets") });
     register({ id: "settings", title: "Go to Settings", run: () => V.show("settings") });
     register({ id: "hotkey", title: "Change push-to-talk key",
                run: async () => {

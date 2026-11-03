@@ -2812,7 +2812,8 @@ def install_dock_reopen(on_reopen, delegate_cls=None) -> bool:
 # tests/test_js_bridge_surface.py pins this to the V.api() calls in voisr/web/js.
 BRIDGE_METHODS = (
     "accept_suggestion", "capture_hotkey", "clear_history", "copy_text",
-    "delete_history_item", "dismiss_suggestion", "get_suggestions",
+    "delete_history_item", "delete_snippet", "dismiss_suggestion", "get_snippets",
+    "get_suggestions", "save_snippet",
     "delete_model", "download_model", "export_history", "get_download_progress", "get_config", "get_history", "get_hotkey_status",
     "get_level", "get_models", "get_permissions", "get_pill_themes", "get_stats",
     "hotkey_display", "open_settings_pane", "relaunch_app",
