@@ -134,7 +134,9 @@ def test_capture_paste_verify_edit_suggestion(tmp_path, textedit, monkeypatch):
             with watcher._cond:
                 windows = list(watcher._windows)
             assert len(windows) == 1, "a verified paste opens a window"
-            watcher.tick(time.monotonic() + 3600)
+            far = time.monotonic() + 3600
+            for offset in range(2):
+                watcher.tick(far + offset * 100)    # a changed read waits for its recheck
             assert windows[0].done
             item = api.get_history()[0]
             print("edit:", item.get("edit_end_reason"), item.get("words_corrected"))
