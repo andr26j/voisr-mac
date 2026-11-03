@@ -13,7 +13,7 @@ from voisr.ax_context import FocusTracker, make_ax_adapter
 from voisr.cleanup import clean
 from voisr.context_terms import (cli_safe_terms, context_terms, prompt_echoed,
                                  terms_for_clip)
-from voisr.edit_learning import EditWatcher
+from voisr.edit_learning import EditWatcher, is_term_fix
 from voisr.history import HistoryStore
 from voisr.inject import paste_at_cursor, set_clipboard
 from voisr.keytap import TAP_MODES
@@ -27,7 +27,7 @@ from voisr.recording_queue import (
     SessionResult,
 )
 from voisr.status_item import StatusItem
-from voisr.suggestions import (ACCEPTED, AUTO_ADDED, DISMISSED, SuggestionStore,
+from voisr.suggestions import (ACCEPTED, AUTO_ADDED, DISMISSED, PENDING, SuggestionStore,
                                dictionary_allows, ready_to_auto_add)
 from voisr.window_chrome import apply_chrome
 
@@ -733,6 +733,7 @@ class HotkeyService:
         self._target_vk = None
         self._state_lock = threading.RLock()
         self._epoch = 0  # bumped per recording; stale _finish threads must not touch the widget
+        self._notice_after = 0.0  # the pill is showing a dictation's result until then
         # Key events are handed to this serial worker instead of being acted
         # on inside the Quartz tap callback: press() can wait on the previous
         # recorder's stop() (up to 5 s on the ffmpeg fallback), and a tap
@@ -1107,6 +1108,7 @@ class HotkeyService:
                     hold = hold and hold * self.COPIED_HOLD
                 else:
                     self._widget_action("show_done", epoch)
+                self._notice_after = time.monotonic() + (hold or 0)
             if hold:
                 time.sleep(hold)
             with self._state_lock:
@@ -1124,6 +1126,7 @@ class HotkeyService:
         def idle():
             busy = getattr(self._api, "dictation_in_flight", None)
             return not (self._pressed or self._starting or self._pending is not None
+                        or time.monotonic() < self._notice_after
                         or (busy is not None and busy()))
 
         def go():
@@ -1730,7 +1733,11 @@ class Api:
             (heard, written) for heard, written in result.pairs
             if dictionary.get(heard.casefold()) != written)
         added = self._auto_add(pairs) if cfg.get("dictionary_auto_add", True) is True else []
-        self._notify_dictionary(added)
+        # seen once: first time here. A pair seen again, or ordinary editing,
+        # stays quiet in the view.
+        self._notify_dictionary(added, [pair for pair in pairs
+                                        if pair.status == PENDING and pair.seen == 1
+                                        and is_term_fix(pair.heard, pair.written)])
 
     def _auto_add(self, pairs) -> list:
         ready = [pair for pair in pairs if ready_to_auto_add(pair)]
@@ -1749,9 +1756,10 @@ class Api:
                     self._suggestions.set_status(pair.id, AUTO_ADDED)
         return added
 
-    def _notify_dictionary(self, added) -> None:
+    def _notify_dictionary(self, added, suggested=()) -> None:
         """Refresh an open Dictionary view; say what was added unasked, in the
-        pill and the dashboard. Neither takes focus or waits for anything."""
+        pill and the dashboard, and what is newly suggested, in the pill. None
+        of it takes focus or waits for anything."""
         win = self._window
         if win is not None:
             detail = json.dumps({"added": [
@@ -1767,9 +1775,10 @@ class Api:
 
             threading.Thread(target=go, daemon=True).start()
         svc = self._hotkey_service
-        if added and svc is not None and hasattr(svc, "show_notice"):
-            words = ", ".join(pair.written for pair in added)
-            svc.show_notice(f"Added {words} to Dictionary")
+        if (added or suggested) and svc is not None and hasattr(svc, "show_notice"):
+            # short: the pill cuts off what doesn't fit, and the word must show
+            words = ", ".join(pair.written for pair in added or suggested)
+            svc.show_notice(f"Added {words} to Dictionary" if added else f"Suggested: {words}")
 
     def dictation_in_flight(self) -> bool:
         with self._busy_lock:

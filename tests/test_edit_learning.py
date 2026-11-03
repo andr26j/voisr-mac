@@ -7,7 +7,7 @@ import pytest
 from tests.fake_ax import FakeAX, textbox
 from voisr.ax_context import FocusContext
 from voisr.edit_learning import (EditWatcher, MAX_RECHECKS, READ_AT_S, RECHECK_S, changed_share,
-                                 diff_candidates, is_rewrite, locate_span)
+                                 diff_candidates, is_rewrite, is_term_fix, locate_span)
 from voisr.suggestions import (ACCEPTED, AUTO_ADDED, DISMISSED, PENDING, Pair,
                                SuggestionStore, auto_add_kind, may_auto_add, pair_id)
 
@@ -395,6 +395,19 @@ def test_a_rewrite_yields_nothing_even_from_earlier_reads():
 ])
 def test_is_rewrite(pasted, final, rewrite):
     assert is_rewrite(pasted, final) is rewrite
+
+
+@pytest.mark.parametrize("heard, written, worth_saying", [
+    ("Tarek", "Tariq", True),
+    ("voiser", "Voisr", True),
+    ("github", "GitHub", True),
+    ("Monday", "Sunday", False),
+    ("form", "from", False),
+    ("the", "The", False),
+    ("Bob", "Alice", False),
+])
+def test_is_term_fix(heard, written, worth_saying):
+    assert is_term_fix(heard, written) is worth_saying
 
 
 def test_later_typing_after_a_one_word_fix_is_not_a_rewrite():

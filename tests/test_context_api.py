@@ -2,6 +2,7 @@
 import threading
 import time
 import wave
+from concurrent.futures import Future
 
 import pytest
 
@@ -786,8 +787,76 @@ def test_the_notice_goes_to_the_pill_when_idle(tmp_path, no_system_dictionary):
     deadline = time.monotonic() + 2
     while ("hide",) not in calls and time.monotonic() < deadline:
         time.sleep(0.01)
+    assert ("notice", "Suggested: Voisr") in calls, "the first sighting"
     assert ("notice", "Added Voisr to Dictionary") in calls
     assert ("hide",) in calls
+    api.close()
+
+
+def test_a_suggestion_goes_to_the_pill_only_the_first_time(tmp_path, no_system_dictionary):
+    box = textbox("")
+    api, _ = learning_api(tmp_path, box)
+    api._update_config({"dictionary_auto_add": False})
+    calls = []
+
+    class Widget:
+        def show_notice(self, text):
+            calls.append(text)
+
+        def hide(self):
+            pass
+
+    service = HotkeyService(api, widget=Widget(), hide_delay=0, tap_gate_s=0)
+    service.NOTICE_HOLD_S = 0
+    api.attach_hotkey_service(service)
+    for _ in range(3):
+        box.attrs["AXValue"] = ""
+        dictate(api)
+        correct(api, box)
+    for thread in threading.enumerate():
+        if thread.name == "voisr-notice":
+            thread.join(timeout=2)
+    assert api.get_suggestions()["pending"][0]["seen"] == 3
+    assert calls == ["Suggested: Voisr"]
+    api.close()
+
+
+def test_a_notice_does_not_cover_a_dictation_result(tmp_path):
+    api = make_api(tmp_path)
+    calls = []
+
+    class Widget:
+        def show_notice(self, text):
+            calls.append(text)
+
+        def show_copied(self):
+            calls.append("copied")
+
+        def hide(self):
+            calls.append("hide")
+
+    class Result:
+        def to_api_dict(self):
+            return {"manual_paste": True}
+
+    service = HotkeyService(api, widget=Widget(), hide_delay=0.1)
+    service.NOTICE_RETRY_S = 0.01
+    service.NOTICE_HOLD_S = 0
+    done = Future()
+    done.set_result(Result())
+    finish = threading.Thread(target=service._finish, args=(done, True, service._epoch))
+    finish.start()
+    deadline = time.monotonic() + 2
+    while "copied" not in calls and time.monotonic() < deadline:
+        time.sleep(0.005)
+    service.show_notice("Suggested: Voisr")
+    time.sleep(0.05)
+    assert calls == ["copied"], "the prompt keeps the pill for its whole hold"
+    finish.join(timeout=2)
+    for thread in threading.enumerate():
+        if thread.name == "voisr-notice":
+            thread.join(timeout=2)
+    assert "Suggested: Voisr" in calls, "and has it once the hold is over"
     api.close()
 
 

@@ -149,9 +149,14 @@ def diff_candidates(pasted: str, final: str, context_terms=(),
 def _is_spelling_fix(heard: str, written: str) -> bool:
     """Reads alike, and isn't one ordinary word chosen over another ("Monday" ->
     "Sunday"). A change of case is never a choice of word."""
-    if heard.casefold() == written.casefold():
-        return True
-    return (similarity(heard, written) >= MIN_SIMILARITY
+    return heard.casefold() == written.casefold() or is_term_fix(heard, written)
+
+
+def is_term_fix(heard: str, written: str) -> bool:
+    """Reads alike and isn't all ordinary words: worth saying out loud. "form" ->
+    "from" or "the" -> "The" is everyday editing, and "Bob" -> "Alice" another
+    name, however it got to be a candidate."""
+    return (_reads_alike(heard, written)
             and not all(is_common_word(w) for w in f"{heard} {written}".split()))
 
 
