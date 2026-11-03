@@ -17,13 +17,15 @@ whisper.cpp -- MIT License
   Installed with Homebrew (`brew install whisper-cpp`, formula licence: MIT).
   Voisr runs its `whisper-cli` program as a separate process.
 
-ggml-base.en.bin and ggml-small.en.bin -- MIT License
+ggml-base.en.bin, ggml-small.en.bin, ggml-medium.en-q5_0.bin and
+ggml-large-v3-turbo-q5_0.bin -- MIT License
   OpenAI Whisper models converted to the ggml format by the whisper.cpp
-  author. Downloaded by setup.sh from
+  author. Downloaded from
   https://huggingface.co/ggerganov/whisper.cpp (model card: `license: mit`).
   The original model and code are OpenAI's Whisper:
   MIT License, Copyright (c) 2022 OpenAI, https://github.com/openai/whisper
-  The English-only "base.en" and "small.en" sizes are the two Voisr uses.
+  setup.sh installs "base.en" and "small.en"; the other two are optional
+  downloads from Settings.
 
 The MIT licence text for both reads:
 
@@ -62,7 +64,8 @@ Python packages (requirements.txt, installed with pip into Voisr's own venv)
 ---------------------------------------------------------------------------
 
 Pinned, direct:
-  pynput 1.8.2                     LGPL-3.0     https://github.com/moses-palmer/pynput
+  certifi 2026.1.4                 MPL-2.0      https://github.com/certifi/python-certifi
+  pynput 1.8.2                    LGPL-3.0     https://github.com/moses-palmer/pynput
   pywebview 6.2.1                  BSD-3-Clause (Copyright (c) 2014-2017 Roman Sirokov)
                                                 https://github.com/r0x0r/pywebview
   sounddevice 0.5.5                MIT          https://github.com/spatialaudio/python-sounddevice

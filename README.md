@@ -13,7 +13,7 @@ English only. macOS only. Free for personal use under the MIT licence. There is 
 | Xcode Command Line Tools (C compiler) | the installer compiles a small launcher so macOS lists the app as "Voisr" in Privacy & Security | `xcode-select --install` |
 | Python 3.14 or newer, as a *framework build* | runs the app. Homebrew's and python.org's Python are framework builds. Older versions fail to import the code (checked on 3.10; nothing between 3.11 and 3.13 was run). | `brew install python@3.14` |
 | about 630 MB free for models, plus room for Python packages | `small.en` (~490 MB) is the default, `base.en` (~150 MB) is the faster option | |
-| internet during install only | Homebrew, the models from Hugging Face, and Python packages | |
+| internet during install, and for any optional model you download | Homebrew, the models from Hugging Face, and Python packages | |
 
 `install.sh` checks all of this first and tells you exactly what is missing before it changes anything.
 
@@ -70,7 +70,9 @@ A **permission health strip** shows a chip for Microphone and Accessibility (plu
 
 A **menu-bar item** keeps Voisr reachable without opening its window and shows when a dictation is in flight.
 
-**Settings** are grouped into Dictation, Push-to-talk, Appearance, and Privacy & Data sections. You can set launch-at-login and choose a transcription model (`small.en` for accuracy, `base.en` for speed).
+**Settings** are grouped into Dictation, Push-to-talk, Appearance, and Privacy & Data sections. You can set launch-at-login and choose a transcription model.
+
+**Models.** Voisr runs everything on your Mac. `setup.sh` installs `small.en` (default) and `base.en`. In **Settings → Transcription model** you can download two larger optional models, `medium.en-q5_0` (~540 MB) and `large-v3-turbo-q5_0` (~575 MB), and delete any model you aren't using. Downloads are checked against a pinned SHA-256 and need free disk space for the model plus 512 MB. Settings warns when a model asks for more memory than your Mac has. You can also drop your own `ggml-*.bin` file into `models/` and it appears as a Custom model. Voisr is English only; every model is run with `-l en`. All listed model weights are OpenAI Whisper's (MIT licence).
 
 ## Updating
 
@@ -99,7 +101,7 @@ It removes `~/Applications/Voisr.app`, `~/Library/Application Support/Voisr` (ru
 - **Text** you dictate is stored in `~/Library/Application Support/Voisr/data/history.jsonl` (the text, time, word count and duration) so the History view works. Delete rows in the app or delete the file.
 - **Settings and dictionary** live in `~/Library/Application Support/Voisr/config.json`.
 - **Log**: `~/Library/Logs/Voisr.log` holds app errors and events. The dashboard does not write what you dictated into it (checked by searching the code); the CLI modes print dictated text to the terminal.
-- **Network**: the app code contains no network calls. The internet is used only while installing (Homebrew, the models from Hugging Face, Python packages from PyPI).
+- **Network**: the app's only network call downloads a model from Hugging Face when you click Download in Settings; it sends none of your audio or text. Otherwise the internet is used only while installing (Homebrew, the models from Hugging Face, Python packages from PyPI).
 - Voisr pastes through your clipboard and restores what was there afterwards.
 
 ## CLI usage (optional)
@@ -134,7 +136,7 @@ All of this is editable in Settings; hand-editing is optional. A file that canno
   "hotkey_label": "Fn / Globe",// display label for that key
   "paste": true,               // false = clipboard only
   "device": ":0",              // CLI toggle mode only: avfoundation device for ffmpeg (ffmpeg -f avfoundation -list_devices true -i ""); the app uses the macOS default input
-  "model": "small.en",         // whisper model: small.en (accuracy) or base.en (speed)
+  "model": "small.en",         // a model id from Settings (e.g. base.en, medium.en-q5_0) or a custom ggml-<name>.bin
   "show_widget": true,         // floating recording pill
   "pill_theme": "classic",     // classic | ember | aurora | ocean | neon | breathe | scanner
   "pill_color": null,          // "#RRGGBB" to recolour the bars, null = theme default
@@ -154,7 +156,7 @@ Add a dictionary entry for **every variant the ASR produces** for a term: dictat
 
 ## Known limitations
 
-- English only: the models are the English-only `base.en` and `small.en`.
+- English only; larger models are optional downloads and no speed or accuracy comparison has been measured yet.
 - With the fallback ffmpeg recorder, capture takes about 1 to 1.5 s to start: begin speaking after the cue, or hold the key a beat before talking.
 - No Command Mode (voice editing).
 - No prebuilt app: building needs Homebrew, the Command Line Tools and Python 3.14+.
