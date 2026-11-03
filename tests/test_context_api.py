@@ -5,7 +5,7 @@ import wave
 
 import pytest
 
-from tests.fake_ax import FakeAX, textbox
+from tests.fake_ax import FakeAX, FakeElement, textbox
 from voisr.history import HistoryStore
 from voisr.ui import Api, HotkeyService, glossary_prompt
 
@@ -895,4 +895,49 @@ def test_the_hotkey_path_only_queues_work(tmp_path):
     api._release_recording(paste=False).result(timeout=5)
     assert time.monotonic() - started < 1
     assert len(seen) == 2
+    api.close()
+
+
+def test_a_failed_press_capture_does_not_hide_a_good_release(tmp_path):
+    from types import SimpleNamespace
+
+    from voisr.ax_context import UNREADABLE
+
+    class FailsOnce(FakeAX):
+        fail = True
+
+        def focused_element(self, timeout_s):
+            if self.fail:
+                self.fail = False
+                return UNREADABLE
+            return super().focused_element(timeout_s)
+
+    recorder = FakeRecorder()
+    recorder.start(tmp_path / "clip.wav")
+    recorder.stop()
+    api = make_api(tmp_path, FailsOnce(textbox("say hi to Priya today")))
+    api._focus.capture_press(1)
+    settle(api)
+    api._focus.capture_release(1)
+    settle(api)
+    terms = api._session_terms(SimpleNamespace(sequence=1), tmp_path / "clip.wav")
+    assert terms == ["Priya"]
+    api.close()
+
+
+def test_a_secure_press_capture_yields_no_terms_even_with_a_good_release(tmp_path):
+    from types import SimpleNamespace
+
+    secure = FakeElement(AXRole="AXTextField", AXSubrole="AXSecureTextField")
+    ax = FakeAX(secure)
+    recorder = FakeRecorder()
+    recorder.start(tmp_path / "clip.wav")
+    recorder.stop()
+    api = make_api(tmp_path, ax)
+    api._focus.capture_press(1)
+    settle(api)
+    ax.focused = textbox("say hi to Priya today")
+    api._focus.capture_release(1)
+    settle(api)
+    assert api._session_terms(SimpleNamespace(sequence=1), tmp_path / "clip.wav") == []
     api.close()

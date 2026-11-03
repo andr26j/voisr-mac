@@ -404,6 +404,28 @@ class SessionFocus:
     def release_now(self) -> FocusContext | None:
         return self._finished(self.release)
 
+    def for_terms(self) -> FocusContext | None:
+        """The capture to pick terms from. Any secure capture means none: the
+        user was in a password field while speaking. Else the first whose field
+        was readable, and failing that the press capture, whose window title
+        and nearby labels may still be good. A failed capture is a truthy
+        object, so `press or release` would never reach the good one."""
+        captures = [c for c in (self.press_now(), self.release_now()) if c is not None]
+        if any(c.secure for c in captures):
+            return None
+        for capture in captures:
+            if capture.readable:
+                return capture
+        return captures[0] if captures else None
+
+    def for_app(self) -> FocusContext | None:
+        """The capture that names the app, the release one first as the paste
+        goes there. One that couldn't tell (no bundle id) doesn't count."""
+        for capture in (self.release_now(), self.press_now()):
+            if capture is not None and capture.bundle_id:
+                return capture
+        return None
+
     def ax_ms(self) -> float:
         return self.press_ms + self.release_ms
 

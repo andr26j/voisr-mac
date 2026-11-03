@@ -1689,8 +1689,8 @@ class Api:
         if state is None:
             return {}, {}
         timings = {"ax_context": state.ax_ms()}
-        focus = state.release_now() or state.press_now()
-        if focus is None or focus.secure or not focus.bundle_id:
+        focus = state.for_app()
+        if focus is None or focus.secure:
             return timings, {}
         return timings, {"app": focus.bundle_id}
 
@@ -1885,7 +1885,7 @@ class Api:
         try:
             if not self._screen_context_on():
                 return []
-            terms = context_terms(state.press_now() or state.release_now())
+            terms = context_terms(state.for_terms())
             return terms_for_clip(terms, wav_seconds(wav))
         except Exception as error:
             print(f"Voisr: context terms skipped ({error.__class__.__name__})", flush=True)

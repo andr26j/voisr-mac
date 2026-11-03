@@ -8,7 +8,7 @@ import pytest
 
 from tests.fake_ax import FakeAX, FakeElement, textbox
 from voisr.ax_context import (DENYLIST, MAX_VALUE_CHARS, UNREADABLE, AXWorker,
-                              FocusContext, FocusTracker, _split_at_utf16,
+                              FocusContext, FocusTracker, SessionFocus, _split_at_utf16,
                               capture_focus, denied)
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -292,6 +292,46 @@ def test_tracker_forgets_a_finished_dictation():
     tracker.forget(7)
     assert tracker.session(7) is None
     tracker.close()
+
+
+def _done(capture):
+    from concurrent.futures import Future
+    future = Future()
+    future.set_result(capture)
+    return future
+
+
+GOOD = FocusContext(bundle_id="com.good", readable=True, value="x")
+FAILED = FocusContext(reason="timeout")
+NOT_EDITABLE = FocusContext(bundle_id="com.web", reason="not_editable", window_title="T")
+SECURE = FocusContext(bundle_id="com.pw", secure=True, reason="secure")
+
+
+@pytest.mark.parametrize("press, release, expected", [
+    (GOOD, None, GOOD),
+    (None, GOOD, GOOD),
+    (FAILED, GOOD, GOOD),            # the failed press mustn't hide a good release
+    (GOOD, FAILED, GOOD),
+    (NOT_EDITABLE, FAILED, NOT_EDITABLE),   # its labels are still worth having
+    (SECURE, GOOD, None),
+    (GOOD, SECURE, None),
+    (None, None, None),
+])
+def test_which_capture_gives_the_terms(press, release, expected):
+    state = SessionFocus(press=_done(press) if press else None,
+                         release=_done(release) if release else None)
+    assert state.for_terms() == expected
+
+
+@pytest.mark.parametrize("press, release, expected", [
+    (GOOD, NOT_EDITABLE, NOT_EDITABLE),
+    (GOOD, FAILED, GOOD),            # release couldn't tell: not its app
+    (FAILED, FAILED, None),
+    (GOOD, SECURE, SECURE),          # the caller leaves a secure one unnamed
+])
+def test_which_capture_names_the_app(press, release, expected):
+    state = SessionFocus(press=_done(press), release=_done(release))
+    assert state.for_app() == expected
 
 
 def test_focuscontext_defaults_to_unreadable():
