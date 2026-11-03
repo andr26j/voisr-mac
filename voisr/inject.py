@@ -110,8 +110,28 @@ def _restore_after_ownership_check_failure(adapter, snapshot, owner_count,
     raise error
 
 
+def _old_clipboard_text(snapshot) -> str | None:
+    """What the clipboard held as text, to recognise it landing instead."""
+    for item in snapshot.items:
+        for type_name, payload in item.payloads:
+            if type_name == "public.utf8-plain-text":
+                return payload.decode("utf-8", "replace")
+    return None
+
+
+def _missed(verifier, snapshot) -> bool:
+    """Ask the verifier whether the paste missed. Its failure means no: that
+    is today's behaviour, and the clipboard goes back."""
+    try:
+        return bool(verifier(_old_clipboard_text(snapshot)))
+    except Exception as error:
+        print(f"Voisr: paste check skipped ({error.__class__.__name__})", flush=True)
+        return False
+
+
 def _paste_with_adapter(text, *, adapter, post_cmd_v,
-                        applescript_cmd_v, sleeper, on_sent=None) -> bool:
+                        applescript_cmd_v, sleeper, on_sent=None,
+                        verifier=None) -> bool:
     snapshot = adapter.snapshot()
     owner_count = adapter.write_text_if_unchanged(text, snapshot)
     try:
@@ -155,6 +175,12 @@ def _paste_with_adapter(text, *, adapter, post_cmd_v,
         return True
     try:
         sleeper(PASTE_GRACE_S)
+        # Read-only and bounded (paste_verify.VERIFY_BUDGET_S), and it never
+        # sends Cmd-V again. When the paste missed, the dictation stays on the
+        # clipboard for the user to paste; putting the old one back would lose
+        # the only copy within reach.
+        if verifier is not None and _missed(verifier, snapshot):
+            return True
     except BaseException as error:
         _restore_after_failure(
             adapter, snapshot, owner_count, error,
@@ -170,14 +196,17 @@ def _paste_with_adapter(text, *, adapter, post_cmd_v,
 
 
 def paste_at_cursor(text: str, restore_clipboard: bool = True,
-                    on_sent=None) -> bool:
+                    on_sent=None, verifier=None) -> bool:
     """Put text on the clipboard and paste it into the frontmost app.
 
     With restoration enabled (the default), a blocked paste raises a
     preservation-aware PasteDeliveryError. Set restore_clipboard=False to
     leave text available for a manual paste and receive False when blocked.
     on_sent, if given, is called once Cmd-V has been sent, before the
-    clipboard-restore wait.
+    clipboard-restore wait. verifier, if given, is called after that wait with
+    the old clipboard's text, and returning True leaves the dictation on the
+    clipboard instead of restoring. Not called when the old clipboard was
+    concealed, or with restore_clipboard=False: neither restores anyway.
     """
     if not restore_clipboard:
         set_clipboard(text)
@@ -195,4 +224,5 @@ def paste_at_cursor(text: str, restore_clipboard: bool = True,
         applescript_cmd_v=_applescript_cmd_v,
         sleeper=time.sleep,
         on_sent=on_sent,
+        verifier=verifier,
     )

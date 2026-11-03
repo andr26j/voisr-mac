@@ -114,3 +114,30 @@ def test_sigkilled_parent_leaves_no_whisper_server(tmp_path):
                     os.kill(p, signal.SIGKILL)
                 except OSError:
                     pass
+
+
+def test_on_screen_terms_bias_both_transcribers(tmp_path, spoken_wav):
+    """A word read off the screen, through the same path a dictation takes,
+    changes the spelling in whisper-server and in whisper-cli."""
+    from voisr.ax_context import FocusContext
+    from voisr.context_terms import context_terms
+    from voisr.transcriber import transcribe_routed
+    from voisr.ui import glossary_prompt
+
+    wav = spoken_wav(SENTENCE)
+    focus = FocusContext(before_text="ask ", after_text="Zorblaks Kwindelton about Kestrelwey")
+    prompt = glossary_prompt({}, context_terms(focus))
+    assert prompt == "Glossary: Zorblaks, Kwindelton, Kestrelwey."
+    server = WhisperServer(tmp_path / "state.json")
+    try:
+        warm, warm_info = transcribe_routed(wav, MODEL, prompt=prompt, server=server)
+        warm_plain, _ = transcribe_routed(wav, MODEL, server=server)
+    finally:
+        server.shutdown()
+    cli, cli_info = transcribe_routed(wav, MODEL, prompt=prompt)
+    cli_plain, _ = transcribe_routed(wav, MODEL)
+    assert warm_info["mode"] == "warm" and cli_info["mode"] == "cli"
+    print("server:", warm_plain, "->", warm)
+    print("cli:", cli_plain, "->", cli)
+    assert "Kestrelwey" in warm or "Zorblaks" in warm
+    assert "Kestrelwey" in cli or "Zorblaks" in cli

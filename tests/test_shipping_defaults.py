@@ -38,3 +38,11 @@ def test_the_app_creates_its_own_config_on_first_save(tmp_path):
     api.set_config({"dictionary": {"voiser": "Voisr"}})
     saved = json.loads((tmp_path / "config.json").read_text())
     assert saved["dictionary"] == {"voiser": "Voisr"}
+
+
+def test_learned_corrections_are_never_tracked():
+    for name in ("data/suggestions.json", "data/suggestions.json.lock",
+                 "data/suggestions.json.corrupt-1", "data/.suggestions.json.ab.tmp"):
+        ignored = subprocess.run(["git", "check-ignore", "-q", name], cwd=ROOT,
+                                 capture_output=True, timeout=30)
+        assert ignored.returncode == 0, name

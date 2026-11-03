@@ -115,11 +115,14 @@ def _placeholder_namespace(content: str) -> str:
         counter += 1
 
 
-def _dictionary_rewriter(dictionary: dict[str, str] | None) -> Callable[[str], str]:
+def _dictionary_rewriter(dictionary: dict[str, str] | None,
+                         on_replace: Callable[[str], None] | None = None,
+                         ) -> Callable[[str], str]:
     """One pass, longest phrase first: a replacement never feeds another
     entry ({"york": ..., "new york": ...} gave "New Yorkshire"), and a space
     in a phrase matches any run of whitespace (whisper may break a line).
-    Built once per clean(): it runs on every gap between protected tokens."""
+    Built once per clean(): it runs on every gap between protected tokens.
+    on_replace, if given, hears the entry's key each time one fires."""
     entries = sorted(((k, v) for k, v in (dictionary or {}).items() if k.strip()),
                      key=lambda kv: len(kv[0]), reverse=True)
     if not entries:
@@ -135,18 +138,25 @@ def _dictionary_rewriter(dictionary: dict[str, str] | None) -> Callable[[str], s
         patterns.append(f"(?P<d{i}>{pattern})")
     compiled = re.compile("|".join(patterns), re.IGNORECASE)
 
+    def replace(match) -> str:
+        spoken, written = entries[int(match.lastgroup[1:])]
+        if on_replace is not None:
+            on_replace(spoken)
+        return written
+
     def rewrite(text: str) -> str:
         # a callable replacement keeps backslashes in `written` literal
-        return compiled.sub(lambda m: entries[int(m.lastgroup[1:])][1], text)
+        return compiled.sub(replace, text)
 
     return rewrite
 
 
 def _protect_original_spans(
-    text: str, dictionary: dict[str, str] | None
+    text: str, dictionary: dict[str, str] | None,
+    on_replace: Callable[[str], None] | None = None,
 ) -> tuple[str, list[str], re.Pattern[str]]:
     spans = list(_protected_spans(text))
-    rewrite = _dictionary_rewriter(dictionary)
+    rewrite = _dictionary_rewriter(dictionary, on_replace)
     gaps: list[str] = []
     last = 0
     for start, end, _ in spans:
@@ -191,13 +201,15 @@ def _restore_tokens(text: str, protected: list[str], placeholder_re: re.Pattern[
     return placeholder_re.sub(lambda match: protected[int(match.group(1), 16)], text)
 
 
-def clean(text: str, dictionary: dict[str, str] | None = None) -> str:
+def clean(text: str, dictionary: dict[str, str] | None = None,
+          on_replace: Callable[[str], None] | None = None) -> str:
     """Normalize a raw transcript: strip fillers, fix spacing/punctuation,
-    apply the user's spoken->written dictionary, capitalize the first letter."""
+    apply the user's spoken->written dictionary, capitalize the first letter.
+    on_replace hears a dictionary entry's key each time it fires."""
     text = NON_SPEECH_RE.sub(" ", text)
     if not text.strip():
         return ""
-    out, protected, placeholder_re = _protect_original_spans(text, dictionary)
+    out, protected, placeholder_re = _protect_original_spans(text, dictionary, on_replace)
     out = re.sub(r"\s+", " ", out).strip()
     out = re.sub(r"\s+([,.;:!?])", r"\1", out)
     # a dropped filler can leave its comma against the sentence end ("it, uh?")

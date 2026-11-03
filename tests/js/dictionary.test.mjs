@@ -85,3 +85,75 @@ test("filter matching case-folds the spoken key the same way the written value a
   assert.equal(h["dict-list"].children.length, 1,
     "a lowercase query must still find a mixed-case spoken key");
 });
+
+function mountWithSuggestions(t, { dictionary = {}, state, failing = false }) {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const env = loadVoisr(["js/ui.js", "js/lists.js", "js/api.js", "js/views/dictionary.js"]);
+  const calls = [];
+  env.window.pywebview = { api: {
+    get_config: async () => ({ dictionary: { ...dictionary } }),
+    get_suggestions: async () => { if (failing) throw new Error("no"); return state; },
+    accept_suggestion: async (id) => { calls.push(["accept", id]); return { ok: true }; },
+    dismiss_suggestion: async (id) => { calls.push(["dismiss", id]); return { ok: true }; },
+  } };
+  const nodes = {};
+  for (const id of [...IDS, "dict-suggestions", "dict-suggestion-list"]) {
+    nodes[id] = makeNode(id === "dict-search" ? "input" : "div");
+    env.register(id, nodes[id]);
+  }
+  nodes["dict-search"].value = "";
+  env.V.views.dictionary.initSearch();
+  return { V: env.V, calls, ...nodes };
+}
+
+const flatten = (node) => [node, ...Array.from(node.children || []).flatMap(flatten)];
+const textsOf = (node) => flatten(node).map((n) => n.textContent).filter(Boolean);
+const byClass = (node, cls) => flatten(node).filter((n) => (n.className || "").includes(cls));
+
+test("pending suggestions show with Accept and Dismiss, and the card hides without any", async (t) => {
+  const h = mountWithSuggestions(t, { state: {
+    pending: [{ id: "p1", heard: "trade mate", written: "TradeMate", seen: 2 }],
+    auto_added: {}, used: {},
+  } });
+  await h.V.views.dictionary.render();
+  assert.equal(h["dict-suggestions"].hidden, false);
+  const buttons = byClass(h["dict-suggestion-list"], "btn-secondary");
+  assert.deepEqual(buttons.map((b) => b.textContent), ["Accept", "Dismiss"]);
+});
+
+test("the suggestions card hides when there are none", async (t) => {
+  const empty = mountWithSuggestions(t, { state: { pending: [], auto_added: {}, used: {} } });
+  await empty.V.views.dictionary.render();
+  assert.equal(empty["dict-suggestions"].hidden, true);
+});
+
+test("an auto-added entry is marked and keeps its one Remove button; others aren't marked", async (t) => {
+  const h = mountWithSuggestions(t, {
+    dictionary: { voiser: "Voisr", brunswik: "Brunswick" },
+    state: { pending: [], auto_added: { voiser: "Voisr" }, used: { brunswik: 4 } },
+  });
+  await h.V.views.dictionary.render();
+  const rows = Array.from(h["dict-list"].children);
+  assert.equal(rows.length, 2);
+  const [auto, plain] = rows[0].textContent.includes("voiser") || textsOf(rows[0]).includes("voiser")
+    ? rows : [rows[1], rows[0]];
+  assert.equal(byClass(auto, "dict-auto").length, 1);
+  assert.equal(byClass(plain, "dict-auto").length, 0);
+  assert.equal(byClass(auto, "danger").length, 1);
+  assert.equal(byClass(plain, "dict-used")[0].textContent, "used 4×");
+});
+
+test("an entry the user edited since is no longer marked auto-added", async (t) => {
+  const h = mountWithSuggestions(t, {
+    dictionary: { voiser: "VoisR" },
+    state: { pending: [], auto_added: { voiser: "Voisr" }, used: {} },
+  });
+  await h.V.views.dictionary.render();
+  assert.equal(byClass(h["dict-list"], "dict-auto").length, 0);
+});
+
+test("the entry list still draws when suggestions can't be read", async (t) => {
+  const h = mountWithSuggestions(t, { dictionary: { voiser: "Voisr" }, failing: true });
+  await h.V.views.dictionary.render();
+  assert.equal(Array.from(h["dict-list"].children).length, 1);
+});

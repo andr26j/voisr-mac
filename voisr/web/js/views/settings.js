@@ -46,6 +46,28 @@ window.Voisr = window.Voisr || {};
       V.ui.el("i"), V.ui.el("b"));
   }
 
+  /* Learning reads other apps' text, so it can't be on without screen context;
+     the switches say so rather than claim a state the app isn't in. */
+  function showContext(cfg) {
+    const $ = V.ui.$;
+    const context = $("#screen-context-toggle");
+    if (!context) return;
+    const on = cfg.use_screen_context !== false;
+    const learning = on && cfg.learn_from_edits !== false;
+    context.checked = on;
+    $("#learn-toggle").checked = learning;
+    $("#learn-toggle").disabled = !on;
+    $("#auto-add-toggle").checked = learning && cfg.dictionary_auto_add !== false;
+    $("#auto-add-toggle").disabled = !learning;
+  }
+
+  async function saveContextToggle(e, key, label) {
+    const res = await V.ui.tryApi(
+      V.api().set_config({ [key]: e.target.checked }), `Save ${label}`);
+    if (!res) { e.target.checked = !e.target.checked; return; }
+    showContext(res);
+  }
+
   function renderAppearance() {
     const labels = Object.fromEntries(APPEARANCES.map((a) => [a.value, a.label]));
     V.ui.syncRadios(V.ui.$("#appearance-grid"), {
@@ -385,6 +407,7 @@ window.Voisr = window.Voisr || {};
         appliedAppearance = cfg.appearance || "system";
         renderAppearance();
         $("#launch-toggle").checked = !!cfg.launch_at_login;
+        showContext(cfg);
         showUnload(cfg.model_unload);
       }
       if (hotkey) $("#hotkey-current").textContent = hotkey.display || "unset";
@@ -462,6 +485,14 @@ window.Voisr = window.Voisr || {};
 
     document.getElementById("model-list").addEventListener("click", onModelClick);
 
+    for (const [id, key, label] of [
+      ["screen-context-toggle", "use_screen_context", "screen context"],
+      ["learn-toggle", "learn_from_edits", "learning"],
+      ["auto-add-toggle", "dictionary_auto_add", "auto-add"],
+    ]) {
+      const box = document.getElementById(id);
+      if (box) box.addEventListener("change", (e) => saveContextToggle(e, key, label));
+    }
     document.getElementById("launch-toggle").addEventListener("change", async (e) => {
       const res = await V.ui.tryApi(
         V.api().set_launch_at_login(e.target.checked), "Save launch at login");
@@ -540,5 +571,5 @@ window.Voisr = window.Voisr || {};
     node.dataset.state = status.state || "unknown";
   }
 
-  V.views.settings = { showUnload, renderModels, renderAppearance, renderHotkeyStatus, init, render, renderThemes, renderColorWheel, initColorWheel, openColorPopover };
+  V.views.settings = { showContext, showUnload, renderModels, renderAppearance, renderHotkeyStatus, init, render, renderThemes, renderColorWheel, initColorWheel, openColorPopover };
 })(window.Voisr);

@@ -628,3 +628,14 @@ def test_trend_bars_keep_round_caps_when_scaled():
     rule = re.search(r"\.trend \.bar \{([^}]*)\}", css).group(1)
     assert "scaleY(var(--h))" in rule
     assert re.search(r"border-radius:\s*2px\s*/\s*calc\(2px\s*/\s*var\(--h\)\)", rule)
+
+
+def test_settings_say_plainly_what_screen_context_reads():
+    html = INDEX.read_text()
+    for el_id in ("screen-context-toggle", "learn-toggle", "auto-add-toggle",
+                  "dict-suggestions", "dict-suggestion-list"):
+        assert f'id="{el_id}"' in html, el_id
+    for phrase in ("the field you are typing in", "window title",
+                   "never reads password fields or password managers",
+                   "Voisr reads no text from other apps"):
+        assert phrase in html, phrase
