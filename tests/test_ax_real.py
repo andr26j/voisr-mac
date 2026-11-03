@@ -4,8 +4,8 @@ takes focus for a few seconds and briefly uses the clipboard (and restores it):
 
     VOISR_RUN_AX_INTEGRATION=1 python3 -m pytest -q tests/test_ax_real.py -s
 
-Needs Accessibility for the app running pytest. Opens its own untitled document
-and closes it unsaved; other TextEdit windows are left alone."""
+Needs Accessibility for the app running pytest. Opens its own temp file and
+closes it; other TextEdit windows are left alone."""
 import os
 import subprocess
 import time
@@ -44,29 +44,30 @@ class FakeRecorder:
         pass
 
 
+def quit_textedit():
+    # bounded, and not checked: a dialog must not hang the run or fail the test
+    subprocess.run(["osascript", "-e", 'with timeout of 8 seconds\n'
+                    'tell application "TextEdit" to quit\nend timeout'],
+                   capture_output=True, timeout=20)
+
+
 @pytest.fixture
-def textedit():
+def textedit(tmp_path):
+    """A temp file, not a new untitled document: with iCloud on, TextEdit saves
+    those as Untitled.rtf in iCloud Drive, and reopens them at every launch."""
     was_running = "true" == osa('application "TextEdit" is running')
-    name = osa(f'''tell application "TextEdit"
-        activate
-        set d to make new document with properties {{text:"{DOC_MARK} Priya Raman wrote: "}}
-        return name of d
-    end tell''')
-    osa('tell application "System Events" to tell process "TextEdit" to '
-        'set frontmost to true')
+    path = tmp_path / f"{DOC_MARK}-{os.getpid()}.txt"
+    path.write_text(f"{DOC_MARK} Priya Raman wrote: ")
+    subprocess.run(["open", "-a", "TextEdit", str(path)], check=True, timeout=20)
+    osa('tell application "TextEdit" to activate')
     try:
-        yield name
+        yield path.name
     finally:
-        # by content: an earlier failed run may have left another "Untitled"
-        osa(f'''tell application "TextEdit"
-            repeat with i from (count of documents) to 1 by -1
-                if (text of document i) contains "{DOC_MARK}" then
-                    close document i saving no
-                end if
-            end repeat
-        end tell''')
+        osa(f'''with timeout of 8 seconds
+            tell application "TextEdit" to close document "{path.name}" saving no
+        end timeout''')
         if not was_running:
-            osa('tell application "TextEdit" to quit')
+            quit_textedit()
 
 
 def spin_run_loop(seconds=0.05):
@@ -126,6 +127,7 @@ def test_capture_paste_verify_edit_suggestion(tmp_path, textedit, monkeypatch):
             assert item["timings_ms"]["verify"] <= 300
             # the user fixes the word
             current = osa(f'tell application "TextEdit" to get text of document "{textedit}"')
+            assert "Voiser is great" in current
             fixed = current.replace("Voiser is great", "Voisr is great")
             osa(f'tell application "TextEdit" to set text of document "{textedit}" to "{fixed}"')
             watcher = api._edit_watcher

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """What screen context costs, on this Mac, against real apps. Takes focus for a
-few seconds (TextEdit, its own document, closed unsaved) and briefly uses the
+few seconds (TextEdit, on its own temp file, closed after) and briefly uses the
 clipboard. Prints text lengths, never text.
 
   python3 scripts/bench_context.py [--models-dir DIR] [--model small.en] [--no-whisper]
@@ -259,30 +259,31 @@ def main():
         sys.exit("this process has no Accessibility grant")
     other_apps()
     was_running = osa('application "TextEdit" is running') == "true"
-    osa(f'''tell application "TextEdit"
-        activate
-        make new document with properties {{text:"{BODY}"}}
-    end tell''')
-    try:
-        for _ in range(100):
-            spin()
-            front = adapter.frontmost()[0]
-            if front == "com.apple.TextEdit":
-                break
-        spin(0.3)
-        textedit_reads(adapter)
-        with tempfile.TemporaryDirectory() as tmp:
-            delivery(adapter, Path(tmp))
-    finally:
-        osa(f'''tell application "TextEdit"
-            repeat with i from (count of documents) to 1 by -1
-                if (text of document i) contains "{MARK}" then
-                    close document i saving no
-                end if
-            end repeat
-        end tell''')
-        if not was_running:
-            osa('tell application "TextEdit" to quit')
+    # A temp file, not a new document: with iCloud on, TextEdit saves untitled
+    # documents to iCloud Drive and reopens them at every launch.
+    with tempfile.TemporaryDirectory() as doc_dir:
+        doc = Path(doc_dir) / f"{MARK}-{os.getpid()}.txt"
+        doc.write_text(BODY)
+        subprocess.run(["open", "-a", "TextEdit", str(doc)], check=True, timeout=20)
+        osa('tell application "TextEdit" to activate')
+        try:
+            for _ in range(100):
+                spin()
+                front = adapter.frontmost()[0]
+                if front == "com.apple.TextEdit":
+                    break
+            spin(0.3)
+            textedit_reads(adapter)
+            with tempfile.TemporaryDirectory() as tmp:
+                delivery(adapter, Path(tmp))
+        finally:
+            osa(f'''with timeout of 8 seconds
+                tell application "TextEdit" to close document "{doc.name}" saving no
+            end timeout''')
+            if not was_running:
+                subprocess.run(["osascript", "-e", 'with timeout of 8 seconds\n'
+                                'tell application "TextEdit" to quit\nend timeout'],
+                               capture_output=True, timeout=20)
     hung_app()
     if not args.no_whisper:
         with tempfile.TemporaryDirectory() as tmp:

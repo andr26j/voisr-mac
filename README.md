@@ -198,7 +198,7 @@ Tests synthesize speech with macOS `say`, so the full audio → text pipeline is
 ./venv/bin/pytest -q -m "not audio"
 ```
 
-One opt-in test drives the real Accessibility API and a real Cmd-V against TextEdit, taking focus for a few seconds. `scripts/bench_context.py` prints what screen context costs on your Mac.
+One opt-in test drives the real Accessibility API and a real Cmd-V against TextEdit, on a temp file, taking focus for a few seconds. `scripts/bench_context.py` prints what screen context costs on your Mac.
 
 ```bash
 VOISR_RUN_AX_INTEGRATION=1 ./venv/bin/pytest -q tests/test_ax_real.py -s
