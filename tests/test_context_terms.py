@@ -1,4 +1,6 @@
 """Component B: which on-screen tokens may bias whisper, and how."""
+from pathlib import Path
+
 import pytest
 
 from voisr.ax_context import FocusContext
@@ -8,11 +10,22 @@ from voisr.context_terms import (cli_safe_terms, context_terms, prompt_echoed,
 from voisr.ui import GLOSSARY_MAX_CHARS, GLOSSARY_MAX_TERMS, glossary_prompt
 
 
+@pytest.fixture(autouse=True)
+def system_dictionary(monkeypatch):
+    """A small stand-in, so results don't depend on this Mac's word list."""
+    words = {"meanwhile", "hopefully"}
+    monkeypatch.setattr("voisr.context_terms.everyday_word_check",
+                        lambda: lambda word: word.casefold() in words)
+
+
 @pytest.mark.parametrize("text, expected", [
     ("we met Priya at the office", ["Priya"]),
-    ("Priya met us", []),                                   # sentence-initial
-    ("Done. Priya met us", []),
-    ("Done: Priya met us", []),
+    ("Priya met us", ["Priya"]),                            # opens a sentence
+    ("Done. Priya met us", ["Priya"]),
+    ("Done: Priya met us", ["Priya"]),
+    ("Priya", ["Priya"]),                                   # alone in a field
+    ("Priya.\nTareq.\n", ["Priya", "Tareq"]),               # a line each
+    ("Meanwhile we left. Hopefully soon.", []),             # ordinary words
     ("ask Priya's team", ["Priya"]),                        # possessive
     ("see Monday and the Internet", []),                    # stoplist
     ("run getUserName now", ["getUserName"]),               # camelCase
@@ -44,11 +57,74 @@ def test_nearest_the_caret_comes_first_and_sources_keep_their_order():
 
 @pytest.mark.parametrize("before, after, expected", [
     ("say hi to ", "Priya today", ["Priya"]),   # mid-sentence at the caret
-    ("all done. ", "Priya today", []),          # a new sentence
-    ("", "Priya today", []),                    # start of the field
+    ("all done. ", "Priya today", ["Priya"]),   # a new sentence
+    ("", "Priya today", ["Priya"]),             # start of the field
 ])
 def test_text_after_the_caret_carries_on_the_sentence(before, after, expected):
     assert context_terms(FocusContext(before_text=before, after_text=after)) == expected
+
+
+def test_openers_come_after_every_other_term_and_only_fill_what_is_left():
+    focus = FocusContext(before_text="Tareq said hi to Alpha. ", after_text="Priya met Beta")
+    assert context_terms(focus) == ["Alpha", "Beta", "Tareq", "Priya"]
+    assert context_terms(focus, limit=2) == ["Alpha", "Beta"]
+    assert context_terms(focus, limit=3) == ["Alpha", "Beta", "Tareq"]
+
+
+def test_the_dictionary_is_read_once_and_only_for_an_opener(monkeypatch):
+    calls = []
+
+    def check():
+        calls.append(1)
+        return lambda word: False
+
+    monkeypatch.setattr("voisr.context_terms.everyday_word_check", check)
+    assert context_terms(FocusContext(after_text="we met Priya")) == ["Priya"]
+    assert calls == []
+    assert context_terms(FocusContext(after_text="Priya. Tareq. Selwyn.")) == [
+        "Priya", "Tareq", "Selwyn"]
+    assert calls == [1]
+
+
+def test_checks_are_capped_on_a_long_document():
+    from voisr.context_terms import MAX_OPENERS_CHECKED
+
+    many = " ".join(f"Name{chr(97 + i // 26)}{chr(97 + i % 26)}x." for i in range(60))
+    assert len(context_terms(FocusContext(after_text=many), limit=50)) == MAX_OPENERS_CHECKED
+
+
+def test_a_dictionary_that_cannot_be_read_keeps_openers_out(monkeypatch, tmp_path):
+    from voisr.common_words import everyday_word_check
+
+    monkeypatch.setattr("voisr.context_terms.everyday_word_check",
+                        lambda: everyday_word_check(tmp_path / "missing"))
+    assert context_terms(FocusContext(after_text="Priya met us")) == []
+
+
+@pytest.mark.skipif(not Path("/usr/share/dict/words").is_file(),
+                    reason="needs the system dictionary")
+def test_the_real_system_dictionary_tells_a_name_from_a_word():
+    from voisr.common_words import everyday_word_check
+
+    check = everyday_word_check()
+    assert check("Meanwhile") and check("hopefully")
+    assert not check("Tareq") and not check("Priya")
+
+
+def test_sentence_openers_stay_off_the_command_line():
+    terms = context_terms(FocusContext(after_text="Qwertzuiop. we met Priya"))
+    assert terms == ["Priya", "Qwertzuiop"]
+    assert cli_safe_terms(terms) == ["Priya"]
+    assert cli_safe_terms(terms_for_clip(terms, 1.0)) == ["Priya"]
+
+
+def test_the_last_word_of_a_list_with_no_final_newline_counts(tmp_path):
+    from voisr.common_words import everyday_word_check
+
+    words = tmp_path / "words"
+    words.write_bytes(b"first\nlast")
+    check = everyday_word_check(words)
+    assert check("first") and check("last") and not check("middle")
 
 
 def test_dedupes_case_insensitively_and_limits():

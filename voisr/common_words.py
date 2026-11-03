@@ -1,6 +1,5 @@
 """Common English, for two jobs: leaving ordinary words out of the context
 terms, and refusing to auto-add them to the dictionary."""
-import re
 from pathlib import Path
 
 SYSTEM_WORDS = Path("/usr/share/dict/words")
@@ -99,16 +98,21 @@ def is_common_word(word: str) -> bool:
     return any(form in _COMMON for form in _forms(lowered))
 
 
-def is_everyday_lowercase_word(word: str, words_path: Path = SYSTEM_WORDS) -> bool:
-    """Is this spelled in the system dictionary as an ordinary lowercase word?
-    Names are capitalised there, so "claude" is not and "clod" is. Read on
-    demand with nothing kept: this runs a few times a day at most, and 2.4 MB
-    of words shouldn't sit in memory on an 8 GB Mac. A dictionary that can't
-    be read answers True, which refuses the auto-add."""
+def everyday_word_check(words_path: Path = SYSTEM_WORDS):
+    """A check for many words from one read of the system dictionary: is this
+    spelled there as an ordinary lowercase word? Names are capitalised there, so
+    "claude" is not and "clod" is. Nothing outlives the check: 2.4 MB of words
+    shouldn't sit in memory on an 8 GB Mac. A dictionary that can't be read
+    answers True to everything."""
     try:
-        words = words_path.read_bytes()
+        words = b"\n" + words_path.read_bytes() + b"\n"
     except OSError:
-        return True
-    return any(
-        re.search(rb"^" + re.escape(form.encode("utf-8")) + rb"$", words, re.MULTILINE)
-        for form in _forms(word.lower()))
+        return lambda word: True
+    return lambda word: any(b"\n" + form.encode("utf-8") + b"\n" in words
+                            for form in _forms(word.lower()))
+
+
+def is_everyday_lowercase_word(word: str, words_path: Path = SYSTEM_WORDS) -> bool:
+    """One word's check, for the auto-add rules: those run a few times a day at
+    most. A dictionary that can't be read refuses the auto-add."""
+    return everyday_word_check(words_path)(word)

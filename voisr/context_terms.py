@@ -1,12 +1,13 @@
 """Names and terms worth biasing whisper toward, picked out of on-screen text.
-Pure and local. Only short, name-shaped tokens get out of here, never a run of
+Local, reading nothing but the system dictionary. Only short, name-shaped tokens get out of here, never a run of
 the text itself."""
 import re
 
 from voisr.ax_context import BROWSERS, TERMINALS, FocusContext
-from voisr.common_words import is_common_word
+from voisr.common_words import everyday_word_check, is_common_word
 
 DEFAULT_LIMIT = 20
+MAX_OPENERS_CHECKED = 20  # each is a search through the system dictionary
 SHORT_CLIP_S = 2.0
 SHORT_CLIP_TERMS = 5
 MOSTLY_TERMS = 0.6
@@ -47,6 +48,11 @@ def _is_term(token: str, sentence_start: bool) -> bool:
             and not is_common_word(token))
 
 
+class SentenceOpener(str):
+    """A term kept for what the dictionary says of it, not for how it sits in a
+    sentence. Alone in a field it is also what a revealed password looks like."""
+
+
 def is_mixed_term(term: str) -> bool:
     """Letters and digits together: gpt4 and M1, but also what a visible
     password or one-time code looks like, and nothing tells them apart."""
@@ -56,7 +62,8 @@ def is_mixed_term(term: str) -> bool:
 def cli_safe_terms(terms) -> list[str]:
     """What may go on whisper-cli's command line, where other processes of this
     user can read it for as long as it runs."""
-    return [term for term in terms if not is_mixed_term(term)]
+    return [term for term in terms
+            if not is_mixed_term(term) and not isinstance(term, SentenceOpener)]
 
 
 def _tokens(text: str, sentence_start: bool = True):
@@ -73,31 +80,43 @@ def _terms_in(text: str, sentence_start: bool = True) -> list[str]:
     return [t for t, start in _tokens(text, sentence_start) if _is_term(t, start)]
 
 
-def _caret_order(before: str, after: str) -> list[str]:
-    """Terms around the caret, nearest first, taking turns from each side."""
-    left = list(reversed(_terms_in(before)))
+def _openers_in(text: str, sentence_start: bool = True) -> list[str]:
+    """Capitalised words that only sentence position keeps from being terms: a
+    name alone on a line, or one that opens a sentence."""
+    return [t for t, start in _tokens(text, sentence_start)
+            if start and _is_term(t, False) and not _is_term(t, True)]
+
+
+def _caret_order(before: str, after: str, pick=_terms_in) -> list[str]:
+    """Words around the caret, nearest first, taking turns from each side."""
+    left = list(reversed(pick(before)))
     # text after the caret carries on the sentence before it
     tail = before.rstrip()
-    right = _terms_in(after, not tail or tail[-1] in _ENDS_SENTENCE)
+    right = pick(after, not tail or tail[-1] in _ENDS_SENTENCE)
     merged = []
     for i in range(max(len(left), len(right))):
         merged += left[i:i + 1] + right[i:i + 1]
     return merged
 
 
+def _in_source_order(focus: FocusContext, pick) -> list[str]:
+    ordered = pick(focus.selected_text)
+    ordered += _caret_order(focus.before_text, focus.after_text, pick)
+    for text in focus.nearby_texts:
+        ordered += pick(text)
+    return ordered + pick(focus.window_title)
+
+
 def context_terms(focus: FocusContext | None, limit: int = DEFAULT_LIMIT) -> list[str]:
+    """Terms by source, then, with room left, words opening a sentence that the
+    system dictionary doesn't have as ordinary words ("Tareq", not "Meanwhile")."""
     if focus is None or focus.secure:
         return []
     # A terminal or a web page is where a code or a generated password sits in
     # plain view, so mixed tokens from there aren't worth having.
     skip_mixed = focus.bundle_id in TERMINALS or focus.bundle_id in BROWSERS
-    ordered = _terms_in(focus.selected_text)
-    ordered += _caret_order(focus.before_text, focus.after_text)
-    for text in focus.nearby_texts:
-        ordered += _terms_in(text)
-    ordered += _terms_in(focus.window_title)
     seen, out = set(), []
-    for term in ordered:
+    for term in _in_source_order(focus, _terms_in):
         if skip_mixed and is_mixed_term(term):
             continue
         key = term.casefold()
@@ -105,7 +124,18 @@ def context_terms(focus: FocusContext | None, limit: int = DEFAULT_LIMIT) -> lis
             seen.add(key)
             out.append(term)
         if len(out) >= limit:
-            break
+            return out
+    openers = list(dict.fromkeys(_in_source_order(focus, _openers_in)))
+    openers = [word for word in openers if word.casefold() not in seen][:MAX_OPENERS_CHECKED]
+    if openers:
+        everyday = everyday_word_check()
+        for word in openers:
+            key = word.casefold()
+            if key not in seen and not everyday(word):
+                seen.add(key)
+                out.append(SentenceOpener(word))
+                if len(out) >= limit:
+                    break
     return out
 
 
