@@ -36,6 +36,12 @@ def similarity(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a.casefold(), b.casefold(), autojunk=False).ratio()
 
 
+def is_truncation(heard: str, written: str) -> bool:
+    """Written is only the start of what was heard: "Tarek" -> "Tar", which may
+    be a word left half-typed."""
+    return len(written) < len(heard) and heard.casefold().startswith(written.casefold())
+
+
 def auto_add_kind(heard: str, written: str, *, common=is_common_word,
                   everyday=is_everyday_lowercase_word) -> str | None:
     """Why this pair is safe to add unasked ("capitalization" or "spelling"),
@@ -51,6 +57,8 @@ def auto_add_kind(heard: str, written: str, *, common=is_common_word,
         if sum(c.isupper() for c in written) <= sum(c.isupper() for c in heard):
             return None
         kind = "capitalization"
+    elif is_truncation(heard, written):
+        return None
     elif similarity(heard, written) >= AUTO_ADD_SIMILARITY:
         kind = "spelling"
     else:

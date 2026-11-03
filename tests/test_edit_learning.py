@@ -6,8 +6,8 @@ import pytest
 
 from tests.fake_ax import FakeAX, textbox
 from voisr.ax_context import FocusContext
-from voisr.edit_learning import (EditWatcher, READ_AT_S, changed_share, diff_candidates,
-                                 locate_span)
+from voisr.edit_learning import (EditWatcher, MAX_RECHECKS, READ_AT_S, RECHECK_S, changed_share,
+                                 diff_candidates, is_rewrite, locate_span)
 from voisr.suggestions import (ACCEPTED, AUTO_ADDED, DISMISSED, PENDING, Pair,
                                SuggestionStore, auto_add_kind, may_auto_add, pair_id)
 
@@ -162,6 +162,13 @@ def kind(heard, written):
     ("open ai", "Open AI", None),
     # too different
     ("clode", "Anthropic", None),
+    # the start of what was heard may be a word left half-typed
+    ("Tarek", "Tar", None),
+    ("Tarek", "tare", None),
+    ("Brunswicks", "Brunswick", None),
+    # adding to it is not a truncation
+    ("Tarek", "Tarekk", "spelling"),
+    ("Brunswic", "Brunswick", "spelling"),
     # lowering is style, not a term
     ("Voisr", "voisr", None),
     ("GITHUB", "github", None),
@@ -264,7 +271,8 @@ def test_dictionary_changes_set_status(tmp_path, status, old, new, after):
     assert store.get(pid).status == after
 
 
-def make_watcher(box, terms=(), enabled=lambda: True, ax=None):
+def make_watcher(box, terms=(), enabled=lambda: True, ax=None, pasted="voiser is great",
+                 after_text=" end"):
     ax = ax or FakeAX(box)
     results = []
     now = [0.0]
@@ -282,9 +290,9 @@ def make_watcher(box, terms=(), enabled=lambda: True, ax=None):
     watcher = EditWatcher(ax, Worker(), enabled, results.append, clock=lambda: now[0],
                           budget_s=1.0, autostart=False)
     before_text = "start "
-    focus = FocusContext(bundle_id=ax.bundle_id, before_text=before_text, after_text=" end",
+    focus = FocusContext(bundle_id=ax.bundle_id, before_text=before_text, after_text=after_text,
                          element=box, element_id=box.id, caret_known=True)
-    watcher.watch("item1", focus, box.id, "voiser is great", terms)
+    watcher.watch("item1", focus, box.id, pasted, terms)
 
     def run_to(t):
         now[0] = t
@@ -358,6 +366,447 @@ def test_a_rewrite_yields_nothing_even_from_earlier_reads():
     run_to(READ_AT_S[1])
     assert results[0].reason == "rewrite"
     assert results[0].pairs == [] and results[0].words_corrected == 0
+
+
+@pytest.mark.parametrize("pasted, final, rewrite", [
+    # every word changed, and each a spelling fix
+    ("Tarek.", "Tariq.", False),
+    ("github", "GitHub", False),
+    ("Tarek Smyth.", "Tariq Smith.", False),
+    ("Tarek and Smyth.", "Tariq and Smith.", False),
+    # every word changed, and nothing like it
+    ("Tarek.", "Banana.", True),
+    ("Tarek Smyth.", "Banana Split.", True),
+    ("See you soon.", "Talk to you later.", True),
+    # more than a run can hold, however close each word is
+    ("wan tu thre fore", "one two three four", True),
+    ("voiser is great", "", True),
+    # punctuation and later typing alone change nothing
+    ("Tarek.", "Tarek!", False),
+    ("Tarek.", "Tarek. And then some more", False),
+    # one ordinary word chosen over another, however alike
+    ("Monday.", "Sunday.", True),
+    ("Yes.", "Yep.", True),
+    ("Sounds good.", "Sound great.", True),
+    # one side isn't an ordinary word, or only the case changed
+    ("trade mate.", "TradeMate.", False),
+    ("recieve.", "receive.", False),
+    ("Monday.", "monday.", False),
+])
+def test_is_rewrite(pasted, final, rewrite):
+    assert is_rewrite(pasted, final) is rewrite
+
+
+def test_later_typing_after_a_one_word_fix_is_not_a_rewrite():
+    assert not is_rewrite("Tarek.", "Tariq. See you there", open_end=True)
+    assert not is_rewrite("Tarek", "Tariq! See you there", open_end=True)
+    assert is_rewrite("Tarek.", "Tariq. See you there", open_end=False)
+
+
+@pytest.mark.parametrize("final", [
+    "Tara is coming tomorrow",
+    "Tariq and I will be there",
+    "Tara, is coming tomorrow",
+])
+def test_a_word_that_runs_on_into_new_typing_is_a_rewrite(final):
+    assert is_rewrite("Tarek.", final, open_end=True)
+
+
+def test_a_new_sentence_in_an_empty_field_ends_as_a_rewrite():
+    box = textbox("start Tarek.")
+    _, results, run_to, _ = make_watcher(box, pasted="Tarek.", after_text="")
+    box.attrs["AXValue"] = "start Tara is coming tomorrow"
+    run_to(READ_AT_S[0])
+    assert results[0].reason == "rewrite" and results[0].pairs == []
+
+
+@pytest.mark.parametrize("pasted, final, pair", [
+    ("Meet Monday now please.", "Meet Sunday now please.", ("Monday", "Sunday")),
+    ("I said yes to that.", "I said yep to that.", ("yes", "yep")),
+])
+def test_in_a_longer_dictation_a_word_choice_is_as_it_was(pasted, final, pair):
+    assert not is_rewrite(pasted, final)
+    assert diff_candidates(pasted, final)[0] == [pair]
+
+
+@pytest.mark.parametrize("pasted, value, pair, corrected", [
+    ("Tarek.", "Tariq.", ("Tarek", "Tariq"), 1),
+    ("Tarek", "Tariq!", ("Tarek", "Tariq"), 1),
+    ("github", "GitHub", ("github", "GitHub"), 1),
+    # both words, and every word of the dictation
+    ("Tarek Smyth.", "Tariq Smith.", ("Tarek Smyth", "Tariq Smith"), 2),
+])
+def test_a_correction_is_learned_whatever_the_length_of_the_dictation(
+        pasted, value, pair, corrected):
+    box = textbox(f"start {pasted} end")
+    _, results, run_to, _ = make_watcher(box, pasted=pasted)
+    box.attrs["AXValue"] = f"start {value} end"
+    for t in READ_AT_S:
+        run_to(t)
+    assert results[0].reason == "window_complete"
+    assert results[0].pairs == [pair] and results[0].words_corrected == corrected
+
+
+def test_a_one_word_fix_in_a_field_with_nothing_after_it_is_learned():
+    box = textbox("start Tarek.")
+    _, results, run_to, _ = make_watcher(box, pasted="Tarek.", after_text="")
+    box.attrs["AXValue"] = "start Tariq. See you there"
+    for t in READ_AT_S:
+        run_to(t)
+    assert results[0].reason == "window_complete"
+    assert results[0].pairs == [("Tarek", "Tariq")] and results[0].words_corrected == 1
+
+
+@pytest.mark.parametrize("pasted, value", [
+    ("Tarek.", "Banana."),
+    ("Tarek Smyth.", "Banana Split."),
+    ("See you soon.", "Talk to you later."),
+    ("Monday.", "Sunday."),
+    ("Yes.", "Yep."),
+    ("Sounds good.", "Sound great."),
+])
+def test_an_unrelated_replacement_of_a_short_dictation_is_a_rewrite(pasted, value):
+    box = textbox(f"start {pasted} end")
+    _, results, run_to, _ = make_watcher(box, pasted=pasted)
+    box.attrs["AXValue"] = f"start {value} end"
+    run_to(READ_AT_S[0])
+    assert results[0].reason == "rewrite"
+    assert results[0].pairs == [] and results[0].words_corrected == 0
+
+
+@pytest.mark.parametrize("pasted, value", [
+    ("Tarek.", "Alice."),
+    ("Sounds good.", "Thanks Alice."),
+])
+def test_an_on_screen_word_does_not_turn_a_short_rewrite_into_a_correction(pasted, value):
+    box = textbox(f"start {pasted} end")
+    _, results, run_to, _ = make_watcher(box, terms=("Alice",), pasted=pasted)
+    box.attrs["AXValue"] = f"start {value} end"
+    run_to(READ_AT_S[0])
+    assert results[0].reason == "rewrite" and results[0].pairs == []
+
+
+def _read_each(box, run_to, values):
+    for t, value in zip(READ_AT_S, values):
+        box.attrs["AXValue"] = f"start {value} end"
+        run_to(t)
+
+
+@pytest.mark.parametrize("reads", [
+    ["Tar", "Tariq."],             # backed off to its own start
+    ["T", "Tariq."],
+    ["", "Tariq."],                # selected and deleted, not yet retyped
+    ["Tar", "", "Tariq."],
+    ["Tariq.", "Tar", "Tariq."],
+])
+def test_mid_typing_reads_do_not_lose_the_finished_correction(reads):
+    box = textbox("start Tarek. end")
+    _, results, run_to, _ = make_watcher(box, pasted="Tarek.")
+    _read_each(box, run_to, reads)
+    assert results == []
+    for t in READ_AT_S[len(reads):]:
+        run_to(t)
+    assert results[0].reason == "window_complete"
+    assert results[0].pairs == [("Tarek", "Tariq")] and results[0].words_corrected == 1
+
+
+def test_a_first_letter_fix_read_partway_through_is_not_a_rewrite():
+    box = textbox("start Katie. end")
+    _, results, run_to, _ = make_watcher(box, pasted="Katie.")
+    _read_each(box, run_to, ["Ca", "Catie.", "Catie.", "Catie."])
+    assert results[0].reason == "window_complete"
+    assert results[0].pairs == [("Katie", "Catie")]
+
+
+LAST_READ, RECHECK = READ_AT_S[-1], READ_AT_S[-1] + RECHECK_S
+
+
+def _steps(box, run_to, steps):
+    """[(when, what the span holds by then)]. The scheduled reads before the
+    first step see the field as it is."""
+    for t in READ_AT_S:
+        if t < steps[0][0]:
+            run_to(t)
+    for t, value in steps:
+        box.attrs["AXValue"] = f"start {value} end"
+        run_to(t)
+
+
+@pytest.mark.parametrize("half", ["Tar", "Tari"])
+def test_a_half_typed_word_on_the_last_read_is_rechecked(half):
+    box = textbox("start Tarek. end")
+    _, results, run_to, _ = make_watcher(box, pasted="Tarek.")
+    _steps(box, run_to, [(LAST_READ, half)])
+    assert results == [], "the last read can't settle what it has only just seen"
+    _steps(box, run_to, [(RECHECK, "Tariq.")])
+    run_to(RECHECK + RECHECK_S)
+    assert results[0].reason == "window_complete"
+    assert results[0].pairs == [("Tarek", "Tariq")]
+
+
+@pytest.mark.parametrize("pasted, half", [("Tarek.", "Tari"), ("Katie.", "Cati")])
+def test_a_half_typed_word_is_not_learned_while_it_is_still_changing(pasted, half):
+    box = textbox(f"start {pasted} end")
+    _, results, run_to, _ = make_watcher(box, pasted=pasted)
+    _steps(box, run_to, [(READ_AT_S[1], half), (READ_AT_S[1] + RECHECK_S, half + "x"),
+                         (READ_AT_S[1] + 2 * RECHECK_S, "Banana.")])
+    assert results[0].reason == "rewrite" and results[0].pairs == []
+
+
+def test_a_truncated_last_read_the_recheck_cant_settle_is_not_learned():
+    box = textbox("start Tarek. end")
+    _, results, run_to, _ = make_watcher(box, pasted="Tarek.")
+    _steps(box, run_to, [(LAST_READ, "Tar")])
+    del box.attrs["AXValue"]
+    run_to(RECHECK)
+    assert results[0].reason == "unreadable"
+    assert results[0].pairs == [] and results[0].words_corrected == 0
+
+
+def test_a_truncated_last_read_falls_back_to_the_read_before():
+    box = textbox("start Tarek. end")
+    _, results, run_to, _ = make_watcher(box, pasted="Tarek.")
+    _steps(box, run_to, [(READ_AT_S[0], "Tariq."), (READ_AT_S[0] + RECHECK_S, "Tariq."),
+                         (READ_AT_S[1], "Tariq."), (READ_AT_S[2], "Tariq."),
+                         (LAST_READ, "Tar")])
+    del box.attrs["AXValue"]
+    run_to(RECHECK)
+    assert results[0].pairs == [("Tarek", "Tariq")]
+
+
+@pytest.mark.parametrize("last", ["Brunswick.", "Brunswick"])
+def test_a_shortening_fix_first_seen_on_the_last_read_is_learned(last):
+    box = textbox("start Brunswicks. end")
+    _, results, run_to, _ = make_watcher(box, pasted="Brunswicks.")
+    _steps(box, run_to, [(LAST_READ, last), (RECHECK, last)])
+    run_to(RECHECK + RECHECK_S)
+    assert results[0].reason == "window_complete"
+    assert results[0].pairs == [("Brunswicks", "Brunswick")]
+
+
+@pytest.mark.parametrize("rewrite", ["Ok", ""])
+def test_a_rewrite_on_the_last_read_drops_the_earlier_pair(rewrite):
+    box = textbox("start Sounds good. end")
+    _, results, run_to, _ = make_watcher(box, pasted="Tarek Smyth.")
+    _steps(box, run_to, [(READ_AT_S[0], "Tariq Smith."), (READ_AT_S[0] + RECHECK_S, "Tariq Smith."),
+                         (LAST_READ, rewrite)])
+    assert results == []
+    run_to(RECHECK)
+    assert results[0].reason == "rewrite" and results[0].pairs == []
+
+
+def test_a_held_rewrite_yields_nothing_when_the_window_ends_before_its_recheck():
+    box = textbox("start Tarek. end")
+    _, results, run_to, _ = make_watcher(box, pasted="Tarek.")
+    _steps(box, run_to, [(READ_AT_S[0], "Tariq."), (READ_AT_S[0] + RECHECK_S, "Tariq."),
+                         (READ_AT_S[1], "Ok")])
+    box.attrs["AXValue"] = ""    # sent
+    run_to(READ_AT_S[1] + RECHECK_S)
+    assert results[0].reason == "rewrite" and results[0].pairs == []
+
+
+def test_a_field_that_never_stops_changing_still_ends():
+    box = textbox("start Tarek. end")
+    watcher, results, run_to, ax = make_watcher(box, pasted="Tarek.")
+    t = READ_AT_S[0]
+    window = watcher._windows[0]
+    for n in range(MAX_RECHECKS + 8):
+        box.attrs["AXValue"] = f"start Tar{chr(97 + n)}k. end"
+        run_to(t)
+        t += RECHECK_S
+    assert window.rechecks == MAX_RECHECKS
+    box.attrs["AXValue"] = "start Tariq. end"
+    for t in (t, 100.0, 200.0, 300.0, 400.0):
+        run_to(t)
+    assert results and results[0].reason == "window_complete"
+
+
+def test_typing_on_after_an_untouched_paste_is_not_rechecked():
+    box = textbox("start Call Tarek now.")
+    watcher, results, run_to, _ = make_watcher(box, pasted="Call Tarek now.", after_text="")
+    box.attrs["AXValue"] = "start Call Tarek now. And more"
+    run_to(READ_AT_S[0])
+    assert watcher._windows[0].unsettled is None and watcher._windows[0].rechecks == 0
+
+
+def _finished_during_the_read(value):
+    """A next paste finishing the window while _step is reading the field."""
+    box = textbox(value)
+    holder = {}
+
+    class Worker:
+        def submit(self, fn):
+            from concurrent.futures import Future
+            with holder["watcher"]._cond:
+                window = holder["watcher"]._windows[0]
+                holder["watcher"]._ended.append(
+                    holder["watcher"]._finish_locked(window, "next_paste"))
+            holder["window"] = window
+            future = Future()
+            future.set_result({"readable": True, "role": "AXTextArea", "value": value})
+            return future
+
+    ax = FakeAX(box)
+    results = []
+    watcher = EditWatcher(ax, Worker(), lambda: True, results.append, clock=lambda: 0.0,
+                          budget_s=1.0, autostart=False)
+    holder["watcher"] = watcher
+    focus = FocusContext(bundle_id=ax.bundle_id, before_text="", after_text="",
+                         element=box, element_id=box.id, caret_known=True)
+    watcher.watch("item1", focus, box.id, "Tarek.", ())
+    return watcher, holder, results
+
+
+@pytest.mark.parametrize("value", ["Tar", "Tariq.", "Call Tarek."])
+def test_a_read_racing_the_end_of_its_window_leaves_no_text_on_it(value):
+    watcher, holder, results = _finished_during_the_read(value)
+    watcher.tick(READ_AT_S[0])
+    window = holder["window"]
+    assert window.done and window.unsettled is None and window.last_final == ""
+    assert watcher._heap == []
+    watcher.tick(READ_AT_S[0])
+    assert [r.reason for r in results] == ["next_paste"]
+
+
+@pytest.mark.parametrize("next_value", ["", "something else"])
+def test_a_half_typed_word_is_not_learned_when_the_window_ends_early(next_value):
+    box = textbox("start Tarek. end")
+    _, results, run_to, _ = make_watcher(box, pasted="Tarek.")
+    _read_each(box, run_to, ["Tar"])
+    box.attrs["AXValue"] = next_value
+    run_to(READ_AT_S[1])
+    assert results[0].reason in ("field_emptied", "anchor_lost")
+    assert results[0].pairs == [] and results[0].words_corrected == 0
+
+
+def test_a_half_typed_word_is_not_learned_when_the_next_paste_ends_the_window():
+    box = textbox("start Tarek. end")
+    watcher, results, run_to, _ = make_watcher(box, pasted="Tarek.")
+    _read_each(box, run_to, ["Tar"])
+    window = watcher._windows[0]
+    focus = FocusContext(bundle_id="com.example.app", before_text="start ", after_text=" end",
+                         element=box, element_id=box.id, caret_known=True)
+    watcher.watch("item2", focus, box.id, "more", ())
+    watcher.tick()
+    assert results[0].reason == "next_paste" and results[0].pairs == []
+    assert window.unsettled is None, "the text goes when the window ends"
+
+
+def test_inside_a_longer_dictation_a_half_typed_word_is_not_learned_either():
+    box = textbox("start Call Tarek now. end")
+    _, results, run_to, _ = make_watcher(box, pasted="Call Tarek now.")
+    _steps(box, run_to, [(LAST_READ, "Call Tar now.")])
+    del box.attrs["AXValue"]
+    run_to(RECHECK)
+    assert results[0].pairs == []
+
+
+@pytest.mark.parametrize("pasted, value, pair", [
+    ("Tarek.", "Tariq.", ("Tarek", "Tariq")),
+    ("github", "GITHUB", ("github", "GITHUB")),
+    ("github", "GitHub", ("github", "GitHub")),
+])
+def test_a_finished_correction_seen_once_is_learned_when_the_message_is_sent(
+        pasted, value, pair):
+    box = textbox(f"start {pasted} end")
+    _, results, run_to, _ = make_watcher(box, pasted=pasted)
+    _read_each(box, run_to, [value])
+    box.attrs["AXValue"] = ""
+    run_to(READ_AT_S[1])
+    assert results[0].reason == "field_emptied" and results[0].pairs == [pair]
+
+
+def _next_dictation(watcher, box, before="start ", after=" end", selected="", **kwargs):
+    focus = FocusContext(bundle_id="com.example.app", before_text=before, after_text=after,
+                         selected_text=selected, element=box, element_id=box.id,
+                         caret_known=True, readable=True, **kwargs)
+    watcher.watch("item2", focus, box.id, "more", ())
+    watcher.tick()
+
+
+@pytest.mark.parametrize("before, after, selected, pair", [
+    # fixed between the reads, caret left after the fix
+    ("start Tariq.", " end", "", ("Tarek", "Tariq")),
+    # caret left before it: it's in what follows
+    ("start ", "Tariq. end", "", ("Tarek", "Tariq")),
+    # selected when the next dictation began
+    ("start ", " end", "Tariq.", ("Tarek", "Tariq")),
+])
+def test_the_next_dictation_supplies_a_final_read(before, after, selected, pair):
+    box = textbox("start Tarek. end")
+    watcher, results, _, _ = make_watcher(box, pasted="Tarek.")
+    _next_dictation(watcher, box, before, after, selected)
+    assert results[0].item_id == "item1" and results[0].reason == "next_paste"
+    assert results[0].pairs == [pair]
+
+
+def test_the_next_dictation_learns_a_shortening_fix():
+    box = textbox("start Brunswicks. end")
+    watcher, results, _, _ = make_watcher(box, pasted="Brunswicks.")
+    _next_dictation(watcher, box, "start Brunswick.", " end")
+    assert results[0].pairs == [("Brunswicks", "Brunswick")]
+
+
+def test_a_rewrite_in_the_next_dictations_capture_yields_nothing():
+    box = textbox("start Tarek. end")
+    watcher, results, run_to, _ = make_watcher(box, pasted="Tarek.")
+    _steps(box, run_to, [(READ_AT_S[0], "Tariq."), (READ_AT_S[0] + RECHECK_S, "Tariq.")])
+    _next_dictation(watcher, box, "start Banana.", " end")
+    assert results[0].reason == "rewrite" and results[0].pairs == []
+
+
+@pytest.mark.parametrize("before, after, kwargs", [
+    ("gone Tariq.", " end", {}),              # anchor gone
+    ("start ", " end", {}),                   # empty proves nothing
+    ("", "", {}),                             # an app that reports "" for its text
+    ("start Tariq.", " end", {"secure": True}),
+    ("start Tariq.", " end", {"element_id": "other"}),
+])
+def test_a_capture_that_cant_serve_as_a_read_changes_nothing(before, after, kwargs):
+    box = textbox("start Tarek. end")
+    watcher, results, run_to, _ = make_watcher(box, pasted="Tarek.")
+    _steps(box, run_to, [(READ_AT_S[0], "Tariq."), (READ_AT_S[0] + RECHECK_S, "Tariq.")])
+    fields = {"element_id": box.id, **kwargs}
+    focus = FocusContext(bundle_id="com.example.app", before_text=before, after_text=after,
+                         element=box, caret_known=True, readable=True, **fields)
+    watcher.watch("item2", focus, box.id, "more", ())
+    watcher.tick()
+    assert results[0].reason == "next_paste"
+    assert results[0].pairs == [("Tarek", "Tariq")]
+
+
+def test_the_capture_is_not_judged_on_the_dictation_queue():
+    box = textbox("start Tarek. end")
+    watcher, results, _, _ = make_watcher(box, pasted="Tarek.")
+    focus = FocusContext(bundle_id="com.example.app", before_text="start Banana.", after_text=" end",
+                         element=box, element_id=box.id, caret_known=True, readable=True)
+    watcher.watch("item2", focus, box.id, "more", ())
+    assert results == [] and watcher._ended[0].judge_final is True
+
+
+def test_a_word_cut_short_and_left_that_way_is_a_correction():
+    box = textbox("start Brunswicks. end")
+    _, results, run_to, _ = make_watcher(box, pasted="Brunswicks.")
+    _read_each(box, run_to, ["Brunswick.", "Brunswick.", "Brunswick.", "Brunswick."])
+    assert results[0].reason == "window_complete"
+    assert results[0].pairs == [("Brunswicks", "Brunswick")]
+
+
+@pytest.mark.parametrize("value", ["", "Ok"])
+def test_a_dictation_cut_down_and_left_that_way_is_a_rewrite(value):
+    box = textbox("start Sounds good to me. end")
+    _, results, run_to, _ = make_watcher(box, pasted="Sounds good to me.")
+    _read_each(box, run_to, [value])
+    assert results == [], "one read could be mid-typing"
+    run_to(READ_AT_S[1])
+    assert results[0].reason == "rewrite" and results[0].pairs == []
+
+
+def test_a_rewrite_read_after_a_mid_typing_read_still_yields_nothing():
+    box = textbox("start Tarek. end")
+    _, results, run_to, _ = make_watcher(box, pasted="Tarek.")
+    _read_each(box, run_to, ["Tariq.", "Ban", "Banana."])
+    assert results[0].reason == "rewrite" and results[0].pairs == []
 
 
 def test_focus_away_too_long_ends_it():
@@ -465,6 +914,7 @@ def test_the_thread_runs_a_window_end_to_end():
         watcher._cond.notify_all()
     deadline = time.monotonic() + 3
     while not done.is_set() and time.monotonic() < deadline:
+        now[0] += 100.0      # a changed read waits for its recheck
         with watcher._cond:
             watcher._cond.notify_all()
         time.sleep(0.01)
@@ -504,3 +954,19 @@ def test_an_ended_window_is_delivered_on_the_watcher_thread_not_the_callers():
     assert delivered.wait(5)
     assert threads == ["voisr-edit-watch"]
     watcher.stop()
+
+
+def test_a_held_read_racing_the_end_of_its_window_leaves_no_text_on_it(monkeypatch):
+    from voisr import edit_learning
+    box = textbox("start Tar end")
+    watcher, _, run_to, _ = make_watcher(box, pasted="Tarek.")
+    window = watcher._windows[0]
+
+    def finished_meanwhile(*args):
+        with watcher._cond:
+            watcher._ended.append(watcher._finish_locked(window, "next_paste"))
+        return "truncated"
+
+    monkeypatch.setattr(edit_learning, "_hold_as", finished_meanwhile)
+    run_to(READ_AT_S[0])
+    assert window.done and window.unsettled is None

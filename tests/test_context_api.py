@@ -546,7 +546,7 @@ def run_windows(api):
         windows = list(watcher._windows)
     far = time.monotonic() + 10_000
     for offset in range(len(READ_AT_S) + 1):
-        watcher.tick(far)
+        watcher.tick(far + offset * 100)    # a changed read waits for its recheck
     # a window whose schedule was walked past has ended
     assert all(w.done for w in windows)
 
