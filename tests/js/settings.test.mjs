@@ -36,7 +36,7 @@ test("settings.js loads without touching the DOM at parse time", () => {
    (document/window listener recording + dispatch, node.contains/closest,
    parent links) specifically to unlock these. */
 
-const SETTINGS_IDS = ["appearance-grid", "model-select", "launch-toggle",
+const SETTINGS_IDS = ["appearance-grid", "model-list", "launch-toggle",
                        "color-open", "color-popover", "clear-history", "toast"];
 
 function mountSettings(t, api, apis = ["setTimeout"]) {
@@ -46,8 +46,7 @@ function mountSettings(t, api, apis = ["setTimeout"]) {
 
   const nodes = {};
   for (const id of SETTINGS_IDS) {
-    nodes[id] = makeNode(id === "launch-toggle" ? "input"
-      : id === "model-select" ? "select" : "div");
+    nodes[id] = makeNode(id === "launch-toggle" ? "input" : "div");
     env.register(id, nodes[id]);
   }
   nodes["color-popover"].hidden = true;
@@ -495,4 +494,75 @@ test("the appearance event doesn't re-render a picker that already shows it", as
   s.V.appearancePref = () => "system";
   globalThis.window.dispatch("voisr:appearance");
   assert.equal(btn.getAttribute("tabindex"), "sentinel");
+});
+
+/* ---------- settings.js: the speech model list ---------- */
+
+const ROW = (over) => ({
+  id: "x", label: "X", description: "desc", bytes: 487614201, installed: false,
+  active: false, custom: false, warning: null, blocked: null, benchmark: null, ...over,
+});
+
+function buttons(node, out = []) {
+  for (const k of node.children || []) {
+    if (!k || typeof k !== "object") continue;
+    if (k.tagName === "BUTTON" || k.tag === "button") out.push(k);
+    buttons(k, out);
+  }
+  return out;
+}
+
+function textOf(node) {
+  return [node.textContent || "", ...(node.children || []).map((k) =>
+    typeof k === "string" ? k : textOf(k))].join(" ");
+}
+
+test("model list shows size and state, and Download only where it applies", (t) => {
+  const s = mountSettings(t, {});
+  s.V.views.settings.renderModels({
+    models: [
+      ROW({ id: "a", label: "Active", installed: true, active: true }),
+      ROW({ id: "b", label: "Spare", installed: true }),
+      ROW({ id: "c", label: "Remote" }),
+      ROW({ id: "d", label: "Mine", installed: true, custom: true }),
+    ],
+    system: { chip: "Apple M1", memory_gb: 8 }, download: { state: "idle" },
+  });
+  const rows = s["model-list"].children;
+  assert.equal(rows.length, 4);
+  const acts = rows.map((r) => buttons(r).map((b) => b.dataset.act));
+  assert.deepEqual(acts, [[], ["use", "delete"], ["download"], ["use", "delete"]]);
+  assert.match(textOf(rows[0]), /465 MB/);
+  assert.match(textOf(rows[0]), /In use/);
+  assert.match(textOf(rows[2]), /Not installed/);
+  assert.match(textOf(rows[3]), /Custom/);
+});
+
+test("model list shows warnings, disables blocked downloads, and no invented figures", (t) => {
+  const s = mountSettings(t, {});
+  s.V.views.settings.renderModels({
+    models: [
+      ROW({ id: "w", warning: "Wants about 12 GB" }),
+      ROW({ id: "i", blocked: "Needs an Apple Silicon Mac." }),
+      ROW({ id: "m", benchmark: { wer: 0.082, median_s: 1.25 } }),
+    ],
+    system: {}, download: { state: "idle" },
+  });
+  const [w, i, m] = s["model-list"].children;
+  assert.match(textOf(w), /Wants about 12 GB/);
+  assert.match(textOf(i), /Apple Silicon/);
+  assert.ok(buttons(i)[0].getAttribute("disabled") !== null);
+  assert.ok(!/Measured/.test(textOf(w)), "no figure without a measurement");
+  assert.match(textOf(m), /Measured: 8\.2% word errors, median 1\.3 s/);
+});
+
+test("a download in progress disables other Download buttons", (t) => {
+  const s = mountSettings(t, { get_download_progress: async () => ({ state: "idle" }) });
+  s.V.views.settings.renderModels({
+    models: [ROW({ id: "a" }), ROW({ id: "b" })],
+    system: {}, download: { state: "downloading", id: "a", done: 100, total: 200 },
+  });
+  const [a, b] = s["model-list"].children;
+  assert.match(textOf(a), /Downloading… 50%/);
+  assert.ok(buttons(b)[0].getAttribute("disabled") !== null);
 });

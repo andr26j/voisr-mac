@@ -342,6 +342,19 @@ mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
 /* a row whose control is a full-width grid below its own copy */
 .setting-row-stack { border-bottom: none; padding-bottom: 6px; }
 
+.model-list { display: flex; flex-direction: column; }
+.model-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 24px;
+  padding: 14px 2px; border-bottom: 1px solid var(--border);
+}
+.model-row:last-child { border-bottom: none; }
+.model-row.active h3::after { content: " ✓"; color: var(--accent); }
+.model-meta { margin-top: 2px; }
+.model-warn { color: var(--destructive); font-size: 13px; margin-top: 3px; max-width: 62ch; }
+.model-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.model-actions button { height: 36px; }
+.model-actions button:disabled { opacity: .5; cursor: not-allowed; }
+
 .setting-desc { color: var(--muted); font-size: 13px; margin-top: 3px; max-width: 62ch; }
 
 /* long caveats collapse instead of pushing every other row apart */

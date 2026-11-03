@@ -1,14 +1,15 @@
 import subprocess
 from pathlib import Path
 
+from voisr.models import MODELS_DIR, filename_for
 from voisr.paths import find_binary
 
-MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 MODEL_PATH = MODELS_DIR / "ggml-base.en.bin"  # legacy default (kept for compat)
 
-# best available first: small.en is a large accuracy jump over base.en and
-# still near-instant on Apple Silicon with Metal
-PREFERRED_MODELS = ["small.en", "base.en"]
+# Fallback order when the configured model is missing: the two models
+# setup.sh installs, so an existing install always finds one. Everything
+# else in the registry is opt-in and never chosen automatically.
+FALLBACK_MODELS = ["small.en", "base.en"]
 
 
 class TranscriptionError(RuntimeError):
@@ -27,13 +28,14 @@ def _timeout_for(wav_path) -> float:
 
 
 def resolve_model(name: str | None = None, models_dir: Path = MODELS_DIR) -> Path:
-    """Best model on disk: the configured one, else small.en, else base.en."""
-    candidates = ([name] if name else []) + PREFERRED_MODELS
+    """Best model on disk: the configured one (a registry id or the name of a
+    custom ggml-<name>.bin), else small.en, else base.en."""
+    candidates = ([name] if name else []) + FALLBACK_MODELS
     for n in candidates:
-        p = Path(models_dir) / f"ggml-{n}.bin"
-        if p.exists():
+        p = Path(models_dir) / filename_for(n)
+        if p.is_file():
             return p
-    return Path(models_dir) / f"ggml-{PREFERRED_MODELS[-1]}.bin"
+    return Path(models_dir) / filename_for(FALLBACK_MODELS[-1])
 
 
 def transcribe(wav_path, model_path=None, whisper_bin=None, prompt=None) -> str:
@@ -51,7 +53,10 @@ def transcribe(wav_path, model_path=None, whisper_bin=None, prompt=None) -> str:
     out_prefix = str(wav_path) + ".out"
     cmd = [whisper, "-m", str(model), "-f", str(wav_path),
            "--output-txt", "--output-file", out_prefix, "--no-prints",
-           "--beam-size", "5"]
+           "--beam-size", "5",
+           # English only. A multilingual model (large-v3-turbo) would
+           # otherwise auto-detect and can transcribe in another language.
+           "-l", "en"]
     if prompt:
         cmd += ["--prompt", prompt]
     timeout = _timeout_for(wav_path)

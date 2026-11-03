@@ -66,14 +66,19 @@ window.Voisr = window.Voisr || {};
         return { ok: true, removed };
       },
       // mirrors Api.get_models() in voisr/ui.py; one model is left
-      // uninstalled here so the mock exercises the disabled-option path.
+      // uninstalled here so the mock exercises the download path.
       get_models: async () => ({
         models: [
-          { value: "small.en", label: "Small — best accuracy", installed: true, bytes: 488 * 1024 * 1024 },
-          { value: "base.en", label: "Base — fastest", installed: false, bytes: 0 },
+          { id: "base.en", label: "Base (English)", description: "The smallest of the four. English only.", bytes: 147964211, installed: false, active: false, custom: false, min_memory_gb: 4, apple_silicon_only: false, license: "MIT", blocked: null, warning: null, benchmark: null },
+          { id: "small.en", label: "Small (English)", description: "A step up in size from Base. English only. The default.", bytes: 487614201, installed: true, active: true, custom: false, min_memory_gb: 4, apple_silicon_only: false, license: "MIT", blocked: null, warning: null, benchmark: null },
         ],
         active: mockCfg.model || "small.en",
+        system: { chip: "Preview", memory_gb: 8, apple_silicon: true },
+        download: { state: "idle" },
       }),
+      download_model: async () => ({ error: "Downloads are disabled in the browser preview." }),
+      delete_model: async () => ({ error: "Not available in the browser preview." }),
+      get_download_progress: async () => ({ state: "idle" }),
       // mirrors Api.set_launch_at_login() in voisr/ui.py.
       set_launch_at_login: async (enabled) => {
         mockCfg.launch_at_login = !!enabled;

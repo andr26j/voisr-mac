@@ -1409,8 +1409,12 @@ class Api:
                  paste_fn=paste_at_cursor,
                  clipboard_fn=set_clipboard,
                  mic_check=None,
-                 grant_requester=None):
+                 grant_requester=None,
+                 models_dir=None, model_downloader=None, system_info_fn=None):
         self._config_path = Path(config_path)
+        self._models_dir = models_dir  # None = transcriber.MODELS_DIR
+        self._model_downloader = model_downloader
+        self._system_info_fn = system_info_fn
         self._history = history or HistoryStore(ROOT / "data" / "history.jsonl")
         self._transcribe_fn = transcribe_fn
         self._clock = clock
@@ -1813,6 +1817,9 @@ class Api:
         # words and go to History), but nothing may paste or touch the
         # clipboard after the user has left the app.
         self._quitting = True
+        # An unfinished download is abandoned and its .part removed.
+        if self._model_downloader is not None:
+            self._model_downloader.cancel()
         self._recordings.close()
         if getattr(self, "_status_item", None) is not None:
             self._status_item.release()
@@ -2056,18 +2063,56 @@ class Api:
             return {"error": str(e)}
         return {"ok": True, "removed": removed}
 
+    def _models_path(self):
+        from voisr import transcriber
+        return Path(self._models_dir) if self._models_dir else transcriber.MODELS_DIR
+
+    def _downloader(self):
+        from voisr.models import ModelDownloader
+        if self._model_downloader is None:
+            self._model_downloader = ModelDownloader(self._models_path())
+        return self._model_downloader
+
+    def _system_info(self):
+        from voisr.models import system_info
+        return (self._system_info_fn or system_info)()
+
+    def _active_model_id(self):
+        from voisr.models import id_from_path
+        from voisr.transcriber import resolve_model
+        p = resolve_model(self.get_config().get("model"), self._models_path())
+        return id_from_path(p) if p.is_file() else None
+
     def get_models(self):
-        from voisr.transcriber import MODELS_DIR, PREFERRED_MODELS
-        labels = {"small.en": "Small — best accuracy",
-                  "base.en": "Base — fastest"}
-        models = []
-        for name in PREFERRED_MODELS:
-            path = MODELS_DIR / f"ggml-{name}.bin"
-            installed = path.exists()
-            models.append({"value": name, "label": labels.get(name, name),
-                           "installed": installed,
-                           "bytes": path.stat().st_size if installed else 0})
-        return {"models": models, "active": self.get_config().get("model")}
+        from voisr.models import list_models
+        system = self._system_info()
+        active = self._active_model_id()
+        return {"models": list_models(self._models_path(), system, active),
+                "active": active, "system": system,
+                "download": self._downloader().progress()}
+
+    def download_model(self, model_id):
+        return self._downloader().start(model_id, self._system_info())
+
+    def get_download_progress(self):
+        return self._downloader().progress()
+
+    def delete_model(self, model_id):
+        from voisr.models import installed_paths
+        installed = installed_paths(self._models_path())
+        path = installed.get(model_id)
+        if path is None:
+            return {"error": "That model isn't installed."}
+        if len(installed) <= 1:
+            return {"error": "It's the only model installed; "
+                             "dictation needs at least one."}
+        if model_id == self._active_model_id():
+            return {"error": "That model is in use. Pick another one first."}
+        try:
+            path.unlink()
+        except OSError as e:
+            return {"error": str(e)}
+        return {"ok": True}
 
     def set_launch_at_login(self, enabled):
         try:
@@ -2204,7 +2249,7 @@ def install_dock_reopen(on_reopen, delegate_cls=None) -> bool:
 # tests/test_js_bridge_surface.py pins this to the V.api() calls in voisr/web/js.
 BRIDGE_METHODS = (
     "capture_hotkey", "clear_history", "copy_text", "delete_history_item",
-    "export_history", "get_config", "get_history", "get_hotkey_status",
+    "delete_model", "download_model", "export_history", "get_download_progress", "get_config", "get_history", "get_hotkey_status",
     "get_level", "get_models", "get_permissions", "get_pill_themes", "get_stats",
     "hotkey_display", "open_settings_pane", "relaunch_app",
     "reset_permission", "restore_history_item", "save_text_file",

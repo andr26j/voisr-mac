@@ -384,7 +384,7 @@ def test_appearance_is_chosen_by_picture():
 
 def test_settings_has_the_new_controls():
     html = INDEX.read_text()
-    for el_id in ["appearance-grid", "model-select", "launch-toggle",
+    for el_id in ["appearance-grid", "model-list", "launch-toggle",
                   "color-popover", "clear-history"]:
         assert f'id="{el_id}"' in html, el_id
 

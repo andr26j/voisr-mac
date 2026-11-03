@@ -598,12 +598,91 @@ def test_restore_history_item_puts_it_back(tmp_path):
     assert api.get_history()[0]["id"] == item["id"]
 
 
-def test_get_models_lists_known_models_with_installed_flags(tmp_path):
-    api = make_api(tmp_path)
+MAC_16 = {"memory_gb": 16, "chip": "Apple M2", "apple_silicon": True}
+
+
+def _models_api(tmp_path, installed=("small.en", "base.en"), model=None, **kw):
+    mdir = tmp_path / "models"
+    mdir.mkdir()
+    for n in installed:
+        (mdir / f"ggml-{n}.bin").write_bytes(b"x")
+    api = make_api(tmp_path, models_dir=mdir, system_info_fn=lambda: MAC_16, **kw)
+    if model:
+        api.set_config({"model": model})
+    return api, mdir
+
+
+def test_get_models_returns_registry_with_install_state(tmp_path):
+    api, _ = _models_api(tmp_path, installed=("small.en",))
     out = api.get_models()
-    values = [m["value"] for m in out["models"]]
-    assert values == ["small.en", "base.en"]
-    assert all(isinstance(m["installed"], bool) for m in out["models"])
+    rows = {m["id"]: m for m in out["models"]}
+    assert list(rows) == ["base.en", "small.en", "medium.en-q5_0",
+                          "large-v3-turbo-q5_0"]
+    assert rows["small.en"]["installed"] and rows["small.en"]["active"]
+    assert not rows["base.en"]["installed"]
+    assert out["active"] == "small.en" and out["system"] == MAC_16
+    assert all(m["benchmark"] is None for m in out["models"])
+
+
+def test_get_models_warns_when_memory_is_short(tmp_path):
+    api, _ = _models_api(tmp_path)
+    api._system_info_fn = lambda: {"memory_gb": 8, "apple_silicon": True}
+    rows = {m["id"]: m for m in api.get_models()["models"]}
+    assert rows["medium.en-q5_0"]["warning"] and not rows["small.en"]["warning"]
+
+
+def test_old_config_naming_a_missing_model_falls_back(tmp_path):
+    api, _ = _models_api(tmp_path, installed=("base.en",), model="small.en")
+    assert api.get_models()["active"] == "base.en"
+
+
+def test_delete_model_refuses_the_active_one(tmp_path):
+    api, mdir = _models_api(tmp_path, model="small.en")
+    assert "in use" in api.delete_model("small.en")["error"]
+    assert (mdir / "ggml-small.en.bin").exists()
+
+
+def test_delete_model_refuses_the_last_one(tmp_path):
+    api, mdir = _models_api(tmp_path, installed=("small.en",))
+    assert "only model" in api.delete_model("small.en")["error"]
+    assert (mdir / "ggml-small.en.bin").exists()
+
+
+def test_delete_model_removes_an_inactive_one(tmp_path):
+    api, mdir = _models_api(tmp_path, model="small.en")
+    assert api.delete_model("base.en") == {"ok": True}
+    assert not (mdir / "ggml-base.en.bin").exists()
+    assert "isn't installed" in api.delete_model("base.en")["error"]
+
+
+def test_delete_model_works_on_a_custom_file(tmp_path):
+    api, mdir = _models_api(tmp_path, installed=("small.en", "mine"))
+    assert api.delete_model("mine") == {"ok": True}
+    assert not (mdir / "ggml-mine.bin").exists()
+
+
+def test_download_model_refuses_when_disk_is_full(tmp_path):
+    from voisr.models import ModelDownloader
+    mdir = tmp_path / "models"
+    mdir.mkdir()
+    dl = ModelDownloader(mdir, "http://127.0.0.1:9", free_bytes_fn=lambda: 10)
+    api = make_api(tmp_path, models_dir=mdir, model_downloader=dl,
+                   system_info_fn=lambda: MAC_16)
+    assert "Not enough disk space" in api.download_model("small.en")["error"]
+    assert api.get_download_progress() == {"state": "idle"}
+
+
+def test_close_cancels_a_download_in_flight(tmp_path):
+    class Spy:
+        cancelled = False
+
+        def cancel(self):
+            self.cancelled = True
+
+    spy = Spy()
+    api, _ = _models_api(tmp_path, model_downloader=spy)
+    api.close()
+    assert spy.cancelled
 
 
 def test_set_launch_at_login_round_trips(tmp_path, monkeypatch):
