@@ -1,4 +1,5 @@
 import subprocess
+import time
 from pathlib import Path
 
 from voisr.models import MODELS_DIR, filename_for
@@ -70,3 +71,29 @@ def transcribe(wav_path, model_path=None, whisper_bin=None, prompt=None) -> str:
     text = txt.read_text().strip()
     txt.unlink(missing_ok=True)
     return text
+
+
+def transcribe_routed(wav_path, model_path, prompt=None, server=None,
+                      unload="min5") -> tuple[str, dict]:
+    """Transcribe through the kept-loaded server when one is set up, else (or
+    when it fails for any reason) through whisper-cli.
+
+    Returns (text, info): info["mode"] is "warm" (server), "cli" (whisper-cli
+    by choice: no server, or unload set to Immediately) or "cli-fallback"
+    (the server failed and whisper-cli redid the clip). info["timings"] holds
+    "model_wait" (ms spent waiting for the server to finish loading, warm
+    only) or "server_attempt" (ms the failed attempt cost, fallback only)."""
+    from voisr.whisper_server import uses_server
+    if server is None or not uses_server(unload):
+        return transcribe(wav_path, model_path=model_path, prompt=prompt), \
+            {"mode": "cli", "timings": {}}
+    attempt = time.monotonic()
+    try:
+        text, extra = server.transcribe(wav_path, model_path, prompt=prompt)
+        return text, {"mode": "warm", "timings": extra}
+    except Exception as error:   # any failure: the dictation must not be lost
+        spent = (time.monotonic() - attempt) * 1000
+        print(f"Voisr: warm transcription failed ({error}); using whisper-cli",
+              flush=True)
+    text = transcribe(wav_path, model_path=model_path, prompt=prompt)
+    return text, {"mode": "cli-fallback", "timings": {"server_attempt": spent}}

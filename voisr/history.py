@@ -425,15 +425,19 @@ class HistoryStore:
             return result
 
     def add(self, text: str, duration_s: float, model: str | None = None,
-            timings_ms: dict | None = None) -> dict:
+            timings_ms: dict | None = None, mode: str | None = None) -> dict:
         """`model` and `timings_ms` are optional: lines written before they
-        existed stay valid and readers must treat both as possibly absent."""
+        existed stay valid and readers must treat both as possibly absent.
+        `mode` is how it was transcribed: "warm" (kept-loaded server), "cli"
+        (whisper-cli) or "cli-fallback" (the server failed, whisper-cli ran)."""
         if not _finite_number(duration_s) or duration_s < 0:
             raise ValueError("duration_s must be a finite, nonnegative number")
         item = {"id": uuid.uuid4().hex, "ts": time.time(),
                 "text": text, "words": len(text.split()), "duration_s": duration_s}
         if model:
             item["model"] = str(model)
+        if mode:
+            item["mode"] = str(mode)
         if timings_ms:
             item["timings_ms"] = _clean_timings(timings_ms)
 
