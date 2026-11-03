@@ -217,3 +217,116 @@ def test_cancel_drops_the_capture(tmp_path):
     api._cancel_recording()
     assert api._focus._sessions == {}
     api.close()
+
+
+def test_on_screen_terms_reach_whisper_cli_and_the_server(tmp_path, monkeypatch):
+    # both transcribers take the same prompt, through transcribe_routed
+    from voisr import transcriber
+
+    prompts = {}
+
+    class Server:
+        def configure(self, unload):
+            pass
+
+        def set_busy(self, busy):
+            pass
+
+        def prewarm(self, *a, **k):
+            pass
+
+        def shutdown(self):
+            pass
+
+        def unload(self):
+            pass
+
+        def transcribe(self, wav, model, prompt=None):
+            prompts["server"] = prompt
+            return "hello world", {}
+
+    def cli(wav, model_path=None, prompt=None):
+        prompts["cli"] = prompt
+        return "hello world"
+
+    monkeypatch.setattr(transcriber, "transcribe", cli)
+    box = textbox("say hi to Priya about Zedwick soon", caret=10)
+    for server, unload, key in ((Server(), "min5", "server"), (None, "min5", "cli")):
+        api = make_api(tmp_path, FakeAX(box), transcribe_fn=None, warm_server=server)
+        api.set_config({"model_unload": unload,
+                        "dictionary": {"voiser": "Voisr"}})
+        out = dictate(api)
+        assert "error" not in out, out
+        assert prompts[key].startswith("Glossary: Voisr, ")
+        assert "Priya" in prompts[key] and "Zedwick" in prompts[key]
+        api.close()
+
+
+def test_terms_only_bias_they_never_rewrite_the_text(tmp_path, monkeypatch):
+    api = make_api(tmp_path, FakeAX(textbox("meet Priya today")), transcribe_fn=None)
+    monkeypatch.setattr(api, "_default_transcribe",
+                        lambda wav, cfg, terms=(): ("priya said hi", {"mode": "cli", "timings": {}}))
+    assert dictate(api)["text"] == "Priya said hi"  # first-word capital, not a term
+    api.close()
+
+
+def test_off_sends_no_terms(tmp_path, monkeypatch):
+    seen = []
+    api = make_api(tmp_path, FakeAX(textbox("meet Priya today")), transcribe_fn=None)
+    monkeypatch.setattr(api, "_default_transcribe",
+                        lambda wav, cfg, terms=(): seen.append(list(terms)) or ("ok", {"mode": "cli", "timings": {}}))
+    api.set_config({"use_screen_context": False})
+    dictate(api)
+    assert seen == [[]]
+    api.close()
+
+
+def test_a_failure_with_terms_retries_without_and_loses_nothing(tmp_path, monkeypatch):
+    calls = []
+
+    def fake(wav, cfg, terms=()):
+        calls.append(list(terms))
+        if terms:
+            raise RuntimeError("prompt rejected")
+        return "kept it", {"mode": "cli", "timings": {}}
+
+    api = make_api(tmp_path, FakeAX(textbox("meet Priya today")), transcribe_fn=None)
+    monkeypatch.setattr(api, "_default_transcribe", fake)
+    out = dictate(api)
+    assert out["text"] == "Kept it" and "error" not in out
+    assert calls == [["Priya"], []]
+    api.close()
+
+
+def test_an_echoed_glossary_is_redone_without_terms(tmp_path, monkeypatch):
+    # screen words must not reach a paste or History through a hallucination
+    calls = []
+
+    def fake(wav, cfg, terms=()):
+        calls.append(list(terms))
+        return (("Glossary: Priya." if terms else "real speech"),
+                {"mode": "cli", "timings": {}})
+
+    api = make_api(tmp_path, FakeAX(textbox("meet Priya today")), transcribe_fn=None)
+    monkeypatch.setattr(api, "_default_transcribe", fake)
+    assert dictate(api)["text"] == "Real speech"
+    assert "Priya" not in (tmp_path / "history.jsonl").read_text()
+    assert len(calls) == 2
+    api.close()
+
+
+def test_a_capture_that_has_not_finished_is_not_waited_for(tmp_path, monkeypatch):
+    seen = []
+    ax = HungAX(textbox("meet Priya today"))
+    api = make_api(tmp_path, ax, transcribe_fn=None)
+    monkeypatch.setattr(api, "_default_transcribe",
+                        lambda wav, cfg, terms=(): seen.append(list(terms)) or ("ok", {"mode": "cli", "timings": {}}))
+    api.start_recording(prewarm=False)
+    api.prewarm_now()
+    assert ax.entered.wait(2)
+    started = time.monotonic()
+    out = api.stop_recording(paste=False)
+    assert time.monotonic() - started < 0.5
+    assert seen == [[]] and "error" not in out
+    ax.release.set()
+    api.close()

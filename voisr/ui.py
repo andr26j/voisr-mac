@@ -11,6 +11,7 @@ from voisr import launch_agent, permissions, speech_gate
 from voisr.app import config_errors, load_config
 from voisr.ax_context import FocusTracker, make_ax_adapter
 from voisr.cleanup import clean
+from voisr.context_terms import context_terms, prompt_echoed, terms_for_clip
 from voisr.history import HistoryStore
 from voisr.inject import paste_at_cursor, set_clipboard
 from voisr.keytap import TAP_MODES
@@ -316,20 +317,34 @@ GLOSSARY_MAX_TERMS = 40
 GLOSSARY_MAX_CHARS = 600
 
 
-def glossary_prompt(dictionary) -> str | None:
-    """Bias whisper toward the user's spellings: 'Glossary: A, B, C.'"""
-    if not dictionary:
-        return None
+def _glossary_text(terms) -> str:
+    return "Glossary: " + ", ".join(terms) + "."
+
+
+def glossary_prompt(dictionary, context_terms=()) -> str | None:
+    """Bias whisper toward the user's spellings: 'Glossary: A, B, C.' Dictionary
+    terms keep priority; terms from the screen only fill what budget is left,
+    and only ever bias recognition (clean() does not substitute them)."""
     seen = []
-    for written in reversed(list(dictionary.values())):
+    for written in reversed(list((dictionary or {}).values())):
         if written not in seen:
             seen.append(written)
         if len(seen) >= GLOSSARY_MAX_TERMS:
             break
     seen.reverse()
-    while seen and len("Glossary: " + ", ".join(seen) + ".") > GLOSSARY_MAX_CHARS:
+    while seen and len(_glossary_text(seen)) > GLOSSARY_MAX_CHARS:
         seen.pop(0)
-    return ("Glossary: " + ", ".join(seen) + ".") if seen else None
+    known = {term.casefold() for term in seen}
+    for term in context_terms:
+        if len(seen) >= GLOSSARY_MAX_TERMS:
+            break
+        if term.casefold() in known:
+            continue
+        if len(_glossary_text([*seen, term])) > GLOSSARY_MAX_CHARS:
+            break
+        known.add(term.casefold())
+        seen.append(term)
+    return _glossary_text(seen) if seen else None
 
 
 class RecordingWidget:
@@ -1516,15 +1531,16 @@ class Api:
             clock=clock,
         )
 
-    def _default_transcribe(self, wav, cfg):
-        """Transcribe with the release-time model and dictionary prompt.
+    def _default_transcribe(self, wav, cfg, terms=()):
+        """Transcribe with the release-time model and dictionary prompt, plus
+        any terms read off the screen.
         Returns (text, info): see transcriber.transcribe_routed."""
         from voisr.transcriber import resolve_model, transcribe_routed
         if self._warm is not None:
             self._warm.configure(self.get_config().get("model_unload", "min5"))
         return transcribe_routed(
             wav, resolve_model(cfg.get("model"), self._models_path()),
-            prompt=glossary_prompt(cfg.get("dictionary")),
+            prompt=glossary_prompt(cfg.get("dictionary"), terms),
             server=self._warm,
             # the setting now, not the one the dictation began under: a
             # queued dictation must not undo a change made in Settings since
@@ -1640,11 +1656,44 @@ class Api:
         except Exception as error:
             print(f"Voisr history: timings not recorded: {error}", flush=True)
 
-    def _transcribe_audio(self, wav, cfg):
+    def _transcribe_audio(self, wav, cfg, terms=()):
         """(raw text, info) where info has the mode and any extra timings."""
         if self._transcribe_fn is not None:
             return self._transcribe_fn(wav), {"mode": None, "timings": {}}
-        return self._default_transcribe(wav, cfg)
+        return self._default_transcribe(wav, cfg, terms)
+
+    def _session_terms(self, session, wav):
+        """Terms from whichever capture has finished by now: nothing waits for
+        one, so a hung app costs this dictation its context and nothing else."""
+        state = self._focus.session(session.sequence) if self._focus is not None else None
+        if state is None:
+            return []
+        try:
+            if not self._screen_context_on():
+                return []
+            terms = context_terms(state.press_now() or state.release_now())
+            return terms_for_clip(terms, wav_seconds(wav))
+        except Exception as error:
+            print(f"Voisr: context terms skipped ({error.__class__.__name__})", flush=True)
+            return []
+
+    def _transcribe_with_terms(self, wav, cfg, terms):
+        """Context terms may only ever help. A failure with them, or a
+        transcript that recites them (screen words must not reach a paste or
+        History that way), is redone without; a second failure is the real one."""
+        if not terms:
+            return self._transcribe_audio(wav, cfg)
+        try:
+            raw, info = self._transcribe_audio(wav, cfg, terms)
+        except Exception as error:
+            print(f"Voisr: transcription with context terms failed "
+                  f"({error.__class__.__name__}); retrying without", flush=True)
+            return self._transcribe_audio(wav, cfg)
+        if not prompt_echoed(raw, terms):
+            return raw, info
+        print("Voisr: transcript echoed the glossary; retrying without context terms",
+              flush=True)
+        return self._transcribe_audio(wav, cfg)
 
     def current_level(self):
         """Live mic level of the dictation being captured (0..1), or None.
@@ -1804,7 +1853,8 @@ class Api:
                 print(f"Voisr audio: trim failed: {error}", flush=True)
         t_start = self._clock()
         try:
-            raw, info = self._transcribe_audio(wav, cfg)
+            terms = self._session_terms(session, wav)
+            raw, info = self._transcribe_with_terms(wav, cfg, terms)
             t_transcribed = self._clock()
             text = clean(raw, dictionary=cfg.get("dictionary", {}))
             t_cleaned = self._clock()
