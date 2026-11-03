@@ -83,7 +83,7 @@ from pathlib import Path
 from voisr.whisper_server import WhisperServer
 s = WhisperServer(Path(sys.argv[2]))
 s.prewarm(Path(sys.argv[1]))
-while not s.is_loaded():
+while not (s._proc and s._ready):
     time.sleep(0.05)
 print("loaded", flush=True)
 time.sleep(600)

@@ -1475,16 +1475,25 @@ class Api:
             prompt=glossary_prompt(cfg.get("dictionary")),
             server=self._warm, unload=cfg.get("model_unload", "min5"))
 
-    def _prewarm(self):
+    PREWARM_DELAY_S = 0.3   # an accidental tap must not load ~700 MB
+
+    def _prewarm(self, sequence):
         """Key down: start loading the model in the background, in parallel
-        with capture (Handy does the same). Runs on its own thread so the
-        hotkey path never waits for it, and can never raise into it."""
+        with capture (Handy does the same). Waits PREWARM_DELAY_S first and
+        skips if that recording has already ended, so a tap loads nothing.
+        Runs on its own thread so the hotkey path never waits for it, and can
+        never raise into it."""
         warm = self._warm
         if warm is None:
             return
 
         def go():
             try:
+                if self.PREWARM_DELAY_S:
+                    time.sleep(self.PREWARM_DELAY_S)
+                with self._busy_lock:
+                    if self._active_sequence != sequence:
+                        return   # released or cancelled meanwhile
                 from voisr.transcriber import resolve_model
                 cfg = self.get_config()
                 warm.prewarm(resolve_model(cfg.get("model"), self._models_path()),
@@ -1794,7 +1803,7 @@ class Api:
             self._active_sequence = session.sequence
             self._is_recording = True
             self._mark_session(session.sequence, True)  # reentrant: RLock
-        self._prewarm()
+        self._prewarm(session.sequence)
         return {"recording": True, "session_id": session.sequence}
 
     def _release_recording(self, paste=False):

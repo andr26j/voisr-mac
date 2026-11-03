@@ -37,7 +37,8 @@ test("settings.js loads without touching the DOM at parse time", () => {
    parent links) specifically to unlock these. */
 
 const SETTINGS_IDS = ["appearance-grid", "model-list", "launch-toggle",
-                       "color-open", "color-popover", "clear-history", "toast"];
+                       "color-open", "color-popover", "clear-history", "toast",
+                       "unload-select"];
 
 function mountSettings(t, api, apis = ["setTimeout"]) {
   t.mock.timers.enable({ apis });
@@ -606,4 +607,34 @@ test("deleting a Custom model needs a second click after a real pause; a registr
   t.mock.timers.tick(700);
   await click(del(mine));                       // confirmed
   assert.deepEqual(calls, ["reg", "mine"]);
+});
+
+test("a failed 'keep model loaded' save restores the stored choice, not the HTML default", async (t) => {
+  const s = mountSettings(t, {
+    set_config: async () => { throw new Error("bridge down"); },
+  }, ["setTimeout"]);
+  s["unload-select"].value = "min5";           // what index.html ships
+  s.V.views.settings.showUnload("min10");      // what Settings render() found saved
+  assert.equal(s["unload-select"].value, "min10");
+
+  s["unload-select"].value = "never";          // the user picks another
+  await s["unload-select"].dispatch("change", { target: s["unload-select"] });
+  await settle();
+  assert.equal(s["unload-select"].value, "min10");
+});
+
+test("a successful 'keep model loaded' save becomes the one a later failure restores", async (t) => {
+  let fail = false;
+  const s = mountSettings(t, {
+    set_config: async () => { if (fail) throw new Error("x"); return {}; },
+  }, ["setTimeout"]);
+  s.V.views.settings.showUnload("min10");
+  s["unload-select"].value = "hour1";
+  await s["unload-select"].dispatch("change", { target: s["unload-select"] });
+  await settle();
+  fail = true;
+  s["unload-select"].value = "never";
+  await s["unload-select"].dispatch("change", { target: s["unload-select"] });
+  await settle();
+  assert.equal(s["unload-select"].value, "hour1");
 });

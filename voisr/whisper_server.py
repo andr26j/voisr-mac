@@ -33,17 +33,13 @@ import uuid
 from pathlib import Path
 
 from voisr.paths import find_binary
+from voisr.transcriber import _timeout_for
 
 # Handy's ModelUnloadTimeout choices; "Immediately" keeps per-dictation cli.
 DEFAULT_UNLOAD = "min5"
 UNLOAD_SECONDS = {
     "never": None, "immediately": 0,
     "min2": 120, "min5": 300, "min10": 600, "min15": 900, "hour1": 3600,
-}
-UNLOAD_LABELS = {
-    "never": "Never", "immediately": "Immediately", "min2": "After 2 minutes",
-    "min5": "After 5 minutes", "min10": "After 10 minutes",
-    "min15": "After 15 minutes", "hour1": "After 1 hour",
 }
 
 READY_TIMEOUT_S = 30.0       # model load, bounded; a cold small.en takes ~1.3 s
@@ -57,10 +53,16 @@ class ServerError(RuntimeError):
     """The warm path failed; the caller falls back to whisper-cli."""
 
 
+def valid_unload(setting) -> bool:
+    """A known unload choice. Anything else, including an unhashable value
+    from a hand-edited config, is not."""
+    return isinstance(setting, str) and setting in UNLOAD_SECONDS
+
+
 def unload_seconds(setting) -> int | None:
     """Idle seconds before unloading; None = never. Unknown values read as the
     default, so a hand-edited config can't disable the unload."""
-    if setting not in UNLOAD_SECONDS:
+    if not valid_unload(setting):
         setting = DEFAULT_UNLOAD
     return UNLOAD_SECONDS[setting]
 
@@ -220,19 +222,28 @@ class _Process:
     def __init__(self, popen, port, model, state_path):
         self.popen, self.port, self.model = popen, port, model
         self.state_path = state_path
+        self.inflight = 0       # requests being served (WhisperServer's lock)
+        self.retired = False    # unloaded while a request was in flight
 
     def alive(self) -> bool:
         return self.popen.poll() is None
 
-    def stop(self, grace: float = 5.0) -> None:
-        """Close the guard's pipe (it stops the server and exits), then make
-        sure: SIGTERM the guard, then SIGKILL it and the server by pid."""
-        server_pid = None
+    def _own_server_pid(self):
+        """The server pid, but only if the state file still belongs to this
+        process's guard. A newer guard may have rewritten it since."""
+        guard = getattr(self.popen, "pid", None)
         try:
-            server_pid = json.loads(
-                Path(self.state_path).read_text(encoding="utf-8")).get("server")
+            state = json.loads(Path(self.state_path).read_text(encoding="utf-8"))
+            if guard is not None and state.get("guard") == guard:
+                return state.get("server")
         except (OSError, ValueError, AttributeError):
             pass
+        return None
+
+    def stop(self, grace: float = 5.0) -> None:
+        """Close the guard's pipe (it stops the server and exits), then make
+        sure: kill the guard, and our own server by pid if it is still up."""
+        server_pid = self._own_server_pid()
         try:
             if self.popen.stdin:
                 self.popen.stdin.close()
@@ -267,7 +278,14 @@ class WhisperServer:
 
     prewarm() never blocks. transcribe() blocks for a bounded time and
     raises ServerError on any failure. set_busy() marks a recording or
-    transcription in flight, which holds off the idle unload."""
+    transcription in flight, which holds off the idle unload.
+
+    An unload that is on purpose (idle, a new model, a new setting) is not a
+    failure: it starts no cooldown, and a request already being served is
+    left to finish before its server is stopped. Each unload bumps `_gen`, so
+    a loader thread that started before it can tell it is stale and stops
+    its own process; a later request always gets a loader of the current
+    generation."""
 
     def __init__(self, state_path, *, find=find_binary, spawn=_spawn_guarded,
                  probe=_http_probe, infer=_http_infer, port_fn=free_port,
@@ -285,9 +303,8 @@ class WhisperServer:
         self._cond = threading.Condition()
         self._proc = None            # _Process, once started
         self._ready = False          # the model answered
-        self._wanted = None          # model path most recently asked for
-        self._loading = set()        # model paths a loader thread is on
-        self._inflight = 0           # requests being served
+        self._gen = 0                # bumped by every unload
+        self._loading = {}           # model path -> generation of its loader
         self._failed_at = None
         self._unload = DEFAULT_UNLOAD
         self._busy = False
@@ -302,11 +319,13 @@ class WhisperServer:
         return cleanup_stale(self._state_path)
 
     def configure(self, unload) -> None:
-        """Apply the unload setting; 'immediately' unloads right now."""
+        """Apply the unload setting; 'immediately' unloads right now (after
+        any request in flight)."""
         with self._cond:
-            self._unload = unload if unload in UNLOAD_SECONDS else DEFAULT_UNLOAD
+            self._unload = unload if valid_unload(unload) else DEFAULT_UNLOAD
             self._cond.notify_all()
-        if not uses_server(unload):
+            off = not uses_server(self._unload)
+        if off:
             self.unload()
 
     def set_busy(self, busy: bool) -> None:
@@ -319,22 +338,13 @@ class WhisperServer:
         """Start loading `model_path` in the background. Returns at once."""
         if unload is not None:
             self.configure(unload)
-        if not uses_server(self._unload):
-            return
         with self._cond:
-            if self._closed or self._in_cooldown():
+            if not uses_server(self._unload) or self._closed \
+                    or self._in_cooldown():
                 return
             self._failed_at = None
             self._last_activity = self._clock()
-            self._wanted = str(model_path)
-            if self._proc and self._proc.model == self._wanted \
-                    and self._proc.alive():
-                return  # loaded, or its loader thread is waiting for it
-            if self._wanted in self._loading:
-                return
-            self._loading.add(self._wanted)
-        threading.Thread(target=self._load, args=(str(model_path),),
-                         name="whisper-server-load", daemon=True).start()
+            self._ensure_loading_locked(str(model_path))
 
     def transcribe(self, wav_path, model_path, prompt=None, unload=None):
         """Text for `wav_path` from the warm server, loading it if needed.
@@ -347,15 +357,14 @@ class WhisperServer:
         if not Path(model_path).is_file():
             raise ServerError(f"model missing: {model_path}")
         started = self._clock()
+        deadline = started + self._wait_for_ready
         with self._cond:
             if self._closed:
                 raise ServerError("server shut down")
             if self._in_cooldown():
                 raise ServerError("server recently failed; using whisper-cli")
+            self._failed_at = None
             self._last_activity = started
-        self.prewarm(model_path)
-        deadline = started + self._wait_for_ready
-        with self._cond:
             while True:
                 proc = self._proc
                 if self._closed:
@@ -364,13 +373,15 @@ class WhisperServer:
                     break
                 if self._failed_at is not None:
                     raise ServerError("server failed to load")
+                # an unload since we began leaves no loader: make sure one runs
+                self._ensure_loading_locked(model_path)
                 left = deadline - self._clock()
                 if left <= 0:
-                    self._fail_locked()
+                    self._fail_locked(proc)
                     raise ServerError("server not ready in time")
                 self._cond.wait(min(left, 0.25))
+            proc.inflight += 1
             port = proc.port
-            self._inflight += 1
         waited = (self._clock() - started) * 1000
         try:
             wav = Path(wav_path).read_bytes()
@@ -383,46 +394,39 @@ class WhisperServer:
                       "token_timestamps": "false"}
             if prompt:
                 fields["prompt"] = prompt
-            seconds = len(wav) / 32000
-            text = self._infer(port, wav, fields, 30 + seconds)
-        except ServerError:
-            self._fail()
+            text = self._infer(port, wav, fields, _timeout_for(wav_path))
+        except ServerError as error:
+            self._request_failed(proc, error)
             raise
         except OSError as error:
-            self._fail()
             raise ServerError(f"cannot read clip: {error}") from error
         finally:
-            with self._cond:
-                self._inflight -= 1
-                self._last_activity = self._clock()
+            self._request_done(proc)
         return text, {"model_wait": waited}
 
     def unload(self) -> None:
-        """Stop the server and free its memory. Safe to call any time."""
+        """Free the server's memory. A request in flight finishes first; the
+        server is then stopped by whoever finishes it. Safe to call any time."""
         with self._cond:
-            proc, self._proc = self._proc, None
-            self._ready = False
-            self._wanted = None
-            self._cond.notify_all()
-        if proc is not None:
-            proc.stop()
+            proc = self._detach_locked()
+        self._stop_or_retire(proc)
 
     def forget_model(self, model_path) -> None:
         """A model file is being deleted or replaced: drop it if loaded."""
         with self._cond:
-            current = self._proc.model if self._proc else self._wanted
+            current = self._proc.model if self._proc else None
+            current = current or next(iter(self._loading), None)
         if current is not None and str(current) == str(model_path):
             self.unload()
 
-    def is_loaded(self) -> bool:
-        with self._cond:
-            return bool(self._proc and self._ready and self._proc.alive())
-
     def shutdown(self) -> None:
+        """Quit: stop the server now, in-flight request or not."""
         with self._cond:
             self._closed = True
+            proc = self._detach_locked()
             self._cond.notify_all()
-        self.unload()
+        if proc is not None:
+            proc.stop()
 
     # -- internals ------------------------------------------------------
 
@@ -430,37 +434,83 @@ class WhisperServer:
         return (self._failed_at is not None
                 and self._clock() - self._failed_at < self._cooldown)
 
-    def _fail(self) -> None:
-        with self._cond:
-            self._failed_at = self._clock()
-            self._cond.notify_all()
-        self.unload()
-
-    def _fail_locked(self) -> None:
-        self._failed_at = self._clock()
+    def _detach_locked(self):
+        """Forget the current server and invalidate its loader. Returns the
+        process to stop, or None. Never starts a cooldown."""
+        proc, self._proc = self._proc, None
+        self._ready = False
+        self._gen += 1
         self._cond.notify_all()
-        threading.Thread(target=self.unload, daemon=True).start()
+        return proc
 
-    def _load(self, model_path: str) -> None:
+    def _stop_or_retire(self, proc) -> None:
+        if proc is None:
+            return
+        with self._cond:
+            if proc.inflight:
+                proc.retired = True   # the last request out stops it
+                return
+        proc.stop()
+
+    def _request_done(self, proc) -> None:
+        with self._cond:
+            proc.inflight -= 1
+            self._last_activity = self._clock()
+            stop = proc.retired and proc.inflight == 0
+        if stop:
+            proc.stop()
+
+    def _request_failed(self, proc, error) -> None:
+        """A request to `proc` failed. If it is still the current server that
+        is a real failure (cooldown, stop it). If it was unloaded meanwhile,
+        the failure is ours: the caller falls back without a cooldown."""
+        with self._cond:
+            if self._proc is not proc:
+                return
+            self._failed_at = self._clock()
+            detached = self._detach_locked()
+        if detached is not None:
+            detached.stop()
+
+    def _fail_locked(self, proc) -> None:
+        self._failed_at = self._clock()
+        detached = self._detach_locked()
+        if detached is not None:
+            threading.Thread(target=detached.stop, daemon=True).start()
+
+    def _ensure_loading_locked(self, model: str) -> None:
+        """Make sure `model` is loaded or has a live loader. Lock held."""
+        proc = self._proc
+        if proc is not None and proc.model == model and proc.alive():
+            return
+        if self._loading.get(model) == self._gen:
+            return   # a loader of the current generation is on it
+        if any(m != model and g == self._gen for m, g in self._loading.items()):
+            self._gen += 1   # a loader for another model: make it stale
+        if proc is not None:   # another model, or a server that died
+            old = self._detach_locked()
+            threading.Thread(target=self._stop_or_retire, args=(old,),
+                             daemon=True).start()
+        self._loading[model] = self._gen
+        threading.Thread(target=self._load, args=(model, self._gen),
+                         name="whisper-server-load", daemon=True).start()
+
+    def _load(self, model_path: str, gen: int) -> None:
         try:
-            self._load_one(model_path)
+            self._load_one(model_path, gen)
         finally:
             with self._cond:
-                self._loading.discard(model_path)
+                if self._loading.get(model_path) == gen:
+                    del self._loading[model_path]
+                self._cond.notify_all()
 
-    def _load_one(self, model_path: str) -> None:
-        with self._cond:
-            # another model, or a server that died: replace it
-            old = self._proc
-            if old is not None and (old.model != model_path or not old.alive()):
-                self._proc, self._ready = None, False
-            else:
-                old = None
-        if old is not None:
-            old.stop()
+    def _current(self, gen) -> bool:
+        return not self._closed and self._gen == gen
+
+    def _load_one(self, model_path: str, gen: int) -> None:
         binary = self._find("whisper-server")
         if not binary:
-            self._load_failed("whisper-server not found")
+            self._load_failed("whisper-server not found", gen)
             return
         try:
             port = self._port_fn()
@@ -469,14 +519,14 @@ class WhisperServer:
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
             popen = self._spawn(command, self._state_path)
         except (OSError, ServerError) as error:
-            self._load_failed(str(error))
+            self._load_failed(str(error), gen)
             return
         proc = _Process(popen, port, model_path, self._state_path)
         with self._cond:
-            superseded = self._closed or self._wanted != model_path
-            if not superseded:
+            stale = not self._current(gen)
+            if not stale:
                 self._proc, self._ready = proc, False
-        if superseded:
+        if stale:
             proc.stop()
             return
         deadline = self._clock() + self._ready_timeout
@@ -485,12 +535,12 @@ class WhisperServer:
                 if self._proc is not proc:   # unloaded or replaced meanwhile
                     return
             if not proc.alive():
-                self._load_failed("server exited while loading", proc)
+                self._load_failed("server exited while loading", gen, proc)
                 return
             if self._probe(port, 1.0):
                 break
             if self._clock() >= deadline:
-                self._load_failed("server load timed out", proc)
+                self._load_failed("server load timed out", gen, proc)
                 return
             time.sleep(0.05)
         with self._cond:
@@ -502,14 +552,17 @@ class WhisperServer:
             self._cond.notify_all()
         self._ensure_watcher()
 
-    def _load_failed(self, why: str, proc=None) -> None:
-        print(f"Voisr: warm whisper-server unavailable ({why}); using whisper-cli",
-              flush=True)
+    def _load_failed(self, why: str, gen: int, proc=None) -> None:
+        """A load failed. Only the current generation's failure counts; a
+        loader that was unloaded underneath has nothing to report."""
         with self._cond:
-            self._failed_at = self._clock()
-            if proc is None or self._proc is proc:
-                self._proc, self._ready = None, False
-                self._wanted = None
+            current = self._current(gen)
+            if current:
+                print(f"Voisr: warm whisper-server unavailable ({why}); "
+                      "using whisper-cli", flush=True)
+                self._failed_at = self._clock()
+                if proc is None or self._proc is proc:
+                    self._detach_locked()
             self._cond.notify_all()
         if proc is not None:
             proc.stop()
@@ -524,7 +577,9 @@ class WhisperServer:
 
     def _watch(self) -> None:
         """Handy's idle watcher: unload once idle longer than the limit, and
-        never while a recording or transcription is in flight."""
+        never while a recording or transcription is in flight. The decision
+        and the detach happen under one lock hold, so a request or activity
+        that arrives meanwhile is never cut off."""
         while True:
             with self._cond:
                 if self._closed or self._proc is None:
@@ -534,14 +589,15 @@ class WhisperServer:
                 if self._closed or self._proc is None:
                     self._watcher = None
                     return
-                limit = unload_seconds(self._unload)
-                if self._busy or self._inflight:
+                proc = self._proc
+                if self._busy or proc.inflight:
                     self._last_activity = self._clock()
                     continue
-                if not self._proc.alive():
-                    due = True
-                else:
-                    due = (limit is not None
-                           and self._clock() - self._last_activity > limit)
-            if due:
-                self.unload()
+                limit = unload_seconds(self._unload)
+                due = (not proc.alive()) or (
+                    limit is not None
+                    and self._clock() - self._last_activity > limit)
+                if not due:
+                    continue
+                self._detach_locked()
+            proc.stop()

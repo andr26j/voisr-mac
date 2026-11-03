@@ -40,6 +40,11 @@ class FakePopen:
         self.code = -9
 
 
+def loaded(server):
+    with server._cond:
+        return bool(server._proc and server._ready and server._proc.alive())
+
+
 class Rig:
     """A WhisperServer wired to fakes, with a clock the test moves."""
 
@@ -73,9 +78,9 @@ class Rig:
     def ready(self, model=None, timeout=5):
         self.server.prewarm(model or self.model)
         end = time.monotonic() + timeout
-        while not self.server.is_loaded() and time.monotonic() < end:
+        while not loaded(self.server) and time.monotonic() < end:
             time.sleep(0.005)
-        assert self.server.is_loaded()
+        assert loaded(self.server)
 
 
 def test_prewarm_binds_loopback_only_and_loads_once(tmp_path):
@@ -102,7 +107,8 @@ def test_transcribe_sends_prompt_and_settings(tmp_path):
     assert fields["prompt"] == "Glossary: Voisr."
     assert fields["language"] == "en" and fields["beam_size"] == "5"
     assert fields["token_timestamps"] == "false"   # else segments split mid-word
-    assert wav == rig.wav.read_bytes() and 30 < timeout < 40
+    assert wav == rig.wav.read_bytes()
+    assert timeout == 120 + 2 * 1.0   # transcriber._timeout_for, same as cli
 
 
 def test_no_prompt_field_without_a_dictionary(tmp_path):
@@ -124,7 +130,7 @@ def test_choosing_immediately_unloads_a_loaded_server(tmp_path):
     rig = Rig(tmp_path)
     rig.ready()
     rig.server.configure("immediately")
-    assert not rig.server.is_loaded() and rig.spawned[0].stopped == 1
+    assert not loaded(rig.server) and rig.spawned[0].stopped == 1
 
 
 def test_missing_binary_raises_and_does_not_retry_during_cooldown(tmp_path):
@@ -141,7 +147,7 @@ def test_retries_after_the_cooldown(tmp_path):
     rig.infer_result = ServerError("boom")
     with pytest.raises(ServerError):
         rig.server.transcribe(rig.wav, rig.model)
-    assert not rig.server.is_loaded()
+    assert not loaded(rig.server)
     rig.now += 61
     rig.infer_result = "back"
     assert rig.server.transcribe(rig.wav, rig.model)[0] == "back"
@@ -193,9 +199,9 @@ def test_forget_model_unloads_only_that_model(tmp_path):
     rig = Rig(tmp_path)
     rig.ready()
     rig.server.forget_model(tmp_path / "other.bin")
-    assert rig.server.is_loaded()
+    assert loaded(rig.server)
     rig.server.forget_model(rig.model)
-    assert not rig.server.is_loaded()
+    assert not loaded(rig.server)
 
 
 def test_deleted_model_file_is_a_clean_error_not_a_hang(tmp_path):
@@ -219,9 +225,9 @@ def test_idle_timeout_unloads(tmp_path):
     rig.ready()
     rig.now += 299
     time.sleep(0.1)
-    assert rig.server.is_loaded()
+    assert loaded(rig.server)
     rig.now += 2
-    assert wait_until(lambda: not rig.server.is_loaded())
+    assert wait_until(lambda: not loaded(rig.server))
 
 
 def test_idle_timer_does_not_expire_while_a_dictation_is_in_flight(tmp_path):
@@ -230,12 +236,12 @@ def test_idle_timer_does_not_expire_while_a_dictation_is_in_flight(tmp_path):
     rig.server.set_busy(True)
     rig.now += 7200
     time.sleep(0.15)
-    assert rig.server.is_loaded()
+    assert loaded(rig.server)
     rig.server.set_busy(False)       # the clock restarts when it ends
     time.sleep(0.15)
-    assert rig.server.is_loaded()
+    assert loaded(rig.server)
     rig.now += 301
-    assert wait_until(lambda: not rig.server.is_loaded())
+    assert wait_until(lambda: not loaded(rig.server))
 
 
 def test_idle_timer_does_not_expire_during_a_request(tmp_path):
@@ -254,7 +260,7 @@ def test_idle_timer_does_not_expire_during_a_request(tmp_path):
     time.sleep(0.05)
     rig.now += 7200
     time.sleep(0.15)
-    assert rig.server.is_loaded()
+    assert loaded(rig.server)
     gate.set()
     t.join(3)
     assert result[0][0] == "done"
@@ -266,7 +272,7 @@ def test_never_means_never(tmp_path):
     rig.ready()
     rig.now += 10 ** 7
     time.sleep(0.15)
-    assert rig.server.is_loaded()
+    assert loaded(rig.server)
 
 
 def test_shutdown_stops_the_server_and_refuses_new_work(tmp_path):
@@ -380,6 +386,7 @@ def dictate(api):
 def test_key_down_starts_the_load_and_a_dictation_runs_warm(tmp_path):
     warm = FakeWarm(text="Hello Voisr")
     api = make_api(tmp_path, warm)
+    api.PREWARM_DELAY_S = 0
     res = dictate(api)
     assert res["text"] == "Hello Voisr"
     assert wait_until(lambda: any(e[0] == "prewarm" for e in warm.events))
@@ -608,3 +615,164 @@ def test_requests_go_to_loopback_without_proxy_settings(monkeypatch):
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:3128")
     assert ws._http_probe(ws.free_port(), 0.2) is False    # nothing listens
     assert seen == ["127.0.0.1"]
+
+
+# ---- review fixes ------------------------------------------------------------
+
+def test_hand_edited_unhashable_unload_value_is_rejected_not_a_crash(tmp_path):
+    from voisr.app import config_errors, load_config
+    assert config_errors({"model_unload": []}) == ["invalid value for model_unload"]
+    assert config_errors({"model_unload": {}}) == ["invalid value for model_unload"]
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"model_unload": [], "paste": False}))
+    cfg = load_config(path)
+    assert cfg["model_unload"] == "min5" and cfg["paste"] is False
+    server = WhisperServer(tmp_path / "s.json")
+    server.configure([])                       # no TypeError
+    assert ws.unload_seconds([]) == 300
+
+
+def _sleeper(tmp_path):
+    script = tmp_path / "whisper-server"
+    script.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(600)\n")
+    script.chmod(0o755)
+    proc = subprocess.Popen([str(script)])
+    time.sleep(0.2)
+    return proc
+
+
+def test_stop_never_kills_a_server_that_belongs_to_a_newer_guard(tmp_path):
+    other = _sleeper(tmp_path)               # a newer guard's server
+    state = tmp_path / "state.json"
+    try:
+        state.write_text(json.dumps({"guard": 4242, "server": other.pid}))
+        old = FakePopen(["x"])
+        old.pid = 1111                         # our guard is not the recorded one
+        ws._Process(old, 1, "m", state).stop()
+        assert other.poll() is None, "stopped a server it did not start"
+        # when the state does name our guard, our own leftover server is killed
+        state.write_text(json.dumps({"guard": 1111, "server": other.pid}))
+        old2 = FakePopen(["x"])
+        old2.pid = 1111
+        ws._Process(old2, 1, "m", state).stop()
+        assert other.wait(5) is not None
+    finally:
+        other.kill()
+        other.wait()
+
+
+def test_a_request_after_an_unload_always_gets_a_live_loader(tmp_path):
+    rig = Rig(tmp_path)
+    rig.probe_ok = False                       # the first loader never finishes
+    rig.server.prewarm(rig.model)
+    assert wait_until(lambda: len(rig.spawned) == 1)
+    rig.server.unload()                        # its loader is now stale
+    rig.probe_ok = True
+    result = []
+    t = threading.Thread(target=lambda: result.append(
+        rig.server.transcribe(rig.wav, rig.model)))
+    start = time.monotonic()
+    t.start()
+    t.join(5)
+    assert result and result[0][0] == "hello world"
+    assert time.monotonic() - start < 3, "waited for a loader that was gone"
+    assert len(rig.spawned) == 2
+    assert wait_until(lambda: rig.spawned[0].stopped == 1)   # stale one stopped
+
+
+def test_prewarm_after_unload_starts_a_new_loader(tmp_path):
+    rig = Rig(tmp_path)
+    rig.probe_ok = False
+    rig.server.prewarm(rig.model)
+    assert wait_until(lambda: len(rig.spawned) == 1)
+    rig.server.unload()
+    rig.probe_ok = True
+    rig.server.prewarm(rig.model)
+    assert wait_until(lambda: loaded(rig.server))
+    assert len(rig.spawned) == 2
+
+
+def test_unload_during_a_request_lets_it_finish_and_starts_no_cooldown(tmp_path):
+    rig = Rig(tmp_path)
+    rig.ready()
+    gate = threading.Event()
+
+    def slow(port, wav, fields, timeout):
+        gate.wait(5)
+        return "finished"
+    rig.server._infer = slow
+    result = []
+    t = threading.Thread(target=lambda: result.append(
+        rig.server.transcribe(rig.wav, rig.model)))
+    t.start()
+    assert wait_until(lambda: rig.server._proc and rig.server._proc.inflight == 1)
+    rig.server.unload()                        # a setting or model change
+    time.sleep(0.1)
+    assert rig.spawned[0].stopped == 0, "killed a request in flight"
+    gate.set()
+    t.join(5)
+    assert result[0][0] == "finished"
+    assert wait_until(lambda: rig.spawned[0].stopped == 1)
+    rig.server._infer = rig._infer
+    assert rig.server.transcribe(rig.wav, rig.model)[0] == "hello world"  # no cooldown
+
+
+def test_a_request_cut_off_by_an_unload_is_not_a_server_failure(tmp_path):
+    rig = Rig(tmp_path)
+    rig.ready()
+    box = {}
+
+    def dies(port, wav, fields, timeout):
+        rig.server.unload()                    # shutdown-style unload mid-request
+        raise ServerError("connection reset")
+    rig.server._infer = dies
+    with pytest.raises(ServerError):
+        rig.server.transcribe(rig.wav, rig.model)
+    assert rig.server._failed_at is None       # no cooldown
+    rig.server._infer = rig._infer
+    assert rig.server.transcribe(rig.wav, rig.model)[0] == "hello world"
+
+
+def test_a_real_request_failure_still_starts_the_cooldown(tmp_path):
+    rig = Rig(tmp_path)
+    rig.infer_result = ServerError("bad")
+    with pytest.raises(ServerError):
+        rig.server.transcribe(rig.wav, rig.model)
+    assert rig.server._failed_at is not None
+
+
+def test_idle_watcher_skips_when_activity_just_happened(tmp_path):
+    rig = Rig(tmp_path)
+    rig.ready()
+    rig.now += 400
+    rig.server.set_busy(True)                  # a recording starts as it fires
+    time.sleep(0.15)
+    assert loaded(rig.server)
+    rig.server.set_busy(False)                 # the clock restarts at the end
+    time.sleep(0.15)
+    assert loaded(rig.server)
+
+
+def test_a_stale_loader_failure_does_not_start_a_cooldown(tmp_path):
+    rig = Rig(tmp_path)
+    rig.probe_ok = False
+    rig.server.prewarm(rig.model)
+    assert wait_until(lambda: len(rig.spawned) == 1)
+    rig.server.unload()
+    rig.spawned[0].code = 1                    # the stale server dies afterwards
+    time.sleep(0.2)
+    assert rig.server._failed_at is None
+
+
+def test_a_tap_loads_nothing_but_a_held_key_does(tmp_path):
+    warm = FakeWarm(text="x")
+    api = make_api(tmp_path, warm)
+    api.PREWARM_DELAY_S = 0.2
+    assert api.start_recording().get("recording")
+    api.stop_recording()                       # released before the delay
+    time.sleep(0.5)
+    assert not [e for e in warm.events if e[0] == "prewarm"]
+    assert api.start_recording().get("recording")
+    assert wait_until(lambda: any(e[0] == "prewarm" for e in warm.events))
+    assert api.is_recording()                  # loaded while still held
+    api.stop_recording()

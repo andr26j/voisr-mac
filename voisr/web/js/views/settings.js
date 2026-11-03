@@ -208,6 +208,16 @@ window.Voisr = window.Voisr || {};
      theme that was never applied or persisted. */
   let appliedAppearance = "system";
 
+  /* The stored "keep model loaded" choice. Set when Settings renders (not
+     read from the select, which holds the HTML default until then), so a
+     failed save puts back what is really saved. */
+  let appliedUnload = "min5";
+  function showUnload(value) {
+    appliedUnload = value || "min5";
+    const sel = V.ui.$("#unload-select");
+    if (sel) sel.value = appliedUnload;
+  }
+
   /* ----- speech model list -----
 
      One row per model: size, plain description, install state and the
@@ -375,8 +385,7 @@ window.Voisr = window.Voisr || {};
         appliedAppearance = cfg.appearance || "system";
         renderAppearance();
         $("#launch-toggle").checked = !!cfg.launch_at_login;
-        const unload = $("#unload-select");
-        if (unload) unload.value = cfg.model_unload || "min5";
+        showUnload(cfg.model_unload);
       }
       if (hotkey) $("#hotkey-current").textContent = hotkey.display || "unset";
       if (status) renderHotkeyStatus(status);
@@ -462,12 +471,11 @@ window.Voisr = window.Voisr || {};
 
     const unloadSelect = document.getElementById("unload-select");
     if (unloadSelect) {
-      let appliedUnload = unloadSelect.value;
       unloadSelect.addEventListener("change", async (e) => {
         const next = e.target.value;
         const res = await V.ui.tryApi(
           V.api().set_config({ model_unload: next }), "Save keep model loaded");
-        if (!res) { e.target.value = appliedUnload; return; }
+        if (!res) { e.target.value = appliedUnload; return; }  // the stored one
         appliedUnload = next;
         V.ui.toast("Model unload saved");
       });
@@ -532,5 +540,5 @@ window.Voisr = window.Voisr || {};
     node.dataset.state = status.state || "unknown";
   }
 
-  V.views.settings = { renderModels, renderAppearance, renderHotkeyStatus, init, render, renderThemes, renderColorWheel, initColorWheel, openColorPopover };
+  V.views.settings = { showUnload, renderModels, renderAppearance, renderHotkeyStatus, init, render, renderThemes, renderColorWheel, initColorWheel, openColorPopover };
 })(window.Voisr);

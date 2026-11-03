@@ -39,8 +39,8 @@ def _is_tap_mode(v):
 
 
 def _is_unload(v):
-    from voisr.whisper_server import UNLOAD_SECONDS
-    return v in UNLOAD_SECONDS
+    from voisr.whisper_server import valid_unload
+    return valid_unload(v)
 
 
 def _is_dictionary(v):
