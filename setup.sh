@@ -2,6 +2,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 command -v whisper-cli >/dev/null || brew install whisper-cpp
+# ffmpeg is the fallback recorder (when the built-in audio stream can't open)
+# and converts non-WAV files for `--mode file`. Dictating in the app doesn't
+# need it while the stream works, but without it the fallback fails.
+command -v ffmpeg >/dev/null || brew install ffmpeg
 mkdir -p models
 # -f: an HTTP error must fail loudly, not write an error page into the .bin.
 # Download to .part and rename: an interrupted download left a truncated

@@ -27,7 +27,8 @@ mkdir -p "$APPSUP/models"
 rsync -a --delete "$PROJECT/voisr/" "$APPSUP/voisr/" --exclude __pycache__
 cp "$PROJECT/requirements.txt" "$APPSUP/"
 rsync -a "$PROJECT/models/" "$APPSUP/models/"
-[ -f "$APPSUP/config.json" ] || cp "$PROJECT/config.json" "$APPSUP/"
+# No config.json is shipped: the app starts from DEFAULT_CONFIG and writes the
+# user's own on first save. An existing one is never touched.
 
 echo "==> Creating venv"
 PYVER="$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')"

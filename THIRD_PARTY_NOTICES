@@ -1,0 +1,95 @@
+Third-party notices for Voisr
+=============================
+
+Voisr itself is MIT licensed (see LICENSE). It contains none of the software
+or models below: the installer downloads them to your Mac from their original
+sources. Licence facts here were checked on 2026-11-03 against the upstream
+LICENSE files, the package metadata of the pinned versions, and the Homebrew
+formulae. Check upstream for anything newer.
+
+
+Speech engine and models
+------------------------
+
+whisper.cpp -- MIT License
+  Copyright (c) 2023-2026 The ggml authors
+  https://github.com/ggml-org/whisper.cpp
+  Installed with Homebrew (`brew install whisper-cpp`, formula licence: MIT).
+  Voisr runs its `whisper-cli` program as a separate process.
+
+ggml-base.en.bin and ggml-small.en.bin -- MIT License
+  OpenAI Whisper models converted to the ggml format by the whisper.cpp
+  author. Downloaded by setup.sh from
+  https://huggingface.co/ggerganov/whisper.cpp (model card: `license: mit`).
+  The original model and code are OpenAI's Whisper:
+  MIT License, Copyright (c) 2022 OpenAI, https://github.com/openai/whisper
+  The English-only "base.en" and "small.en" sizes are the two Voisr uses.
+
+The MIT licence text for both reads:
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+
+Tools installed with Homebrew
+-----------------------------
+
+ffmpeg -- GPL-3.0-or-later (Homebrew formula licence, as built by Homebrew)
+  https://ffmpeg.org
+  Installed by setup.sh. Voisr runs it as a separate program, only as a
+  fallback recorder and to convert non-WAV files for `--mode file`.
+
+Python -- Python Software Foundation License
+  https://www.python.org/psf/license/  Not redistributed by Voisr.
+
+
+Python packages (requirements.txt, installed with pip into Voisr's own venv)
+---------------------------------------------------------------------------
+
+Pinned, direct:
+  pynput 1.8.2                     LGPL-3.0     https://github.com/moses-palmer/pynput
+  pywebview 6.2.1                  BSD-3-Clause (Copyright (c) 2014-2017 Roman Sirokov)
+                                                https://github.com/r0x0r/pywebview
+  sounddevice 0.5.5                MIT          https://github.com/spatialaudio/python-sounddevice
+  pyobjc-framework-AVFoundation 12.2.1  MIT     https://github.com/ronaldoussoren/pyobjc
+  pytest 9.1.1 (development only)  MIT          https://github.com/pytest-dev/pytest
+
+Pulled in by those (versions float within what the pins allow):
+  pyobjc-core and the other pyobjc-framework-* packages   MIT
+  cffi                          MIT-0
+  pycparser                     BSD-3-Clause
+  bottle                        MIT
+  proxy_tools                   MIT
+  six                           MIT
+  typing_extensions             PSF-2.0
+  pluggy, iniconfig             MIT   (pytest, development only)
+  packaging                     Apache-2.0 OR BSD-2-Clause   (pytest, development only)
+  Pygments                      BSD-2-Clause                 (pytest, development only)
+
+PortAudio is bundled inside the sounddevice macOS wheel
+(_sounddevice_data/portaudio-binaries/libportaudio.dylib). Its authors are
+Ross Bencina and Phil Burk, MIT License, http://www.portaudio.com/ .
+
+pynput is licensed under the GNU Lesser General Public License v3. Voisr
+installs it unmodified from PyPI and only imports it; you can replace it with
+another version at any time with `pip install` in Voisr's venv. The licence
+text is at https://www.gnu.org/licenses/lgpl-3.0.html and ships inside the
+package's dist-info folder.
+
+Each package's own licence file is installed beside it in the venv
+(Voisr's `venv/lib/python*/site-packages/<package>.dist-info/`).

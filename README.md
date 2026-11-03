@@ -1,40 +1,60 @@
 # Voisr
 
-A local-only macOS clone of [Wispr Flow](https://wisprflow.ai)'s core loop: **hold a key, speak, and clean text appears at your cursor** — in any app. All processing happens on your machine (whisper.cpp); no audio or text ever leaves it.
+Hold a key, speak, and clean text appears at your cursor, in any app. Voisr is a local-only macOS push-to-talk dictation app in the spirit of [Wispr Flow](https://wisprflow.ai): speech-to-text runs on your Mac with [whisper.cpp](https://github.com/ggml-org/whisper.cpp), and no audio or text is sent anywhere.
 
-## What it does
+English only. macOS only. Free for personal use under the MIT licence. There is no prebuilt download: the installer builds the app on your Mac.
 
-1. **Capture** — records your mic while you hold the hotkey (or between Enter presses in toggle mode)
-2. **Transcribe** — on-device speech-to-text via whisper.cpp (`ggml-small.en`, falling back to `ggml-base.en`)
-3. **Clean up** — strips filler words (um, uh, hmm…), normalizes spacing/punctuation, capitalizes, and applies your custom dictionary (e.g. `"trademake" → "TradeMate"` for names the ASR mishears)
-4. **Insert** — pastes the result at the cursor of the frontmost app (Cmd-V via System Events), restoring your clipboard afterwards. If a default paste is blocked, your original clipboard is preserved. The desktop app and `--mode hotkey` both write to history; CLI toggle mode does not. Use `paste: false` or `--no-paste` for clipboard-only/manual paste.
+## Requirements
 
-## Setup
+| You need | Why | Get it |
+|---|---|---|
+| macOS | Voisr uses macOS-only APIs. Developed and tested on an Apple-silicon Mac (M1, 8 GB). Intel Macs and the lowest supported macOS version have not been tested. | |
+| [Homebrew](https://brew.sh) | installs whisper.cpp and ffmpeg | brew.sh |
+| Xcode Command Line Tools (C compiler) | the installer compiles a small launcher so macOS lists the app as "Voisr" in Privacy & Security | `xcode-select --install` |
+| Python 3.14 or newer, as a *framework build* | runs the app. Homebrew's and python.org's Python are framework builds. Older versions fail to import the code (checked on 3.10; nothing between 3.11 and 3.13 was run). | `brew install python@3.14` |
+| about 630 MB free for models, plus room for Python packages | `small.en` (~490 MB) is the default, `base.en` (~150 MB) is the faster option | |
+| internet during install only | Homebrew, the models from Hugging Face, and Python packages | |
+
+`install.sh` checks all of this first and tells you exactly what is missing before it changes anything.
+
+## Install
 
 ```bash
-bash setup.sh   # installs whisper-cpp (brew), downloads both models (~630 MB: small.en ~490 MB, base.en ~150 MB), creates venv
-```
-
-## Desktop app (dashboard)
-
-A macOS dashboard: record dictations, browse history, track stats, edit your dictionary, and change settings.
-
-```bash
-bash scripts/install_app.sh   # installs to ~/Applications/Voisr.app
+git clone https://github.com/andr26j/voisr-mac.git
+cd voisr-mac
+./install.sh
 open ~/Applications/Voisr.app
 ```
 
-The installer copies the runtime to `~/Library/Application Support/Voisr` (macOS blocks apps from reading Desktop paths without per-app grants, so the app can't run out of this folder directly). The installed app keeps its own `config.json` and history there; re-run the installer after pulling code changes.
+`install.sh` runs `setup.sh` (installs `whisper-cpp` and `ffmpeg` with Homebrew, downloads both models to `models/`, creates a development venv) and then `scripts/install_app.sh` (copies the runtime to `~/Library/Application Support/Voisr`, builds `~/Applications/Voisr.app`). macOS blocks apps from reading Desktop and Documents without per-app grants, which is why the app runs from Application Support and not from the cloned folder.
 
-For development, run the same dashboard straight from the repo:
+A new install starts with no custom dictionary and default settings. Voisr writes its own `config.json` the first time you change a setting.
 
-```bash
-./venv/bin/python -m voisr.ui
-```
+### ffmpeg
 
-On first recording, macOS will ask for Microphone access — allow it once.
+Voisr records with a built-in audio stream, which does not use ffmpeg. `setup.sh` still installs it because it is used by:
 
-### Dashboard
+- the fallback recorder, if the audio stream cannot be opened (the dictation would otherwise fail);
+- CLI toggle mode (`python -m voisr.app`, see below);
+- `--mode file`, to convert non-WAV audio.
+
+Without ffmpeg, those three stop working; normal dictation from the app keeps working while the audio stream does.
+
+## Permissions
+
+Open the app and follow the strip on the Home screen. Each chip opens the right pane of System Settings → Privacy & Security.
+
+| Permission | Needed for | When it is asked |
+|---|---|---|
+| Microphone | recording | on your first recording |
+| Accessibility | the push-to-talk key (the default `event_tap` mode) and pasting with Cmd-V | from the strip on Home |
+| Input Monitoring | the push-to-talk key, only if you set `"event_tap": "listen"` | from the strip on Home |
+
+Pasting works by asking System Events to press Cmd-V (`osascript`); if macOS asks whether Voisr may control System Events, allow it.
+
+**Permissions and reinstalling.** macOS ties the grants to the launcher's code hash. The installer rebuilds the launcher only when the launcher source, Python version or Python location changes, and prints whether your grants carry over. If it says the app identity changed, or the toggles are ON but the key does nothing, use **Reset** on the Home screen's permission strip (or run the two `tccutil reset` commands the installer prints) and allow the permissions again.
+
+## The dashboard
 
 The dashboard follows your macOS appearance setting automatically, with an option to pin to Light or Dark mode in Settings.
 
@@ -52,7 +72,37 @@ A **menu-bar item** keeps Voisr reachable without opening its window and shows w
 
 **Settings** are grouped into Dictation, Push-to-talk, Appearance, and Privacy & Data sections. You can set launch-at-login and choose a transcription model (`small.en` for accuracy, `base.en` for speed).
 
-## CLI usage
+## Updating
+
+Quit Voisr from the menu bar, then:
+
+```bash
+cd voisr-mac
+git pull
+./install.sh
+```
+
+Your settings, dictionary and history are left alone. The installer tells you if the app is still running the old version.
+
+## Uninstalling
+
+```bash
+bash scripts/uninstall.sh            # asks before deleting history and settings
+bash scripts/uninstall.sh --dry-run  # show what would be removed
+```
+
+It removes `~/Applications/Voisr.app`, `~/Library/Application Support/Voisr` (runtime, venv, models), the launch-at-login agent, the log and Voisr's caches. It asks separately before deleting your **dictation history** and your **settings and dictionary**, and keeps them if you say no. With no terminal to ask on, it keeps them. It does not remove the folder you cloned, the Homebrew packages (`brew uninstall whisper-cpp ffmpeg`), or Voisr's rows in System Settings → Privacy & Security (select Voisr and press "–").
+
+## What stays on your Mac
+
+- **Audio** is recorded to a temporary WAV, transcribed locally, and deleted when the dictation is done. It is never uploaded.
+- **Text** you dictate is stored in `~/Library/Application Support/Voisr/data/history.jsonl` (the text, time, word count and duration) so the History view works. Delete rows in the app or delete the file.
+- **Settings and dictionary** live in `~/Library/Application Support/Voisr/config.json`.
+- **Log**: `~/Library/Logs/Voisr.log` holds app errors and events. The dashboard does not write what you dictated into it (checked by searching the code); the CLI modes print dictated text to the terminal.
+- **Network**: the app code contains no network calls. The internet is used only while installing (Homebrew, the models from Hugging Face, Python packages from PyPI).
+- Voisr pastes through your clipboard and restores what was there afterwards.
+
+## CLI usage (optional)
 
 ```bash
 # Toggle mode (default; no special permissions beyond Microphone)
@@ -75,6 +125,8 @@ and pastes it in the order recorded.
 
 ## Configuration (`config.json`)
 
+All of this is editable in Settings; hand-editing is optional. A file that cannot be parsed is set aside as `config.json.corrupt-<time>` and defaults are used.
+
 ```json
 {
   "hotkey": "alt_r",          // legacy push-to-talk key name (used when no hotkey_vk)
@@ -88,34 +140,29 @@ and pastes it in the order recorded.
   "pill_color": null,          // "#RRGGBB" to recolour the bars, null = theme default
   "appearance": "system",      // system | light | dark
   "launch_at_login": false,    // mirrors ~/Library/LaunchAgents/com.local.voisr.plist
-  "dictionary": {              // spoken/misheard variant -> written form
-    "trade mate": "TradeMate",
-    "trademake": "TradeMate"
+  "event_tap": "active",       // "active" (needs Accessibility) | "listen" (needs Input Monitoring too)
+  "dictionary": {              // spoken/misheard variant -> written form; empty on a new install
+    "open a i": "OpenAI",
+    "brunswik": "Brunswick"
   }
 }
 ```
 
 The launch-at-login setting is read from the LaunchAgent plist itself, so removing the plist by hand is reflected in Settings. The dictionary's written forms are also passed to whisper as a glossary prompt (most recent 40 terms) to bias spelling.
 
-Add a dictionary entry for **every variant the ASR produces** for a term — dictate the word once, see what comes out, and map it.
-
-## macOS permissions
-
-Grant these to your terminal app in System Settings → Privacy & Security:
-
-| Permission | Needed for |
-|---|---|
-| Microphone | recording (all modes) |
-| Accessibility / Automation | the global hotkey (`--mode hotkey`) and pasting via Cmd-V (`paste: true`) |
-| Input Monitoring | the global hotkey, only if `event_tap` is set to `"listen"` |
-
-Toggle mode with `--no-paste` works with Microphone permission only.
+Add a dictionary entry for **every variant the ASR produces** for a term: dictate the word once, see what comes out, and map it.
 
 ## Known limitations
 
-- ffmpeg takes ~1–1.5 s to start capturing — begin speaking after the `● recording...` cue, or hold the key a beat before talking.
-- English-only model by default (swap in a multilingual `ggml-*.bin` in `models/` and adjust `voisr/transcriber.py` if needed).
-- No Command Mode (voice editing) — out of scope for the basics.
+- English only: the models are the English-only `base.en` and `small.en`.
+- With the fallback ffmpeg recorder, capture takes about 1 to 1.5 s to start: begin speaking after the cue, or hold the key a beat before talking.
+- No Command Mode (voice editing).
+- No prebuilt app: building needs Homebrew, the Command Line Tools and Python 3.14+.
+- Not tested on Intel Macs or on a clean macOS account yet.
+
+## Licence
+
+MIT (see `LICENSE`). Third-party software and models are listed in `THIRD_PARTY_NOTICES`.
 
 ## Development
 
