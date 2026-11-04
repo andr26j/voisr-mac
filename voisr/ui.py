@@ -1918,27 +1918,30 @@ class Api:
         """What the paste calls after its grace, with the old clipboard's text;
         True leaves the dictation on the clipboard. Fills `check` for later:
         the verdict, the two captures, and the read's time. Only reads, for at
-        most VERIFY_BUDGET_S. Skipped entirely when off or with no baseline."""
+        most VERIFY_BUDGET_S. Skipped entirely when off or with no baseline.
+        Called before the paste, which is when the baseline is fixed: a capture
+        ending later may have read the text landing, and that would look like a
+        field the paste never changed."""
         focus = self._focus
         state = focus.session(session.sequence)
+        before = state.release_now() if state is not None else None
 
         def verify(old_clipboard):
             started = self._clock()
-            before = after = None
+            after = None
             if not self._screen_context_on():
                 verdict = skipped("context_off")
+            elif before is None:
+                late = state is not None and state.release_now() is not None
+                verdict = skipped("late_baseline" if late else "no_baseline")
             else:
-                before = state.release_now() if state is not None else None
-                if before is None:
-                    verdict = skipped("no_baseline")
-                else:
-                    try:
-                        after = focus.read_now(VERIFY_BUDGET_S)
-                        verdict = check_delivery(before, after, text, old_clipboard)
-                    except Exception as error:
-                        print(f"Voisr: paste check skipped ({error.__class__.__name__})",
-                              flush=True)
-                        verdict = skipped("error")
+                try:
+                    after = focus.read_now(VERIFY_BUDGET_S)
+                    verdict = check_delivery(before, after, text, old_clipboard)
+                except Exception as error:
+                    print(f"Voisr: paste check skipped ({error.__class__.__name__})",
+                          flush=True)
+                    verdict = skipped("error")
             check.update(verdict=verdict, before=before, after=after,
                          ms=(self._clock() - started) * 1000)
             return verdict.missed

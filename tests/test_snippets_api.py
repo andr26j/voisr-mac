@@ -417,13 +417,13 @@ def test_a_space_goes_by_the_field_at_paste_time(tmp_path):
         pasted.append(text)
         return land(text, on_sent, verifier)
 
+    def moved_on_meanwhile(wav):
+        ax.focused = empty  # after the release capture, before the paste
+        return "My email."
+
     api, _, _ = snippet_api(tmp_path, ax=ax, paste_fn=paste_fn)
-    api.start_recording(prewarm=False)
-    api.prewarm_now()
-    settle(api)
-    future = api._release_recording(paste=True)
-    ax.focused = empty  # may land before or after the release capture
-    future.result()
+    api._transcribe_fn = moved_on_meanwhile
+    dictate(api)
     assert pasted == [SECRET]
     api.close()
 
