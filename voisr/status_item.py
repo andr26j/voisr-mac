@@ -7,38 +7,100 @@ UI only: this touches no input APIs and cannot interfere with the Quartz
 event tap that drives push-to-talk.
 """
 
+from voisr import logo_wave
+
 NS_VARIABLE_STATUS_ITEM_LENGTH = -1.0
 
 IDLE_GLYPH = "▫▫▫"       # outline
 RECORDING_GLYPH = "▬▬▬"  # filled
 
+GLYPH_POINTS = 18
+GLYPH_SCALES = (1, 2)  # a bitmap per screen density, so neither gets resampled
+LIVE_ON_LIGHT_BAR = "#2A2FE0"
+LIVE_ON_DARK_BAR = "#B8BAFF"
+
 _MENU_TARGET_CLASS = None  # ObjC class, built once on first menu construction
 
 
-def _glyph_image(recording: bool):
-    """Three-bar waveform as a template NSImage (auto-inverts with the bar).
+def _bar_is_dark(button) -> bool:
+    """Whether the menu bar behind this button is dark.
 
-    Drawn programmatically rather than shipped as an asset so there is no
-    file to lose in the bundle. A template image is what makes the icon
-    legible in both light and dark menu bars: AppKit recolours it to match
-    the bar instead of painting our literal black.
+    Asks the button rather than the app, because Voisr's own Appearance setting
+    overrides the app's appearance and says nothing about the bar. Raises if
+    the answer isn't known: a live glyph in a guessed colour could be invisible,
+    so the caller's text fallback is the better result.
     """
     import AppKit
-    w, h = 22.0, 14.0
-    img = AppKit.NSImage.alloc().initWithSize_((w, h))
-    img.lockFocus()
+    best = button.effectiveAppearance().bestMatchFromAppearancesWithNames_(
+        [AppKit.NSAppearanceNameAqua, AppKit.NSAppearanceNameDarkAqua])
+    if best is None:
+        raise ValueError("menu bar appearance is unknown")
+    return best == AppKit.NSAppearanceNameDarkAqua
+
+
+def _ns_colour(hex_colour: str):
+    import AppKit
+    r, g, b = (int(hex_colour[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    return AppKit.NSColor.colorWithSRGBRed_green_blue_alpha_(r, g, b, 1.0)
+
+
+def _glyph_rep(scale: int, colour):
+    """The wave as one bitmap, tagged sRGB so the live colours come out exact."""
+    import AppKit
+    side = GLYPH_POINTS * scale
+    rep = AppKit.NSBitmapImageRep.alloc() \
+        .initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel_(
+            None, side, side, 8, 4, True, False,
+            AppKit.NSDeviceRGBColorSpace, 0, 0)
+    rep = rep.bitmapImageRepByRetaggingWithColorSpace_(
+        AppKit.NSColorSpace.sRGBColorSpace())
+
+    style = logo_wave.style_for(GLYPH_POINTS)
+    k = side / 100
+    path = AppKit.NSBezierPath.bezierPath()
+    for i, (x, y) in enumerate(logo_wave.wave_points(style)):
+        point = (x * k, side - y * k)  # the box's y points down, AppKit's up
+        if i == 0:
+            path.moveToPoint_(point)
+        else:
+            path.lineToPoint_(point)
+    path.setLineWidth_(style.stroke * k)
+    path.setLineCapStyle_(AppKit.NSLineCapStyleRound)
+    path.setLineJoinStyle_(AppKit.NSLineJoinStyleRound)
+
+    AppKit.NSGraphicsContext.saveGraphicsState()
     try:
-        AppKit.NSColor.blackColor().set()
-        heights = (10.0, 6.0, 10.0) if recording else (4.0, 4.0, 4.0)
-        x = 2.0
-        for bh in heights:
-            rect = AppKit.NSMakeRect(x, (h - bh) / 2.0, 4.0, bh)
-            AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                rect, 2.0, 2.0).fill()
-            x += 7.0
+        AppKit.NSGraphicsContext.setCurrentContext_(
+            AppKit.NSGraphicsContext.graphicsContextWithBitmapImageRep_(rep))
+        colour.setStroke()
+        path.stroke()
     finally:
-        img.unlockFocus()
-    img.setTemplate_(True)
+        AppKit.NSGraphicsContext.restoreGraphicsState()
+    rep.setSize_((GLYPH_POINTS, GLYPH_POINTS))
+    return rep
+
+
+def _glyph_image(recording: bool, dark_bar: bool = False):
+    """The Ribbon wave at menu-bar size, in its small-size curve.
+
+    Idle is a template image, so AppKit recolours it to suit any menu bar.
+    Live can't be one: a template takes no colour of ours, and setting
+    contentTintColor on a status button drew it black on macOS 27. So live is
+    painted directly in the colour for this bar. Idle and live are the same
+    shape, and colour is what tells them apart.
+
+    Drawn programmatically rather than shipped as an asset so there is no
+    file to lose in the bundle.
+    """
+    import AppKit
+    if recording:
+        colour = _ns_colour(LIVE_ON_DARK_BAR if dark_bar else LIVE_ON_LIGHT_BAR)
+    else:
+        colour = AppKit.NSColor.blackColor()
+    img = AppKit.NSImage.alloc().initWithSize_((GLYPH_POINTS, GLYPH_POINTS))
+    for scale in GLYPH_SCALES:
+        img.addRepresentation_(_glyph_rep(scale, colour))
+    img.setTemplate_(not recording)
     return img
 
 
@@ -133,7 +195,10 @@ class StatusItem:
             label = "unset"
         button.setToolTip_(f"Voisr — hold {label} to dictate")
         try:
-            button.setImage_(_glyph_image(recording))
+            # Read on every render, so each dictation gets the bar's current
+            # colour. Idle never asks: a template adapts by itself.
+            dark_bar = recording and _bar_is_dark(button)
+            button.setImage_(_glyph_image(recording, dark_bar))
             button.setTitle_("")
         except Exception:
             # The image is cosmetic; the status item is not. Anything that
