@@ -19,6 +19,7 @@ ICNS_REPS = {"icon_16x16": 16, "icon_16x16@2x": 32, "icon_32x32": 32,
              "icon_32x32@2x": 64, "icon_128x128": 128, "icon_128x128@2x": 256,
              "icon_256x256": 256, "icon_256x256@2x": 512,
              "icon_512x512": 512, "icon_512x512@2x": 1024}
+ICON_LEVELS = 2  # the most a stored icon may differ from the script, of 255
 
 
 @lru_cache(maxsize=1)
@@ -185,19 +186,27 @@ def test_the_committed_logo_is_what_the_script_draws():
 
 
 def _assert_same_icon(actual, expected, label):
-    from PIL import Image, ImageChops, ImageStat
+    """Pixel by pixel, because an average hides a redrawn logo: a stroke of 6
+    instead of 6.5 moves 7,000 of the million pixels at 1024 and the mean by
+    under 1. The shape is checked through alpha everywhere, and the colour only
+    where the tile is opaque. iconutil reads the 16 and 32 px files back with
+    their partly transparent corners wrongly brightened, although AppKit draws
+    them correctly, so those pixels say nothing about the file."""
+    from PIL import Image, ImageChops
     assert actual.size == expected.size, label
+    actual, expected = actual.convert("RGBA"), expected.convert("RGBA")
+    rebuild = f"{label}: run scripts/make_icon.sh"
 
-    def on_grey(img):
-        # Compared as they'd appear: iconutil doesn't keep the colour hidden
-        # under fully transparent pixels, and it doesn't matter.
-        grey = Image.new("RGBA", img.size, (128, 128, 128, 255))
-        return Image.alpha_composite(grey, img.convert("RGBA")).convert("RGB")
+    alpha = ImageChops.difference(actual.getchannel("A"), expected.getchannel("A"))
+    assert alpha.getextrema()[1] <= ICON_LEVELS, rebuild
 
-    diff = ImageChops.difference(on_grey(actual), on_grey(expected))
-    # Premultiplied storage can shift edge pixels a level or two. A redrawn
-    # logo moves far more than this.
-    assert max(ImageStat.Stat(diff).mean) < 1.0, f"{label}: run scripts/make_icon.sh"
+    def opaque(img):
+        return img.getchannel("A").point(lambda v: 255 if v == 255 else 0)
+
+    colour = Image.new("RGB", actual.size)
+    colour.paste(ImageChops.difference(actual.convert("RGB"), expected.convert("RGB")),
+                 mask=ImageChops.darker(opaque(actual), opaque(expected)))
+    assert max(high for _, high in colour.getextrema()) <= ICON_LEVELS, rebuild
 
 
 def test_the_committed_png_is_what_the_script_draws():
