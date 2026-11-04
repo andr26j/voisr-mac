@@ -202,3 +202,8 @@ def test_old_clipboard_text_inside_a_reformatted_paste_is_not_a_miss():
 def test_a_real_stale_clipboard_is_still_caught():
     verdict = verify_paste("", "OLD COPY", "my saved text", old_clipboard="OLD COPY")
     assert verdict.status == "stale_clipboard"
+
+
+def test_a_stale_paste_of_text_inside_the_new_text_is_caught():
+    verdict = verify_paste("start ", "start review", "please review the diff", old_clipboard="review")
+    assert verdict.status == "stale_clipboard"

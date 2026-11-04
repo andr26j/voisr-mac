@@ -54,6 +54,10 @@ def _grew_by_about(before: str, after: str, text: str) -> bool:
     return len(text) * MIN_GROWTH <= grown <= len(text) * MAX_GROWTH
 
 
+def _grew_by_exactly(before: str, after: str, text: str) -> bool:
+    return len(_squeeze(after)) - len(_squeeze(before)) == len(_squeeze(text))
+
+
 def verify_paste(before: str | None, after: str | None, text: str,
                  old_clipboard: str | None) -> Verdict:
     """None means unreadable, which is not the same as empty. An empty `after`
@@ -69,10 +73,10 @@ def verify_paste(before: str | None, after: str | None, text: str,
     if _count(after_n, wanted) > _count(before_n, wanted):
         return Verdict("verified")
     old = _normal(old_clipboard) if old_clipboard else ""
-    # Old clipboard text inside the pasted text (likely in a long snippet) proves
-    # nothing: the paste itself would add it.
-    if (len(old) >= MIN_OLD_CLIPBOARD and old not in wanted
-            and _count(after_n, old) > _count(before_n, old)):
+    # Old clipboard text inside the pasted text (likely in a long snippet) could
+    # have come with the paste, unless the field grew by that text and no more.
+    if (len(old) >= MIN_OLD_CLIPBOARD and _count(after_n, old) > _count(before_n, old)
+            and (old not in wanted or _grew_by_exactly(before_n, after_n, old))):
         return Verdict("stale_clipboard")
     # Apps strip newlines, change case and auto-format. Calling that a miss
     # would lose the user's clipboard and have them paste twice, so only a field
