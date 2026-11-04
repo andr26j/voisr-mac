@@ -243,3 +243,47 @@ def test_nothing_is_cleared_while_voisr_runs(tmp_path):
         tool.record(tmp_path, ["my email"], FakeRecorder, ask=lambda prompt: "", key="k",
                     running=lambda: True)
     assert (tmp_path / "trigger-01.wav").read_text() == "old"
+
+
+# ---- scoring a bad folder
+
+
+def zero_clips(tmp_path, names):
+    for name in names:
+        write_clip(tmp_path / f"{name}.wav", b"\x00\x00" * 16000)
+        (tmp_path / f"{name}.txt").write_text("my email\n")
+    return tool.clips_in(tmp_path)
+
+
+def test_a_wav_with_no_text_is_skipped_by_name(tmp_path, capsys):
+    zero_clips(tmp_path, ["trigger-01"])
+    write_clip(tmp_path / "silent-04.wav", b"")
+    clips = tool.clips_in(tmp_path)
+    assert [name for name, _, _ in clips] == ["trigger-01"]
+    assert "silent-04.wav" in capsys.readouterr().out
+
+
+def test_all_zero_clips_make_the_run_not_valid_with_the_real_gate(tmp_path, capsys):
+    clips = zero_clips(tmp_path, ["trigger-01", "hotkey-01", "other-01"])
+
+    def boom(wav, condition):
+        raise AssertionError("silence must not be transcribed")
+
+    tool.report(tool.score(clips, boom, ["run"]), ["run"])
+    out = capsys.readouterr().out
+    assert "NOT VALID" in out and "3 of 3" in out and "Terminal app" in out
+    assert "missed" not in out and "fire" not in out
+
+
+def test_a_few_all_zero_clips_warn_and_are_not_listed_as_misses(tmp_path, capsys, monkeypatch):
+    clips = zero_clips(tmp_path, ["trigger-01"])
+    for name in ("trigger-02", "other-01", "other-02"):
+        # a quiet room, then something steady well above it
+        write_clip(tmp_path / f"{name}.wav", b"\x01\x00\xff\xff" * 4000 + b"\x10\x20" * 16000)
+        (tmp_path / f"{name}.txt").write_text("my email\n")
+    clips = tool.clips_in(tmp_path)
+    tool.report(tool.score(clips, lambda wav, c: "My email.", ["run"]), ["run"])
+    out = capsys.readouterr().out
+    assert "WARNING" in out and "1 of 4" in out and "trigger-01" in out
+    assert "NOT VALID" not in out and 'missed  trigger-01' not in out
+    assert "triggers, Enter: fire 1/1" in out, "the silent clip isn't counted"

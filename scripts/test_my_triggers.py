@@ -160,8 +160,14 @@ def record(folder: Path, triggers, recorder_factory=Recorder, ask=input, key=Non
 
 
 def clips_in(folder: Path) -> list[tuple[str, str, Path]]:
-    return [(wav.stem, wav.with_suffix(".txt").read_text().strip(), wav)
-            for wav in sorted(folder.glob("*.wav"))]
+    clips = []
+    for wav in sorted(folder.glob("*.wav")):
+        text = wav.with_suffix(".txt")
+        if text.exists():
+            clips.append((wav.stem, text.read_text().strip(), wav))
+        else:
+            print(f"Skipping {wav.name}: it has no {text.name}, so that clip didn't finish.")
+    return clips
 
 
 def saved_triggers(clips) -> dict:
@@ -194,6 +200,17 @@ def _sustained(once, prefix) -> list[int]:
 
 def report(rows, conditions) -> None:
     once = [r for r in rows if r["condition"] == conditions[0]]
+    silent = [r["name"] for r in once if r["gate"] == "all_zeros"]
+    if silent:
+        if len(silent) * 2 >= len(once):
+            print(f"NOT VALID: {len(silent)} of {len(once)} clips are all zeros, so macOS gave "
+                  "the recorder silence and this run shows nothing. Record again from the "
+                  "Mac's Terminal app, and check System Settings → Privacy & Security → Microphone.")
+            return
+        print(f"WARNING: {len(silent)} of {len(once)} clips are all zeros and aren't counted: "
+              f"{', '.join(silent)}\n")
+    rows = [r for r in rows if r["gate"] != "all_zeros"]
+    once = [r for r in once if r["gate"] != "all_zeros"]
     print(f"speech gate: {dict(Counter(r['gate'] for r in once))}")
     print(f"sustained speech, guard needs {MIN_SUSTAINED_SPEECH_MS} ms: "
           f"Enter clips lowest {min(_sustained(once, 'trigger'), default='-')} ms, "
