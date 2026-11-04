@@ -4,6 +4,9 @@ import json
 import multiprocessing
 import os
 import stat
+import subprocess
+import sys
+import textwrap
 import threading
 import time
 import weakref
@@ -757,9 +760,13 @@ def test_fork_does_not_close_reused_fd_after_sidecar_close(tmp_path, monkeypatch
         if os.getpid() != parent_pid or fd not in sidecar_fds:
             return original_close(fd)
         original_close(fd)
-        reopened_fd = original_open(os.devnull, os.O_RDONLY)
-        reopened_fds.append(reopened_fd)
-        assert reopened_fd == fd
+        # Reuse this exact number. Any lower fd freed meanwhile, such as one a
+        # finalizer handed over, would take a plain open.
+        replacement = original_open(os.devnull, os.O_RDONLY)
+        if replacement != fd:
+            os.dup2(replacement, fd, inheritable=False)
+            original_close(replacement)
+        reopened_fds.append(fd)
         sidecar_closed.set()
         assert allow_close.wait(timeout=2)
 
@@ -829,21 +836,9 @@ def test_fork_does_not_close_reused_fd_after_sidecar_close(tmp_path, monkeypatch
         assert process is None or not process.is_alive()
 
 
-@pytest.fixture
-def no_collection_during_test():
-    """A collection on the main thread runs the __del__ of stores left by
-    earlier tests, which waits on the fork guard. If this test's paused worker
-    holds that guard, the main thread can't release it until the wait times out."""
-    gc.collect()
-    gc.disable()
-    yield
-    gc.enable()
-
-
 @pytest.mark.filterwarnings(
     "ignore:This process .* is multi-threaded.*:DeprecationWarning"
 )
-@pytest.mark.usefixtures("no_collection_during_test")
 def test_fork_does_not_inherit_sidecar_fd_before_tracking(tmp_path, monkeypatch):
     store = HistoryStore(tmp_path / "h.jsonl")
     opened_fds = []
@@ -922,6 +917,108 @@ def test_fork_does_not_inherit_sidecar_fd_before_tracking(tmp_path, monkeypatch)
         assert not starter.is_alive()
         assert not worker.is_alive()
         assert process is None or not process.is_alive()
+
+
+@pytest.fixture
+def gc_off():
+    """Only the test's own gc.collect() may finalize its store."""
+    gc.disable()
+    yield
+    gc.enable()
+
+
+def test_collection_inside_a_fork_hook_does_not_deadlock(tmp_path):
+    """Real fork, hook, store and collector. A before-fork hook registered ahead
+    of voisr.history runs after history's hook has taken the guard, so this
+    collection finalizes the store on the thread that holds it. It runs in its
+    own interpreter because the bug is a permanent hang holding the guard."""
+    script = textwrap.dedent("""
+        import gc, os, sys
+        os.register_at_fork(before=gc.collect)
+        from voisr import history
+        from voisr.history import HistoryStore
+
+        gc.disable()  # only the hook's collection may finalize the store
+        spare = history._open_tracked(os.devnull, os.O_RDONLY)
+        store = HistoryStore(sys.argv[1])
+        store.cycle = store
+        fd = store._parent_fd
+        del store
+        pid = os.fork()
+        if pid == 0:
+            # The fd was still open at the fork: the child must not keep it.
+            try:
+                os.fstat(fd)
+            except OSError:
+                os._exit(0)
+            os._exit(1)
+        assert os.waitpid(pid, 0)[1] == 0, "child inherited the store's fd"
+        os.fstat(fd)  # the guard was busy, so it waits for the next user
+        history._close_tracked(spare)
+        try:
+            os.fstat(fd)
+        except OSError:
+            sys.exit(0)
+        sys.exit("the next guard user did not close the store's fd")
+    """)
+    try:
+        result = subprocess.run(
+            [sys.executable, "-W", "ignore", "-c", script, str(tmp_path / "h.jsonl")],
+            cwd=Path(__file__).resolve().parent.parent,
+            capture_output=True, text=True, timeout=20,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("a collection on the thread holding the fork guard hung")
+    assert result.returncode == 0, result.stderr
+
+
+def test_collection_does_not_wait_for_a_fork_guard_held_elsewhere(tmp_path, gc_off):
+    spare = history_module._open_tracked(os.devnull, os.O_RDONLY)
+    store = HistoryStore(tmp_path / "h.jsonl")
+    store.cycle = store
+    fd = store._parent_fd
+    store_ref = weakref.ref(store)
+    del store
+    holding = threading.Event()
+    release = threading.Event()
+
+    def hold_guard():
+        with history_module._FORK_FD_GUARD:
+            holding.set()
+            release.wait(timeout=5)
+
+    worker = threading.Thread(target=hold_guard)
+    worker.start()
+    try:
+        assert holding.wait(timeout=2)
+        started = time.monotonic()
+        gc.collect()
+        waited = time.monotonic() - started
+        assert store_ref() is None
+        assert waited < 2
+        # Still open and still tracked, so a fork would close it in the child.
+        os.fstat(fd)
+        assert fd in history_module._OPEN_LOCK_FDS
+    finally:
+        release.set()
+        worker.join(timeout=2)
+    assert not worker.is_alive()
+
+    history_module._close_tracked(spare)
+    assert fd not in history_module._OPEN_LOCK_FDS
+    with pytest.raises(OSError):
+        os.fstat(fd)
+
+
+def test_a_finalizer_fd_that_fails_to_close_does_not_fail_the_next_user(tmp_path):
+    bad_fd = 1 << 24  # past any fd limit, so it can't be another thread's real fd
+    with pytest.raises(OSError):
+        os.fstat(bad_fd)
+    history_module._PENDING_CLOSE_FDS.append(bad_fd)
+    store = HistoryStore(tmp_path / "h.jsonl")
+    store.add("kept", 1.0)
+    assert not history_module._PENDING_CLOSE_FDS
+    assert [item["text"] for item in store.list()] == ["kept"]
 
 
 @pytest.mark.filterwarnings(
