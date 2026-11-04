@@ -155,9 +155,9 @@ def test_no_snippets_leaves_the_prompt_as_it_was():
 
 
 def test_hints_are_capped_so_the_dictionary_keeps_room():
-    many = {f"phrase number {i}": "x" for i in range(MAX_TRIGGER_HINTS + 5)}
+    many = {f"phrase {i}": "x" for i in range(MAX_TRIGGER_HINTS + 5)}
     hints = trigger_hints(many)
-    assert len(hints) == MAX_TRIGGER_HINTS and hints[-1] == f"phrase number {MAX_TRIGGER_HINTS + 4}"
+    assert len(hints) == MAX_TRIGGER_HINTS and hints[-1] == f"phrase {MAX_TRIGGER_HINTS + 4}"
     assert trigger_hints({"long " * 20: "x"}) == []
     dictionary = {f"k{i}": f"Term{i}" for i in range(GLOSSARY_MAX_TERMS)}
     prompt = glossary_prompt(dictionary, (), hints)
@@ -168,3 +168,12 @@ def test_triggers_outlast_the_dictionary_when_the_prompt_is_too_long():
     dictionary = {f"k{i}": "word" * 12 + str(i) for i in range(30)}
     prompt = glossary_prompt(dictionary, (), ["my email"])
     assert prompt.endswith("my email.") and len(prompt) <= GLOSSARY_MAX_CHARS
+
+
+def test_long_triggers_cannot_push_out_the_dictionary():
+    triggers = {f"phrase number {i:02} about things x": "t" for i in range(20)}
+    dictionary = {f"k{i}": f"Term{i}" for i in range(20)}
+    prompt = glossary_prompt(dictionary, (), trigger_hints(triggers))
+    assert len(prompt) <= GLOSSARY_MAX_CHARS
+    assert all(f"Term{i}" in prompt for i in range(20)), prompt
+    assert "phrase number 19" in prompt, "the newest trigger stays"

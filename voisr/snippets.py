@@ -12,6 +12,7 @@ _OUTER_PUNCTUATION = re.compile(r"^[\W_]+|[\W_]+$")
 # exact without, 100% with (scripts/bench_triggers.py, synthetic voices).
 MAX_TRIGGER_HINTS = 20      # the rest of the prompt is the Dictionary's
 MAX_TRIGGER_HINT_CHARS = 60
+MAX_TRIGGER_HINTS_TOTAL_CHARS = 250  # of the prompt's 600, so the Dictionary keeps room
 SHORT_TRIGGER_LETTERS = 6  # fewer, or a single word, is easy to say by accident
 # What Whisper tends to make of a stray noise on its own.
 _NOISE_PHRASES = {"thank you", "thanks", "thank you very much", "thanks for watching",
@@ -54,8 +55,15 @@ def find_snippet(raw: str, snippets) -> Snippet | None:
 def trigger_hints(snippets) -> list[str]:
     """Triggers for the Whisper prompt, the newest last and so kept first. Only
     triggers: the saved text never goes near a prompt."""
-    fitting = [trigger for trigger in (snippets or {}) if len(trigger) <= MAX_TRIGGER_HINT_CHARS]
-    return fitting[-MAX_TRIGGER_HINTS:]
+    hints, used = [], 0
+    for trigger in reversed(list(snippets or {})):
+        cost = len(trigger) + 2  # ", "
+        if (len(trigger) <= MAX_TRIGGER_HINT_CHARS and len(hints) < MAX_TRIGGER_HINTS
+                and used + cost <= MAX_TRIGGER_HINTS_TOTAL_CHARS):
+            hints.append(trigger)
+            used += cost
+    hints.reverse()
+    return hints
 
 
 def _entry_ok(trigger, text) -> bool:
