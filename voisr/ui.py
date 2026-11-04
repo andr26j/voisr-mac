@@ -716,6 +716,7 @@ class HotkeyService:
         self._target_vk = None
         self._state_lock = threading.RLock()
         self._epoch = 0  # bumped per recording; stale _finish threads must not touch the widget
+        self._pill_up = False  # shown, with no hide run since; see _take_pill_down
         self._notice_after = 0.0  # the pill is showing a dictation's result until then
         # Key events are handed to this serial worker instead of being acted
         # on inside the Quartz tap callback: press() can wait on the previous
@@ -798,18 +799,29 @@ class HotkeyService:
     def _widget_enabled(self) -> bool:
         return self._widget is not None and bool(self._api.get_config().get("show_widget", True))
 
-    def _run_widget_action(self, epoch: int, action) -> None:
+    def _run_widget_action(self, epoch: int, action, name: str | None = None) -> None:
         with self._state_lock:
             if epoch == self._epoch:
                 action()
+                if name == "hide":
+                    self._pill_up = False  # only now: a newer epoch drops a queued hide
 
     def _widget_action(self, name: str, epoch: int, *args, **kwargs) -> None:
+        """Caller holds _state_lock."""
         method = getattr(self._widget, name)
+        if name != "hide":
+            self._pill_up = True
         if getattr(self._widget, "_supports_ownership_action", False):
             method(*args, **kwargs,
-                   if_current=lambda action: self._run_widget_action(epoch, action))
+                   if_current=lambda action: self._run_widget_action(epoch, action, name))
         else:
-            method(*args, **kwargs)
+            self._run_widget_action(epoch, lambda: method(*args, **kwargs), name)
+
+    def _take_pill_down(self, epoch: int) -> None:
+        """Hide the pill if one is up; caller holds _state_lock. This goes by
+        what was shown, not by the setting, which may have changed since."""
+        if self._pill_up:
+            self._widget_action("hide", epoch)
 
     def press(self, latched=False, at=None) -> None:
         at = self._clock() if at is None else at
@@ -881,6 +893,10 @@ class HotkeyService:
                             "show_recording", epoch,
                             theme=sanitize_pill_theme(cfg.get("pill_theme")),
                             color=sanitize_pill_color(cfg.get("pill_color")))
+                    else:
+                        # the setting went off under an older pill, and the
+                        # new epoch orphans that pill's own hide
+                        self._take_pill_down(epoch)
                     if released:
                         # a toggle ends at once; a held key goes through the gate
                         finish = (self._end_recording() if self._latched
@@ -1059,9 +1075,11 @@ class HotkeyService:
         passes the result to _spawn_finish after letting go of it."""
         self._pressed = False
         epoch = self._epoch
-        show = self._widget_enabled()
+        show = self._pill_up and self._widget_enabled()
         if show:
             self._widget_action("show_processing", epoch)
+        else:
+            self._take_pill_down(epoch)
         future = self._api._release_recording(paste=True)
         return future, show, epoch
 
@@ -1313,7 +1331,8 @@ class HotkeyService:
         recording after letting go of it: closing a mic can block, and the
         pill's main-thread callbacks take the lock."""
         self._pressed = False
-        if self._widget_enabled():
+        # a pill that's up comes down even if the setting went off since
+        if self._pill_up or self._widget_enabled():
             self._widget_action("hide", epoch)
 
     def _spawn_listener(self, mode=None) -> None:
