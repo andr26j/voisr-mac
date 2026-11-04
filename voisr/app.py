@@ -8,10 +8,10 @@ from pathlib import Path
 from voisr.cleanup import clean
 from voisr.inject import paste_at_cursor, set_clipboard
 from voisr.pasteboard import PasteDeliveryError
-from voisr.recorder import Recorder
+from voisr.recorder import DEFAULT_DEVICE, Recorder
 from voisr.transcriber import transcribe
 
-DEFAULT_CONFIG = {"hotkey": "alt_r", "paste": True, "device": ":0", "dictionary": {},
+DEFAULT_CONFIG = {"hotkey": "alt_r", "paste": True, "device": DEFAULT_DEVICE, "dictionary": {},
                   "show_widget": True, "pill_theme": "classic", "pill_color": None,
                   "appearance": "system", "launch_at_login": False, "model": None,
                   "event_tap": "active", "model_unload": "min5",

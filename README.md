@@ -152,7 +152,7 @@ All of this is editable in Settings; hand-editing is optional. A file that canno
   "hotkey_vk": 63,             // macOS virtual keycode captured via Settings → Change…
   "hotkey_label": "Fn / Globe",// display label for that key
   "paste": true,               // false = clipboard only
-  "device": ":0",              // CLI toggle mode only: avfoundation device for ffmpeg (ffmpeg -f avfoundation -list_devices true -i ""); the app uses the macOS default input
+  "device": ":default",        // CLI toggle mode only: the macOS default input, or a mic by name, like ":MacBook Air Microphone" (ffmpeg -f avfoundation -list_devices true -i ""). Numbers can change, and ":0" counts as ":default". The app always uses the macOS default input
   "model": "small.en",         // a model id from Settings (e.g. base.en, medium.en-q5_0) or a custom ggml-<name>.bin
   "show_widget": true,         // floating recording pill
   "pill_theme": "classic",     // classic | ember | aurora | ocean | neon | breathe | scanner

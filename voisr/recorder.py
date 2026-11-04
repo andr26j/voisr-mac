@@ -3,14 +3,20 @@ import subprocess
 
 from voisr.paths import find_binary
 
+# The macOS default input, the same one StreamRecorder records from. ffmpeg's
+# device numbers aren't stable: a virtual device or a nearby iPhone can take :0.
+DEFAULT_DEVICE = ":default"
+# Every config used to be saved with this, so it doesn't mean anyone chose it.
+_OLD_DEFAULT_DEVICE = ":0"
+
 
 class Recorder:
     """Records mic audio to 16 kHz mono WAV using ffmpeg/avfoundation."""
 
     MAX_SECONDS = 600  # stops a stuck-key recording (parity with StreamRecorder)
 
-    def __init__(self, device: str = ":0"):
-        self.device = device
+    def __init__(self, device: str = DEFAULT_DEVICE):
+        self.device = DEFAULT_DEVICE if device == _OLD_DEFAULT_DEVICE else device
         self.proc: subprocess.Popen | None = None
 
     def start(self, out_path) -> None:
