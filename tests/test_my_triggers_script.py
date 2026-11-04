@@ -222,3 +222,24 @@ def test_a_missing_file_counts_as_a_failed_clip(tmp_path):
 
     with pytest.raises(SystemExit, match="device gone"):
         run_record(tmp_path, NoFile([]))
+
+
+def test_an_earlier_runs_clips_go_before_recording_and_nothing_else_does(tmp_path, capsys):
+    for name in ("trigger-01.wav", "trigger-01.txt", "silent-09.wav", "other-99.txt"):
+        (tmp_path / name).write_text("old")
+    for name in ("notes.txt", "trigger-a.wav", "my-take.wav", "trigger-01.wav.bak"):
+        (tmp_path / name).write_text("keep")
+    run_record(tmp_path, ScriptedRecorder([]))
+    assert "earlier" in capsys.readouterr().out
+    assert not (tmp_path / "silent-09.wav").exists() and not (tmp_path / "other-99.txt").exists()
+    assert (tmp_path / "trigger-01.wav").read_bytes() != b"old"
+    for name in ("notes.txt", "trigger-a.wav", "my-take.wav", "trigger-01.wav.bak"):
+        assert (tmp_path / name).read_text() == "keep"
+
+
+def test_nothing_is_cleared_while_voisr_runs(tmp_path):
+    (tmp_path / "trigger-01.wav").write_text("old")
+    with pytest.raises(SystemExit):
+        tool.record(tmp_path, ["my email"], FakeRecorder, ask=lambda prompt: "", key="k",
+                    running=lambda: True)
+    assert (tmp_path / "trigger-01.wav").read_text() == "old"

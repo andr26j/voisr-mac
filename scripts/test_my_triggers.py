@@ -28,6 +28,7 @@ config.json is only read, for the key's name, and for its Dictionary with --conf
 """
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -50,6 +51,7 @@ OTHERS = ["my emails", "my dress", "my mother", "sign up", "review", "in the off
           "I checked my email", "send the review prompt to Sam"]
 WANTED = ("trigger", "hotkey")  # clips that should expand
 SILENT_CLIPS = 5
+OWN_CLIP = re.compile(r"(?:trigger|hotkey|other|silent)-\d+\.(?:wav|txt)")
 MAX_ATTEMPTS = 3  # of one clip, so a real failure can't loop forever
 SILENT = "(silent, pressing the key)"
 INSTALLED_CONFIG = Path.home() / "Library/Application Support/Voisr/config.json"
@@ -100,6 +102,14 @@ def instruction(name: str, phrase: str, key: str) -> str:
     return f'After Enter, say: "{phrase}"'
 
 
+def clear_old_clips(folder: Path) -> int:
+    """So an old clip can't be scored with a new one. Only this script's own names."""
+    old = [path for path in folder.iterdir() if OWN_CLIP.fullmatch(path.name)]
+    for path in old:
+        path.unlink()
+    return len(old)
+
+
 def _is_usable(wav: Path) -> bool:
     """False for what an Enter pressed twice leaves. Same floor as the app's."""
     return wav.exists() and wav.stat().st_size >= 1000 and wav_seconds(wav) >= MIN_SPEECH_S
@@ -134,6 +144,9 @@ def record(folder: Path, triggers, recorder_factory=Recorder, ask=input, key=Non
             f"    {REOPEN_COMMAND}\n\nIf that says error -600, wait a few seconds and repeat it.")
     key = key or hotkey_name()
     folder.mkdir(parents=True, exist_ok=True)
+    cleared = clear_old_clips(folder)
+    if cleared:
+        print(f"Cleared {cleared} files from an earlier run in {folder}.")
     print(f"Your push-to-talk key: {key}. Voisr stays quit until you reopen it: {REOPEN_COMMAND}")
     recorder = recorder_factory()
     try:
