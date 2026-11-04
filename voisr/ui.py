@@ -2126,6 +2126,7 @@ class Api:
                 session.sequence, "audio",
                 f"recording failed (mic permission?) {detail}".rstrip())
         span = speech_gate.gate_wav(wav)  # None: unreadable, skip the gate
+        print(f"Voisr audio: {speech_gate.describe(span, wav_seconds(wav))}", flush=True)
         if span is not None:
             if span.verdict == "all_zeros":
                 return SessionResult.failure(

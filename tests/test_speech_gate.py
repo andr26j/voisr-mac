@@ -118,6 +118,33 @@ def test_steady_loud_sound_is_accepted_and_kept_whole():
     assert (span.start, span.end) == (0, R)
 
 
+def test_longest_run_counts_only_unbroken_blocks():
+    gap = noise(0.2, 10, seed=2)
+    span = analyze(pcm(noise(0.5, 10), tone(0.12, 3000), gap, tone(0.2, 3000), noise(0.5, 10, seed=3)))
+    assert 200 <= span.longest_run_ms <= 280
+    assert span.speech_ms > span.longest_run_ms
+
+
+def test_the_reading_says_what_it_was_judged_against():
+    span = analyze(pcm(noise(1, 10)))  # uniform +-10 is about -75 dBFS
+    assert span.verdict == "no_speech"
+    assert -76 < span.floor_dbfs < -74
+    assert span.threshold_dbfs == speech_gate.ABS_MIN_DBFS
+    assert span.longest_run_ms == 0
+
+
+def test_describe_gives_every_measurement():
+    span = SpeechSpan("speech", 240, 0, 16000, 80, 120, -62.14, -59.14)
+    assert speech_gate.describe(span, 2.4) == (
+        "clip 2.40 s, speech, speech 240 ms, longest run 120 ms, sustained 80 ms, "
+        "floor -62.1 dBFS, threshold -59.1 dBFS")
+
+
+def test_describe_copes_with_no_reading_and_all_zeros():
+    assert speech_gate.describe(None, 1.0) == "clip 1.00 s, gate skipped: unreadable"
+    assert "floor -inf dBFS" in speech_gate.describe(analyze(pcm([0] * R)), 1.0)
+
+
 def write_wav(path, samples, width=2, channels=1, rate=R):
     with wave.open(str(path), "wb") as w:
         w.setnchannels(channels)

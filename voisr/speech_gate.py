@@ -35,12 +35,18 @@ class SpeechSpan:
     zeros only). start/end: the sample window to keep, end exclusive.
     sustained_ms: the longest unbroken run at a steady level. No part of the
     verdict: speech_ms totals scattered blocks, so key thumps can add up to it,
-    and only what is riskier than plain dictation asks for this."""
+    and only what is riskier than plain dictation asks for this.
+    longest_run_ms: the longest unbroken run at or above the threshold.
+    floor_dbfs, threshold_dbfs: what the clip was judged against, -inf when it
+    was all zeros."""
     verdict: str
     speech_ms: int
     start: int
     end: int
     sustained_ms: int = 0
+    longest_run_ms: int = 0
+    floor_dbfs: float = -math.inf
+    threshold_dbfs: float = -math.inf
 
 
 def block_dbfs(samples) -> float:
@@ -88,6 +94,14 @@ def _sustained_ms(levels, least: float) -> int:
     return longest * BLOCK_MS
 
 
+def _longest_run_ms(levels, least: float) -> int:
+    longest = run = 0
+    for level in levels:
+        run = run + 1 if level >= least else 0
+        longest = max(longest, run)
+    return longest * BLOCK_MS
+
+
 def analyze(samples, samplerate: int = SAMPLERATE) -> SpeechSpan:
     """Classify a clip and find its padded speech window.
 
@@ -108,13 +122,25 @@ def analyze(samples, samplerate: int = SAMPLERATE) -> SpeechSpan:
     threshold = max(floor + SPEECH_MARGIN_DB, ABS_MIN_DBFS)
     speech = [i for i, level in enumerate(levels) if level >= threshold]
     speech_ms = len(speech) * BLOCK_MS
+    measured = {"longest_run_ms": _longest_run_ms(levels, threshold),
+                "floor_dbfs": floor, "threshold_dbfs": threshold}
     if speech_ms < MIN_SPEECH_MS:
-        return SpeechSpan("no_speech", speech_ms, first, count)
+        return SpeechSpan("no_speech", speech_ms, first, count, **measured)
     low = max(0, speech[0] - PAD_BLOCKS)
     high = min(len(levels), speech[-1] + PAD_BLOCKS + 1)
     return SpeechSpan("speech", speech_ms, first + low * block,
                       min(count, first + high * block),
-                      _sustained_ms(levels, max(threshold, room + SUSTAINED_ABOVE_ROOM_DB)))
+                      _sustained_ms(levels, max(threshold, room + SUSTAINED_ABOVE_ROOM_DB)),
+                      **measured)
+
+
+def describe(span: SpeechSpan | None, seconds: float) -> str:
+    """The gate's reading for the log: measurements only, never what was said."""
+    if span is None:
+        return f"clip {seconds:.2f} s, gate skipped: unreadable"
+    return (f"clip {seconds:.2f} s, {span.verdict}, speech {span.speech_ms} ms, "
+            f"longest run {span.longest_run_ms} ms, sustained {span.sustained_ms} ms, "
+            f"floor {span.floor_dbfs:.1f} dBFS, threshold {span.threshold_dbfs:.1f} dBFS")
 
 
 def gate_wav(path) -> SpeechSpan | None:
