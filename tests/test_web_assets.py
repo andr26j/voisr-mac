@@ -4,7 +4,7 @@ from pathlib import Path
 WEB = Path(__file__).resolve().parent.parent / "voisr" / "web"
 INDEX = WEB / "index.html"
 
-JS_FILES = ["js/api.js", "js/ui.js", "js/lists.js", "js/wave.js", "js/palette.js",
+JS_FILES = ["js/api.js", "js/ui.js", "js/lists.js", "js/wave.js", "js/logo-wave.js", "js/palette.js",
             "js/wave-meter.js", "js/views/home.js", "js/views/history.js",
             "js/views/dictionary.js", "js/views/snippets.js", "js/views/settings.js", "js/main.js"]
 CSS_FILES = ["css/tokens.css", "css/base.css",

@@ -1,8 +1,15 @@
+import inspect
 import json
+import re
+import threading
+
+import pytest
 
 from voisr.app import load_config
 from voisr.history import HistoryStore
 from voisr.ui import Api, HotkeyService
+
+RETIRED_THEMES = ("ember", "aurora", "ocean", "neon", "breathe", "scanner")
 
 
 class FakeRecorder:
@@ -686,25 +693,54 @@ def test_real_audio_passes_silence_gate(tmp_path):
     assert res["text"] == "Real words"
 
 
-def test_unknown_theme_sanitized_to_classic():
+def test_unknown_theme_sanitized_to_signature():
     from voisr.ui import sanitize_pill_theme
-    assert sanitize_pill_theme("ember") == "ember"
     assert sanitize_pill_theme("classic") == "classic"
+    assert sanitize_pill_theme("quiet") == "quiet"
     assert sanitize_pill_theme('x"); alert(1); ("') == "classic"
     assert sanitize_pill_theme(None) == "classic"
     assert sanitize_pill_theme([]) == "classic"
     assert sanitize_pill_theme({}) == "classic"
 
 
-def test_press_passes_configured_theme_to_widget(tmp_path):
+def test_there_are_two_themes_and_signature_keeps_the_saved_value():
+    """Existing configs say "classic", and the Settings picker is built from
+    this list, so these values and labels are a contract with it."""
+    from voisr.ui import PILL_THEMES
+    assert PILL_THEMES == [{"value": "classic", "label": "Signature"},
+                           {"value": "quiet", "label": "Quiet"}]
+
+
+@pytest.mark.parametrize("old", RETIRED_THEMES)
+def test_a_retired_theme_lands_on_signature(tmp_path, old):
     widget = FakeWidget()
-    api = make_api(tmp_path, config={"pill_theme": "ember"})
+    api = make_api(tmp_path, config={"pill_theme": old, "pill_color": "#112233"})
+    # the picker reads this one, and would highlight nothing given the old name
+    assert api.get_config()["pill_theme"] == "classic"
     svc = HotkeyService(api, widget=widget, hide_delay=0)
     svc.press()
-    assert widget.themes == ["ember"]
+    assert widget.themes == ["classic"]
+    assert widget.colors == ["#112233"], "a custom colour outlives its old theme"
 
 
-def test_press_defaults_to_classic_theme(tmp_path):
+def test_reading_a_retired_theme_leaves_the_file_alone(tmp_path):
+    """Going back to an older build keeps the theme until a setting is saved."""
+    api = make_api(tmp_path, config={"pill_theme": "ember"})
+    api.get_config()
+    assert json.loads((tmp_path / "config.json").read_text())["pill_theme"] == "ember"
+    api.set_config({"show_widget": True})
+    assert json.loads((tmp_path / "config.json").read_text())["pill_theme"] == "classic"
+
+
+def test_press_passes_configured_theme_to_widget(tmp_path):
+    widget = FakeWidget()
+    api = make_api(tmp_path, config={"pill_theme": "quiet"})
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.press()
+    assert widget.themes == ["quiet"]
+
+
+def test_press_defaults_to_signature(tmp_path):
     widget = FakeWidget()
     svc = HotkeyService(make_api(tmp_path), widget=widget, hide_delay=0)
     svc.press()
@@ -712,16 +748,180 @@ def test_press_defaults_to_classic_theme(tmp_path):
 
 
 def test_widget_html_covers_all_pill_themes():
-    """widget.html's JS whitelist and CSS rules must track PILL_THEMES."""
+    """widget.html's JS whitelist and CSS rules must track PILL_THEMES, and
+    nothing is left of the themes that went."""
     from voisr.ui import PILL_THEMES, WEB_DIR
     html = (WEB_DIR / "widget.html").read_text()
     for theme in PILL_THEMES:
         assert f'"{theme["value"]}"' in html  # THEME_VALUES entry
-        if theme["value"] != "classic":       # classic = no attribute by design
+        if theme["value"] != "classic":       # no attribute means Signature
             assert f'[data-theme="{theme["value"]}"]' in html  # CSS rule exists
+    for old in RETIRED_THEMES:
+        assert old not in html
     # custom-color bridge must exist alongside the themes
     assert "--bar-color" in html
     assert "setColor" in html
+
+
+def test_the_dev_mock_lists_the_same_themes():
+    """The preview's picker comes from this mock (see the note on PILL_THEMES)."""
+    from voisr.ui import PILL_THEMES, WEB_DIR
+    mock = (WEB_DIR / "js" / "api.js").read_text()
+    block = mock[mock.index("get_pill_themes:"):mock.index("start_recording:")]
+    assert re.findall(r'value: "(\w+)", label: "(\w+)"', block) == [
+        (t["value"], t["label"]) for t in PILL_THEMES]
+
+
+def _css_rule(html, selector):
+    start = html.index(f"{selector} {{")
+    return html[start:html.index("}", start)]
+
+
+def test_only_quiet_has_the_live_dot():
+    """Signature's circle was taken out at the owner's request, after trying
+    it. Quiet keeps it, because it has nothing else to show while listening."""
+    from voisr.ui import WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    assert "display: none" in _css_rule(html, ".dot")
+    assert "display: block" in _css_rule(html, '.pill[data-theme="quiet"] .dot')
+    # the bars no longer make way for it
+    assert "translateX" not in _css_rule(html, ".bars")
+    assert not re.search(r"\.bars \{ [^}]*translateX", html)
+
+
+def test_the_live_dot_shows_only_while_recording_and_keeps_its_colour():
+    """It promises the mic is on: no other state may show it, and a custom
+    colour must not turn it into decoration."""
+    from voisr.ui import WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    dot = _css_rule(html, ".dot")
+    assert "opacity: 0" in dot
+    assert "background: var(--live)" in dot
+    assert "opacity: 1" in _css_rule(html, '.pill[data-state="recording"] .dot')
+    assert re.findall(r'\[data-state="(\w+)"\] \.dot\b', html) == ["recording"]
+
+
+def test_the_css_each_state_relies_on_is_there():
+    """The page's script is run in tests/js/widget.test.mjs, without CSS."""
+    from voisr.ui import WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    assert "animation: shimmer" in _css_rule(html, '.pill[data-state="processing"] .bar')
+    assert "animation: shimmer" in _css_rule(
+        html, '.pill[data-theme="quiet"][data-state="processing"] .qdot')
+    assert "width: var(--label-w" in _css_rule(
+        html, '.pill[data-theme="quiet"][data-state="label"]')
+    assert "animation: speak" in _css_rule(
+        html, '.pill[data-meter="loop"][data-state="recording"] .bar')
+    reduced = html[html.index("prefers-reduced-motion: reduce"):html.index("</style>")]
+    assert ".dot, .bar, .qdot { animation: none !important; }" in reduced
+    assert "transform: none !important" in reduced
+
+
+def test_custom_colour_reaches_signature_bars_and_quiet_dots():
+    from voisr.ui import WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    assert "var(--bar-color, var(--on-capsule))" in _css_rule(html, ".bar")
+    assert "var(--bar-color, var(--on-capsule))" in _css_rule(html, ".qdot")
+
+
+def test_settled_silence_does_not_restart_the_frame_loop():
+    """Python pushes the level at 30 Hz whatever it is, so an unconditional
+    start would never let the bars park."""
+    from voisr.ui import WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    set_level = html[html.index("function setLevel("):html.index("window.setLevel = setLevel")]
+    assert "!meter.atRest()) startFrames()" in set_level
+
+
+def test_a_hidden_pill_goes_idle_so_nothing_keeps_animating():
+    """The panel stays resident after a dictation. hide() alone would leave
+    data-state on "recording" and the dot pulsing on an invisible window."""
+    from voisr.ui import WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    hide = html[html.index("function hide()"):html.index("window.hide = hide")]
+    assert 'pill.dataset.state = "idle"' in hide
+    settle = int(re.search(r"SETTLE_MS = (\d+)", html).group(1))
+    assert settle > 160, "the exit plays out first"
+
+
+def test_panel_holds_the_pill_and_its_shadow_around_the_same_centre():
+    from voisr.ui import RecordingWidget, WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    pill = _css_rule(html, ".pill")
+    width = int(re.search(r"width: (\d+)px", pill).group(1))
+    height = int(re.search(r"height: (\d+)px", pill).group(1))
+    assert (width, height) == (196, 44)
+    y, blur = map(int, re.search(r"0 (\d+)px (\d+)px rgba", pill).groups())
+    rise = int(re.search(r"translateY\((\d+)px\)", pill).group(1))
+    # the page centres the pill in the panel, so each side has half the spare room
+    assert (RecordingWidget.WIDTH - width) / 2 >= blur
+    assert (RecordingWidget.HEIGHT - height) / 2 >= y + blur + rise
+    assert RecordingWidget.BOTTOM_MARGIN + RecordingWidget.HEIGHT / 2 == 98
+
+
+def test_panel_is_built_on_the_primary_display():
+    """It is placed once. mainScreen() could be a display that later goes away,
+    and its frame doesn't start at (0, 0)."""
+    from voisr.ui import RecordingWidget
+    source = inspect.getsource(RecordingWidget._build)
+    assert "NSScreen.screens()[0].frame()" in source
+    assert "mainScreen" not in source
+
+
+class FakeWebview:
+    def __init__(self):
+        self.js = []
+
+    def evaluateJavaScript_completionHandler_(self, js, handler):
+        self.js.append(js)
+
+
+def test_set_look_sends_only_sanitized_values(monkeypatch):
+    from PyObjCTools import AppHelper
+
+    from voisr.ui import RecordingWidget
+    monkeypatch.setattr(AppHelper, "callAfter", lambda fn, *a: fn(*a))
+    widget = RecordingWidget()
+    widget._webview = FakeWebview()
+    widget.set_look("quiet", "#112233")
+    widget.set_look('x"); alert(1); ("', '#12345"); alert(1); ("')
+    assert widget._webview.js == [
+        'setTheme("quiet")', 'setColor("#112233")',
+        'setTheme("classic")', "setColor(null)"]
+
+
+class LookWidget(FakeWidget):
+    """Records the theme it was given and what was shown, in order."""
+
+    def __init__(self):
+        super().__init__()
+        self.shown = threading.Event()
+
+    def set_look(self, theme, color):
+        self.calls.append(("look", theme, color))
+
+    def show_notice(self, text):
+        self.calls.append("notice")
+        self.shown.set()
+
+
+def test_an_error_with_no_dictation_behind_it_wears_the_saved_theme(tmp_path):
+    widget = LookWidget()
+    api = make_api(tmp_path, config={"pill_theme": "quiet", "pill_color": "#112233"})
+    api.start_recording()  # the dashboard has the mic, so the press is refused
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.press()
+    assert widget.calls[:2] == [("look", "quiet", "#112233"), "error"]
+
+
+def test_a_notice_wears_the_saved_theme(tmp_path):
+    widget = LookWidget()
+    api = make_api(tmp_path, config={"pill_theme": "quiet"})
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.NOTICE_HOLD_S = 0
+    svc.show_notice("Suggested: Voisr")
+    assert widget.shown.wait(2)
+    assert widget.calls[:2] == [("look", "quiet", None), "notice"]
 
 
 def test_pill_color_sanitizer():

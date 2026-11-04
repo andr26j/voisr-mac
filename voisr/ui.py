@@ -184,23 +184,22 @@ HOTKEY_OPTIONS = [
     {"value": "f19", "label": "F19"},
 ]
 
-# Adding a theme? Also update: widget.html (theme CSS + THEME_VALUES),
-# style.css (mini-pill rule + keyframes), and app.js's dev-mock
-# get_pill_themes. test_widget_html_covers_all_pill_themes guards widget.html.
+# Adding a theme? Also update: widget.html (theme CSS + THEME_VALUES), the
+# Settings picker's preview (.mini-pill in css/components.css), and the
+# get_pill_themes mock in js/api.js.
+# test_widget_html_covers_all_pill_themes guards widget.html.
 PILL_THEMES = [
-    {"value": "classic", "label": "Classic"},
-    {"value": "ember", "label": "Ember"},
-    {"value": "aurora", "label": "Aurora"},
-    {"value": "ocean", "label": "Ocean"},
-    {"value": "neon", "label": "Neon EQ"},
-    {"value": "breathe", "label": "Breathe"},
-    {"value": "scanner", "label": "Scanner"},
+    # Saved as "classic" in every existing config, so the value stays
+    {"value": "classic", "label": "Signature"},
+    {"value": "quiet", "label": "Quiet"},
 ]
 _PILL_THEME_VALUES = {t["value"] for t in PILL_THEMES}
 
 
 def sanitize_pill_theme(name) -> str:
-    """Whitelist a theme name from config before it reaches JS interpolation."""
+    """Whitelist a theme name from config before it reaches JS interpolation.
+    Anything else, including a theme this version no longer has (ember, aurora,
+    ocean, neon, breathe, scanner), lands on Signature."""
     return name if isinstance(name, str) and name in _PILL_THEME_VALUES else "classic"
 
 
@@ -347,10 +346,13 @@ class RecordingWidget:
     so paste-at-cursor is undisturbed.
     """
 
-    # 6 px of headroom above and below the 44 px pill for its entrance rise;
-    # the margin keeps the pill's centre where it has always been
-    WIDTH, HEIGHT = 232, 56
-    BOTTOM_MARGIN = 70
+    # Holds the 196x44 pill's shadow (0 8px 24px in widget.html: 24 px beside
+    # it, 32 px below), and 6 px more below for the entrance rise, or the
+    # shadow would end in a hard edge. Transparent and click-through, so the
+    # extra room costs nothing. The page centres the pill, and the margin keeps
+    # its centre 98 px up the screen, where it has always been.
+    WIDTH, HEIGHT = 248, 120
+    BOTTOM_MARGIN = 38
     EXIT_S = 0.18  # the pill's 160 ms exit (widget.html), plus a frame
 
     # AppKit constants (stable ABI values)
@@ -387,7 +389,9 @@ class RecordingWidget:
             from WebKit import WKWebView, WKWebViewConfiguration
             from Foundation import NSMakeRect, NSURL
 
-            frame = NSScreen.mainScreen().frame()
+            # Always the primary display, whose frame starts at (0, 0). The
+            # panel is placed once, and another display can be unplugged.
+            frame = NSScreen.screens()[0].frame()
             x = (frame.size.width - self.WIDTH) / 2
             y = self.BOTTOM_MARGIN
             rect = NSMakeRect(x, y, self.WIDTH, self.HEIGHT)
@@ -403,6 +407,7 @@ class RecordingWidget:
             panel.setHidesOnDeactivate_(False)
             panel.setOpaque_(False)
             panel.setBackgroundColor_(NSColor.clearColor())
+            panel.setHasShadow_(False)          # the pill draws its own (widget.html)
             panel.setTitle_("Voisr Recording")  # for identification, not shown
             panel.setIgnoresMouseEvents_(True)  # invisible resident overlay: click-through
             panel.setAlphaValue_(0.0)           # resident but faded out until a dictation
@@ -427,6 +432,29 @@ class RecordingWidget:
         except Exception as e:
             print(f"Voisr widget: build failed: {e}", flush=True)
 
+    def _apply_look(self, theme: str, color: str | None) -> None:
+        """Main thread. sanitize_* whitelist both values, so config.json
+        content can never be interpolated into JS verbatim."""
+        self._webview.evaluateJavaScript_completionHandler_(
+            f'setTheme("{sanitize_pill_theme(theme)}")', None)
+        safe = sanitize_pill_color(color)
+        self._webview.evaluateJavaScript_completionHandler_(
+            f'setColor("{safe}")' if safe else "setColor(null)", None)
+
+    def set_look(self, theme: str, color: str | None) -> None:
+        """Set the theme without showing anything, ahead of a state that has
+        no dictation behind it. Recording sets its own."""
+        try:
+            from PyObjCTools import AppHelper
+
+            def go():
+                if self._webview is not None:
+                    self._apply_look(theme, color)
+
+            AppHelper.callAfter(go)
+        except Exception:
+            pass  # never break the record path
+
     def _set(self, state: str, theme: str | None = None,
              color: str | None = None, is_current=None, if_current=None,
              label: str | None = None) -> None:
@@ -444,13 +472,7 @@ class RecordingWidget:
                     self._feed_gen += 1
                     self._vis_gen += 1
                     if theme is not None:
-                        # sanitize_* whitelist both values — config.json content
-                        # can never be interpolated into JS verbatim
-                        self._webview.evaluateJavaScript_completionHandler_(
-                            f'setTheme("{sanitize_pill_theme(theme)}")', None)
-                        safe = sanitize_pill_color(color)
-                        self._webview.evaluateJavaScript_completionHandler_(
-                            f'setColor("{safe}")' if safe else "setColor(null)", None)
+                        self._apply_look(theme, color)
                     if label is not None:
                         # json.dumps: a word from the user's text as a JS string
                         self._webview.evaluateJavaScript_completionHandler_(
@@ -1010,12 +1032,23 @@ class HotkeyService:
         self._pane_opened_at = now
         return key
 
+    def _dress_widget(self) -> None:
+        """Only a recording sets the pill's theme. A state with no dictation
+        behind it would otherwise wear the last dictation's, or Signature
+        straight after launch."""
+        set_look = getattr(self._widget, "set_look", None)
+        if set_look is None:
+            return
+        cfg = self._api.get_config()
+        set_look(cfg.get("pill_theme"), cfg.get("pill_color"))
+
     def _flash_error(self) -> None:
         """Error pill, then hide; caller holds _state_lock."""
         if not self._widget_enabled():
             return
         self._epoch += 1
         epoch = self._epoch
+        self._dress_widget()
         self._widget_action("show_error", epoch)
 
         def hide_later():
@@ -1118,6 +1151,7 @@ class HotkeyService:
                     if idle():
                         self._epoch += 1
                         epoch = self._epoch
+                        self._dress_widget()
                         self._widget_action("show_notice", epoch, text)
                         break
                 time.sleep(self.NOTICE_RETRY_S)
@@ -2401,6 +2435,9 @@ class Api:
             else:
                 cfg = load_config(self._config_path,
                                   on_corrupt=self._note_corrupt_config)
+                # the theme the pill will really show, so the Settings picker
+                # has one to highlight after an old theme was saved
+                cfg["pill_theme"] = sanitize_pill_theme(cfg.get("pill_theme"))
                 self._config_cache = (key, copy.deepcopy(cfg))
         cfg["launch_at_login"] = launch_agent.is_enabled(path=launch_agent.PLIST_PATH)
         return cfg
