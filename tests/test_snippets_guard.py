@@ -221,3 +221,27 @@ def test_saying_a_trigger_inside_a_sentence_is_not_a_recital(tmp_path, monkeypat
     dictate(api)
     assert len(sent) == 1 and pasted == ["Send my email, please."]
     api.close()
+
+
+@pytest.mark.parametrize("recital", [
+    "my email my address review prompt", "My email my address.", "Glossary my email review prompt",
+    "Tareq my email review prompt",
+])
+def test_a_recital_with_no_punctuation_is_redone(tmp_path, monkeypatch, recital):
+    api, sent, pasted = prompts_for(tmp_path, monkeypatch, spoken(), [recital, "Hello there."])
+    api.set_config({"snippets": {**SNIPPETS, "my address": "1 Road"}})
+    dictate(api)
+    assert len(sent) == 2 and pasted == ["Hello there."]
+    api.close()
+
+
+@pytest.mark.parametrize("said", [
+    "Please email my boss", "my email is down", "review prompt please", "my email review",
+    "email my address", "Tareq", "review",
+])
+def test_ordinary_words_are_not_a_recital(tmp_path, monkeypatch, said):
+    api, sent, pasted = prompts_for(tmp_path, monkeypatch, spoken(), [said])
+    api.set_config({"snippets": {**SNIPPETS, "my address": "1 Road"}})
+    dictate(api)
+    assert len(sent) == 1
+    api.close()
