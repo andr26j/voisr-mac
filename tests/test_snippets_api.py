@@ -204,21 +204,7 @@ def test_a_fix_made_before_the_snippet_still_counts(tmp_path, no_system_dictiona
     api.close()
 
 
-def test_a_window_in_another_field_is_left_alone(tmp_path):
-    first, second = textbox("start "), textbox("other ")
-    ax = FakeAX(first)
-    api, _, said = snippet_api(tmp_path, "hello there", ax=ax, paste_fn=verifying_paste(first))
-    dictate(api)
-    assert len(api._edit_watcher._windows) == 1
-    ax.focused = second
-    api._paste_fn = verifying_paste(second)
-    said[0] = "My email."
-    dictate(api)
-    assert len(api._edit_watcher._windows) == 1
-    api.close()
-
-
-def test_not_knowing_the_field_ends_every_window(tmp_path):
+def test_no_release_capture_ends_every_window_too(tmp_path):
     box = textbox("start ")
     ax = FakeAX(box)
     api, _, said = snippet_api(tmp_path, "hello there", ax=ax, paste_fn=verifying_paste(box))
@@ -342,4 +328,121 @@ def test_whisper_gets_the_triggers_and_never_the_text(tmp_path, monkeypatch):
     dictate(api)
     assert seen == {"prompt": "Glossary: my email.", "cli_prompt": "Glossary: my email."}
     assert pasted == [SECRET]
+    api.close()
+
+
+# ---- the field that gets the paste
+
+
+def test_a_field_clicked_during_transcription_cannot_read_the_snippet_as_an_edit(tmp_path):
+    first, second = textbox("start "), textbox("other ")
+    ax = FakeAX(first)
+    open_at_paste = []
+    land = verifying_paste(first)
+
+    def paste_fn(text, on_sent=None, verifier=None):
+        open_at_paste.append(list(api._edit_watcher._windows))
+        return land(text, on_sent, verifier)
+
+    api, _, said = snippet_api(tmp_path, "hello there", ax=ax, paste_fn=paste_fn)
+    dictate(api)
+    assert len(api._edit_watcher._windows) == 1
+    said[0] = "My email."
+    # key released in the other field, then a click back before the paste
+    ax.focused = second
+    api.start_recording(prewarm=False)
+    api.prewarm_now()
+    settle(api)
+    future = api._release_recording(paste=True)
+    future.result()
+    assert open_at_paste[-1] == [], "every window ends before the paste"
+    api.close()
+
+
+# ---- the joining space
+
+
+@pytest.mark.parametrize("before,saved,pasted_as", [
+    ("Send it to", SECRET, f" {SECRET}"),
+    ("Email:", SECRET, f" {SECRET}"),
+    ("", SECRET, SECRET),
+    ("Send it to ", SECRET, SECRET),
+    ("Line one\n", SECRET, SECRET),
+    ("(", SECRET, SECRET),
+    ("Send it to", f"\n{SECRET}", f"\n{SECRET}"),
+    ("Send it to", f", {SECRET}", f", {SECRET}"),
+])
+def test_a_space_only_when_the_text_before_the_cursor_needs_it(tmp_path, before, saved, pasted_as):
+    box = textbox(before)
+    pasted = []
+    land = verifying_paste(box)
+
+    def paste_fn(text, on_sent=None, verifier=None):
+        pasted.append(text)
+        return land(text, on_sent, verifier)
+
+    api, _, _ = snippet_api(tmp_path, ax=FakeAX(box), paste_fn=paste_fn, snippets={"my email": saved})
+    out = dictate(api)
+    assert pasted == [pasted_as] and out["delivery"] == "verified"
+    api.close()
+
+
+def test_a_space_goes_by_the_field_at_paste_time(tmp_path):
+    empty = textbox("")
+    pasted = []
+    ax = FakeAX(textbox("Send it to"))
+    land = verifying_paste(empty)
+
+    def paste_fn(text, on_sent=None, verifier=None):
+        pasted.append(text)
+        return land(text, on_sent, verifier)
+
+    api, _, _ = snippet_api(tmp_path, ax=ax, paste_fn=paste_fn)
+    api.start_recording(prewarm=False)
+    api.prewarm_now()
+    settle(api)
+    future = api._release_recording(paste=True)
+    ax.focused = empty  # may land before or after the release capture
+    future.result()
+    assert pasted == [SECRET]
+    api.close()
+
+
+@pytest.mark.parametrize("ax", [
+    lambda: FakeAX(FakeElement(AXRole="AXTextField", AXSubrole="AXSecureTextField")),
+    lambda: FakeAX(textbox("Send it to", role="AXButton")),
+    lambda: FakeAX(FakeElement(AXRole="AXTextArea", AXValue="Send it to")),  # caret unknown
+])
+def test_no_space_when_it_is_not_known(tmp_path, ax):
+    pasted = []
+
+    def paste_fn(text, on_sent=None, verifier=None):
+        pasted.append(text)
+        if verifier:
+            verifier("OLD COPY")
+        return True
+
+    api, _, _ = snippet_api(tmp_path, ax=ax(), paste_fn=paste_fn)
+    dictate(api)
+    assert pasted == [SECRET]
+    api.close()
+
+
+def test_no_space_with_screen_context_off_and_nothing_read(tmp_path):
+    box = textbox("Send it to")
+    ax = FakeAX(box)
+    api, pasted, _ = snippet_api(tmp_path, ax=ax)
+    api.set_config({"use_screen_context": False})
+    ax.calls.clear()
+    dictate(api)
+    assert pasted == [SECRET] and ax.text_reads() == []
+    api.close()
+
+
+def test_the_row_and_the_check_ignore_the_added_space(tmp_path):
+    box = textbox("Send it to")
+    api, _, _ = snippet_api(tmp_path, ax=FakeAX(box), paste_fn=verifying_paste(box))
+    out = dictate(api)
+    assert out["delivery"] == "verified" and out["text"] == SECRET
+    assert api.get_history()[0]["text"] == "my email"
     api.close()

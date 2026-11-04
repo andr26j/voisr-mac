@@ -26,8 +26,9 @@ from voisr.recording_queue import (
     RecordingSession,
     SessionResult,
 )
-from voisr.snippets import (SnippetError, find_snippet, find_spoken_snippet, tidy_trigger,
-                            trigger_hints, trigger_warning, triggers_for_clip, with_saved)
+from voisr.snippets import (SnippetError, find_snippet, find_spoken_snippet, needs_leading_space,
+                            tidy_trigger, trigger_hints, trigger_warning, triggers_for_clip,
+                            with_saved)
 from voisr.status_item import StatusItem
 from voisr.suggestions import (ACCEPTED, AUTO_ADDED, DISMISSED, PENDING, SuggestionStore,
                                dictionary_allows, ready_to_auto_add)
@@ -1723,6 +1724,17 @@ class Api:
         except Exception as error:
             print(f"Voisr: edit learning skipped ({error.__class__.__name__})", flush=True)
 
+    def _snippet_wants_space(self, text) -> bool:
+        """Read where the paste is about to go: the release capture may be of a
+        field the user has since left. Bounded, and not knowing means no space."""
+        if self._focus is None or not self._screen_context_on():
+            return False
+        try:
+            return needs_leading_space(self._focus.read_now(VERIFY_BUDGET_S), text)
+        except Exception as error:
+            print(f"Voisr: screen context skipped ({error.__class__.__name__})", flush=True)
+            return False
+
     def _end_learning_for_snippet(self, session) -> None:
         """Before the text can reach a field, where a window still open on an
         earlier dictation would read it as the user's edit."""
@@ -2181,8 +2193,6 @@ class Api:
             paste_started = self._clock()
             with self._paste_state_lock:
                 typing_generation = self._typing_generation
-                # A snippet is exact: a leading space can get an email address
-                # refused by the field it was pasted into.
                 join = (
                     snippet is None
                     and self._last_paste_text
@@ -2190,6 +2200,8 @@ class Api:
                     and self._clock() - self._last_paste_ts <= self.SPACE_JOIN_WINDOW_S
                     and not self._last_paste_text[-1].isspace()
                 )
+            if snippet is not None:
+                join = self._snippet_wants_space(text)
             try:
                 pasted = self._paste_fn(
                     (" " if join else "") + text,

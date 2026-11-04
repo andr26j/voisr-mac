@@ -22,6 +22,8 @@ HINT_CLIP_PER_CHAR_S = 0.1
 # peak. 240 ms within 15 dB of the clip's peak: 0/250 made-up tap-then-holds
 # reach it, 826/840 say clips do. A clip held back pastes as plain dictation.
 MIN_SUSTAINED_SPEECH_MS = 240
+_NO_SPACE_AFTER = "([{<\"'“‘/-"
+_NO_SPACE_BEFORE = ",.;:!?)]}>”’"
 SHORT_TRIGGER_LETTERS = 6  # fewer, or a single word, is easy to say by accident
 # What Whisper tends to make of a stray noise on its own.
 _NOISE_PHRASES = {"thank you", "thanks", "thank you very much", "thanks for watching",
@@ -134,6 +136,19 @@ def with_saved(snippets: dict, old_trigger, trigger, text) -> dict:
         return {**snippets, trigger: text}
     return {(trigger if name == old_trigger else name): (text if name == old_trigger else saved)
             for name, saved in snippets.items()}
+
+
+def needs_leading_space(focus, text: str) -> bool:
+    """After words, a snippet needs a space. It can't be taken for granted, as in
+    an empty field it could get an email address refused, so no space unless the
+    field was read at the caret and shows it's wanted. `focus`: a read just
+    before the paste, or None."""
+    if (focus is None or focus.secure or not focus.readable or not focus.caret_known
+            or not focus.before_text or not text):
+        return False
+    last = focus.before_text[-1]
+    return not (last.isspace() or last in _NO_SPACE_AFTER
+                or text[0].isspace() or text[0] in _NO_SPACE_BEFORE)
 
 
 def trigger_warning(trigger: str) -> str | None:
