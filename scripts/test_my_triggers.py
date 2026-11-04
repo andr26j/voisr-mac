@@ -5,9 +5,10 @@ the room you really dictate in, then runs each clip the way the app does: speech
 gate, trim, prompt with its clip-length rule and echo retry, real Whisper on the
 kept-loaded server and whisper-cli, and the sustained-speech guard.
 
-Run it from the Mac's Terminal app. A terminal inside another app can be given
-silence instead of your microphone; record stops at the first all-zero clip and
-says so. It also clears this script's clips from an earlier run before it starts.
+It records with the app's own recorder, on the system's default input. If a clip
+comes out all zeros, record stops at once: that can mean no microphone access for
+the app running it, or a silent input device. It also clears this script's clips
+from an earlier run before it starts.
 
 Some clips are said while you press and release your push-to-talk key, and some
 are silent presses of it, as the key's thumps are what the guard has to cope
@@ -27,8 +28,8 @@ how many triggers would expand, Enter and push-to-talk clips apart,
 and how many other clips would, which is the costly mistake, as that pastes saved
 text you didn't ask for. It also shows the figures the guard works from.
 
-Clips stay in bench_corpus/triggers (not in git), as NAME.wav + NAME.txt. The
-Terminal app needs microphone access to record. Nothing leaves this Mac. Voisr's
+Clips stay in bench_corpus/triggers (not in git), as NAME.wav + NAME.txt. The app
+you run this from needs microphone access to record. Nothing leaves this Mac. Voisr's
 config.json is only read, for the key's name, and for its Dictionary with --config.
 """
 import argparse
@@ -47,8 +48,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "scripts")]
 from bench_triggers import SCREEN, AppPath, gate_and_trim  # noqa: E402
 from voisr import speech_gate  # noqa: E402
 from voisr.app import load_config  # noqa: E402
-from voisr.recorder import Recorder  # noqa: E402
-from voisr.ui import HOTKEY_OPTIONS, MIN_SPEECH_S, wav_seconds  # noqa: E402
+from voisr.ui import HOTKEY_OPTIONS, MIN_SPEECH_S, default_recorder, wav_seconds  # noqa: E402
 from voisr.snippets import MIN_SUSTAINED_SPEECH_MS, find_snippet, has_speech_evidence  # noqa: E402
 
 TRIGGERS = ["my email", "my address", "my phone number", "review prompt", "work email", "sign off"]
@@ -63,10 +63,11 @@ INSTALLED_CONFIG = Path.home() / "Library/Application Support/Voisr/config.json"
 APP_PROCESS = "Applications/Voisr.app/Contents/MacOS/Voisr"
 QUIT_COMMAND = f'pkill -TERM -f "{APP_PROCESS}"'
 REOPEN_COMMAND = "open ~/Applications/Voisr.app"
-SILENCE_MESSAGE = (
-    "macOS is giving this app silence: that clip was all zeros, so it needs microphone "
-    "access.\nRun this from the Mac's Terminal app, not a terminal inside another app, and "
-    "check System Settings → Privacy & Security → Microphone.")
+SILENCE_ADVICE = ("Check that the app running this has access in System Settings → "
+                  "Privacy & Security → Microphone, and that the right input device is chosen "
+                  "in System Settings → Sound.")
+SILENCE_MESSAGE = ("That clip was all zeros: the recorder got silence. That can mean no "
+                   "microphone access or a silent input device.\n" + SILENCE_ADVICE)
 
 
 def script(triggers=TRIGGERS, others=OTHERS):
@@ -120,15 +121,22 @@ def _is_usable(wav: Path) -> bool:
     return wav.exists() and wav.stat().st_size >= 1000 and wav_seconds(wav) >= MIN_SPEECH_S
 
 
+def _run_recorder(step, *args):
+    try:
+        return step(*args)
+    except Exception as failure:  # sounddevice's PortAudioError is a plain Exception
+        raise SystemExit(f"The recorder failed: {failure}") from failure
+
+
 def _record_clip(wav: Path, recorder, ask, what: str) -> None:
     """One clip, asked for again if it comes out too short. Only a clip with
     sound in it is left behind."""
     for attempt in range(MAX_ATTEMPTS):
         again = "That clip was too short or empty, so once again.\n" if attempt else ""
         ask(f"\n{again}{what}\n  Enter to start... ")
-        recorder.start(wav)
+        _run_recorder(recorder.start, wav)
         ask("  recording, Enter to stop... ")
-        error = recorder.stop()
+        error = _run_recorder(recorder.stop)
         if _is_usable(wav):
             span = speech_gate.gate_wav(wav)
             if span is not None and span.verdict == "all_zeros":
@@ -137,10 +145,10 @@ def _record_clip(wav: Path, recorder, ask, what: str) -> None:
             return
         wav.unlink(missing_ok=True)
     raise SystemExit(f"No usable audio after {MAX_ATTEMPTS} tries. The recorder said: "
-                     f"{error.strip()[:200] or 'nothing'}")
+                     f"{(error or '').strip()[:200] or 'nothing'}")
 
 
-def record(folder: Path, triggers, recorder_factory=Recorder, ask=input, key=None,
+def record(folder: Path, triggers, recorder_factory=default_recorder, ask=input, key=None,
            running=voisr_is_running) -> None:
     if running():
         raise SystemExit(
@@ -208,9 +216,9 @@ def report(rows, conditions) -> None:
     silent = [r["name"] for r in once if r["gate"] == "all_zeros"]
     if silent:
         if len(silent) * 2 >= len(once):
-            print(f"NOT VALID: {len(silent)} of {len(once)} clips are all zeros, so macOS gave "
-                  "the recorder silence and this run shows nothing. Record again from the "
-                  "Mac's Terminal app, and check System Settings → Privacy & Security → Microphone.")
+            print(f"NOT VALID: {len(silent)} of {len(once)} clips are all zeros, so the recorder "
+                  "got silence and this run shows nothing. That can mean no microphone access "
+                  f"or a silent input device. {SILENCE_ADVICE}")
             return
         print(f"WARNING: {len(silent)} of {len(once)} clips are all zeros and aren't counted: "
               f"{', '.join(silent)}\n")

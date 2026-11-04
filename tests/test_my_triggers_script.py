@@ -171,7 +171,7 @@ def test_silence_from_the_first_clip_stops_at_once_and_says_why(tmp_path):
         tool.record(tmp_path, ["my email"], ScriptedRecorder(["zeros"]),
                     ask=lambda prompt: asked.append(prompt) or "", key="k", running=lambda: False)
     said = str(stop.value)
-    assert "silence" in said and "microphone access" in said and "Terminal app" in said
+    assert "silence" in said and "microphone access" in said
     assert "Privacy & Security" in said and "tccutil" not in said
     assert len(asked) == 2, "no more clips asked for"
     assert [p for p in tmp_path.iterdir() if p.suffix in (".wav", ".txt")] == []
@@ -271,7 +271,7 @@ def test_all_zero_clips_make_the_run_not_valid_with_the_real_gate(tmp_path, caps
 
     tool.report(tool.score(clips, boom, ["run"]), ["run"])
     out = capsys.readouterr().out
-    assert "NOT VALID" in out and "3 of 3" in out and "Terminal app" in out
+    assert "NOT VALID" in out and "3 of 3" in out and "input device" in out
     assert "missed" not in out and "fire" not in out
 
 
@@ -287,3 +287,54 @@ def test_a_few_all_zero_clips_warn_and_are_not_listed_as_misses(tmp_path, capsys
     assert "WARNING" in out and "1 of 4" in out and "trigger-01" in out
     assert "NOT VALID" not in out and 'missed  trigger-01' not in out
     assert "triggers, Enter: fire 1/1" in out, "the silent clip isn't counted"
+
+
+# ---- the app's own recorder
+
+
+def test_it_records_with_the_apps_recorder_by_default():
+    import inspect
+
+    from voisr.ui import default_recorder
+    assert inspect.signature(tool.record).parameters["recorder_factory"].default is default_recorder
+
+
+def test_a_recorder_that_cannot_start_stops_with_its_error_and_is_closed(tmp_path):
+    closed = []
+
+    class NoMic(ScriptedRecorder):
+        def start(self, path):
+            raise Exception("no default input device")  # as PortAudioError is
+
+        def close(self):
+            closed.append(True)
+
+    with pytest.raises(SystemExit, match="no default input device"):
+        run_record(tmp_path, NoMic([]))
+    assert closed == [True]
+
+
+def test_a_recorder_that_fails_on_stop_stops_with_its_error(tmp_path):
+    class Stuck(ScriptedRecorder):
+        def stop(self):
+            raise RuntimeError("the mic stream is stuck")
+
+    with pytest.raises(SystemExit, match="the mic stream is stuck"):
+        run_record(tmp_path, Stuck([]))
+    assert list(tmp_path.glob("*.txt")) == []
+
+
+def test_stop_returning_nothing_still_gives_a_clear_failure(tmp_path):
+    class Quiet(ScriptedRecorder):
+        def stop(self):
+            return ""  # StreamRecorder's stop always returns ""
+
+    with pytest.raises(SystemExit, match="said: nothing"):
+        run_record(tmp_path, Quiet([]))
+
+
+def test_the_silence_message_names_both_causes_and_blames_no_terminal():
+    said = tool.SILENCE_MESSAGE
+    assert "microphone access" in said and "input device" in said
+    assert "Privacy & Security" in said and "Sound" in said
+    assert "another app" not in said and "tccutil" not in said
