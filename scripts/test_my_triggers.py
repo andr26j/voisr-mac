@@ -5,6 +5,10 @@ the room you really dictate in, then runs each clip the way the app does: speech
 gate, trim, prompt with its clip-length rule and echo retry, real Whisper on the
 kept-loaded server and whisper-cli, and the sustained-speech guard.
 
+Run it from the Mac's Terminal app. A terminal inside another app can be given
+silence instead of your microphone; record stops at the first all-zero clip and
+says so. It also clears this script's clips from an earlier run before it starts.
+
 Some clips are said while you press and release your push-to-talk key, and some
 are silent presses of it, as the key's thumps are what the guard has to cope
 with. Voisr would hear that key and dictate, so QUIT VOISR FIRST. record won't
@@ -18,12 +22,13 @@ start while it runs, and says how to quit and reopen it:
 record says what to do for each clip; Enter starts and stops the recording.
 Speak as you would to the app.
 
-score reports how many triggers would expand, Enter and push-to-talk clips apart,
+score says a run isn't valid if most clips are all zeros. Otherwise it reports
+how many triggers would expand, Enter and push-to-talk clips apart,
 and how many other clips would, which is the costly mistake, as that pastes saved
 text you didn't ask for. It also shows the figures the guard works from.
 
-Clips stay in bench_corpus/triggers (not in git), as NAME.wav + NAME.txt. Your
-terminal needs microphone access to record. Nothing leaves this Mac. Voisr's
+Clips stay in bench_corpus/triggers (not in git), as NAME.wav + NAME.txt. The
+Terminal app needs microphone access to record. Nothing leaves this Mac. Voisr's
 config.json is only read, for the key's name, and for its Dictionary with --config.
 """
 import argparse
