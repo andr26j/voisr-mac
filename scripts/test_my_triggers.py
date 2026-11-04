@@ -35,7 +35,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "scripts")]
 from bench_triggers import SCREEN, AppPath, gate_and_trim  # noqa: E402
 from voisr.app import load_config  # noqa: E402
 from voisr.recorder import Recorder  # noqa: E402
-from voisr.snippets import MIN_SUSTAINED_SPEECH_MS, find_snippet, find_spoken_snippet  # noqa: E402
+from voisr.snippets import MIN_SUSTAINED_SPEECH_MS, find_snippet, has_speech_evidence  # noqa: E402
 
 TRIGGERS = ["my email", "my address", "my phone number", "review prompt", "work email", "sign off"]
 OTHERS = ["my emails", "my dress", "my mother", "sign up", "review", "in the office",
@@ -94,7 +94,8 @@ def score(clips, transcribe, conditions) -> list[dict]:
         passed = span is None or span.verdict == "speech"
         for condition in conditions:
             raw = transcribe(wav, condition) if passed else ""
-            fired, unguarded = find_spoken_snippet(raw, triggers, span), find_snippet(raw, triggers)
+            unguarded = find_snippet(raw, triggers)
+            fired = unguarded if has_speech_evidence(span) else None
             rows.append({"name": name, "phrase": phrase, "condition": condition, "raw": raw,
                          "gate": span.verdict if span else "unread",
                          "sustained_ms": span.sustained_ms if span else 0,

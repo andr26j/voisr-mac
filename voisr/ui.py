@@ -26,7 +26,7 @@ from voisr.recording_queue import (
     RecordingSession,
     SessionResult,
 )
-from voisr.snippets import (SnippetError, find_snippet, find_spoken_snippet, needs_leading_space,
+from voisr.snippets import (SnippetError, find_snippet, has_speech_evidence, needs_leading_space,
                             snippet_warnings, tidy_trigger, trigger_hints, triggers_for_clip,
                             with_saved)
 from voisr.status_item import StatusItem
@@ -2148,11 +2148,12 @@ class Api:
             fired = {}
             # Before clean(): a snippet matches what Whisper heard, and its text
             # is pasted as saved, with no cleanup or Dictionary changes.
-            snippet = find_spoken_snippet(raw, cfg.get("snippets"), span)
+            found = find_snippet(raw, cfg.get("snippets"))
+            snippet = found if has_speech_evidence(span) else None
             if snippet is not None:
                 text = snippet.text
             else:
-                if find_snippet(raw, cfg.get("snippets")) is not None:
+                if found is not None:
                     # names no trigger: the only trace of why it pasted as words
                     print(f"Voisr: snippet held back, sustained speech "
                           f"{span.sustained_ms if span else 'unknown'} ms", flush=True)

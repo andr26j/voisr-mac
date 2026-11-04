@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from voisr import speech_gate  # noqa: E402
 from voisr.history import HistoryStore  # noqa: E402
-from voisr.snippets import find_snippet, find_spoken_snippet  # noqa: E402
+from voisr.snippets import find_snippet, has_speech_evidence  # noqa: E402
 from voisr.ui import Api  # noqa: E402
 from voisr.whisper_server import WhisperServer  # noqa: E402
 
@@ -172,9 +172,10 @@ def run_triggers(paths, tmp, out, rows) -> None:
                             sustained_ms=span.sustained_ms, seconds=wav.stat().st_size / 32000)
                 for name, (route, saved, terms) in CONDITIONS.items():
                     raw = paths[route].transcribe(wav, DICTIONARY, SAVED if saved else {}, terms)
-                    found = find_spoken_snippet(raw, SAVED, span)
+                    found = find_snippet(raw, SAVED)
                     rows.append(dict(base, condition=name, raw=raw,
-                                     hit=found is not None and found.trigger == phrase))
+                                     hit=(found is not None and found.trigger == phrase
+                                          and has_speech_evidence(span))))
                 wav.unlink()
         out.write_text(json.dumps(rows, indent=1))  # a hang loses one phrase
         print(f"done: {phrase}", flush=True)
@@ -193,7 +194,8 @@ def run_costs(paths, tmp, rows) -> None:
         for name, saved in (("no snippets", {}), ("snippets", SAVED)):
             for terms, suffix in (([], ""), (SCREEN, ", screen")):
                 raw = server.transcribe(wav, DICTIONARY, saved, terms)
-                fired, unguarded = find_spoken_snippet(raw, SAVED, span), find_snippet(raw, SAVED)
+                unguarded = find_snippet(raw, SAVED)
+                fired = unguarded if has_speech_evidence(span) else None
                 rows.append(dict(base, condition=name + suffix, raw=raw,
                                  fired=fired.trigger if fired else None,
                                  unguarded=unguarded.trigger if unguarded else None))

@@ -245,3 +245,25 @@ def test_ordinary_words_are_not_a_recital(tmp_path, monkeypatch, said):
     dictate(api)
     assert len(sent) == 1
     api.close()
+
+
+@pytest.mark.parametrize("samples,expands", [(spoken(seconds=12.0), True), (tap_then_hold(), False)])
+def test_one_lookup_decides_the_expansion_and_the_log_line(tmp_path, monkeypatch, capsys, samples, expands):
+    import voisr.snippets
+    import voisr.ui
+    real, calls = voisr.snippets.find_snippet, []
+
+    def counted(raw, snippets):
+        calls.append(raw)
+        return real(raw, snippets)
+
+    monkeypatch.setattr(voisr.snippets, "find_snippet", counted)
+    monkeypatch.setattr(voisr.ui, "find_snippet", counted)
+    api, pasted = guard_api(tmp_path, samples)
+    monkeypatch.setattr(api, "_transcribe_with_terms", lambda wav, cfg, terms: (
+        "My email.", {"mode": None, "timings": {}}))
+    dictate(api)
+    api.close()
+    assert len(calls) == 1
+    assert pasted == [SECRET if expands else "My email."]
+    assert ("snippet held back" in capsys.readouterr().out) is not expands

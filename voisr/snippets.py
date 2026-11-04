@@ -73,12 +73,10 @@ def triggers_for_clip(hints, seconds: float) -> list[str]:
             if 0 <= seconds <= HINT_CLIP_BASE_S + HINT_CLIP_PER_CHAR_S * len(trigger)]
 
 
-def find_spoken_snippet(raw: str, snippets, span) -> Snippet | None:
-    """find_snippet, only with evidence of real speech from the gate's reading of
-    this clip, taken before it was trimmed. No reading is no evidence."""
-    if span is None or span.sustained_ms < MIN_SUSTAINED_SPEECH_MS:
-        return None
-    return find_snippet(raw, snippets)
+def has_speech_evidence(span) -> bool:
+    """Did the gate's reading of this clip, taken before it was trimmed, find
+    real speech? No reading is no evidence."""
+    return span is not None and span.sustained_ms >= MIN_SUSTAINED_SPEECH_MS
 
 
 def trigger_hints(snippets) -> list[str]:
