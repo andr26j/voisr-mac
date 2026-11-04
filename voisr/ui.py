@@ -27,7 +27,7 @@ from voisr.recording_queue import (
     SessionResult,
 )
 from voisr.snippets import (SnippetError, find_snippet, find_spoken_snippet, needs_leading_space,
-                            tidy_trigger, trigger_hints, trigger_warning, triggers_for_clip,
+                            snippet_warnings, tidy_trigger, trigger_hints, triggers_for_clip,
                             with_saved)
 from voisr.status_item import StatusItem
 from voisr.suggestions import (ACCEPTED, AUTO_ADDED, DISMISSED, PENDING, SuggestionStore,
@@ -1853,8 +1853,10 @@ class Api:
 
     def get_snippets(self):
         """Bridge: the Snippets page's rows, with any warning about the trigger."""
-        return [{"trigger": trigger, "text": text, "warning": trigger_warning(trigger)}
-                for trigger, text in (self.get_config().get("snippets") or {}).items()]
+        snippets = self.get_config().get("snippets") or {}
+        warnings = snippet_warnings(snippets)
+        return [{"trigger": trigger, "text": text, "warning": warnings[trigger]}
+                for trigger, text in snippets.items()]
 
     def save_snippet(self, old_trigger, trigger, text):
         """Bridge: add one (old_trigger None) or replace one. The one place that
@@ -1867,7 +1869,7 @@ class Api:
                 return {"error": str(error)}
             self._update_config({"snippets": saved})
         tidy = tidy_trigger(trigger)
-        return {"ok": True, "trigger": tidy, "warning": trigger_warning(tidy)}
+        return {"ok": True, "trigger": tidy, "warning": snippet_warnings(saved)[tidy]}
 
     def delete_snippet(self, trigger):
         """Bridge. Removing one that has already gone is not a failure."""

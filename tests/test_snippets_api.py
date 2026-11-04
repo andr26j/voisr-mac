@@ -446,3 +446,27 @@ def test_the_row_and_the_check_ignore_the_added_space(tmp_path):
     assert out["delivery"] == "verified" and out["text"] == SECRET
     assert api.get_history()[0]["text"] == "my email"
     api.close()
+
+
+# ---- triggers that get no hint
+
+
+def test_a_trigger_with_no_hint_is_warned_on_its_row(tmp_path):
+    api, _, _ = snippet_api(tmp_path, snippets={})
+    long_one = "please paste the whole of my standard legal disclaimer right here"
+    assert "hint" in api.save_snippet(None, long_one, "x")["warning"]
+    for i in range(21):
+        api.save_snippet(None, f"saved phrase {i:02}", "x")
+    rows = {row["trigger"]: row["warning"] for row in api.get_snippets()}
+    assert "hint" in rows[long_one]
+    assert "hint" in rows["saved phrase 00"], "pushed out by newer ones"
+    assert rows["saved phrase 20"] is None
+    api.close()
+
+
+def test_a_short_trigger_with_no_hint_gets_both_warnings(tmp_path):
+    many = {"email": "x", **{f"phrase {i:02}": "x" for i in range(20)}}
+    api, _, _ = snippet_api(tmp_path, snippets=many)
+    warning = {row["trigger"]: row["warning"] for row in api.get_snippets()}["email"]
+    assert "short" in warning and "hint" in warning
+    api.close()

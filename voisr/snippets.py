@@ -151,6 +151,20 @@ def needs_leading_space(focus, text: str) -> bool:
                 or text[0].isspace() or text[0] in _NO_SPACE_BEFORE)
 
 
+def snippet_warnings(snippets: dict) -> dict:
+    """{trigger: what to say on its row, or None}. Hints are shared, so saving
+    one snippet can cost another its hint."""
+    hinted = set(trigger_hints(snippets))
+    warnings = {}
+    for trigger in snippets:
+        parts = [trigger_warning(trigger)]
+        if trigger not in hinted:
+            parts.append("Gets no hint, as it is too long or there are too many, "
+                         "so it is more likely to be misheard.")
+        warnings[trigger] = " ".join(part for part in parts if part) or None
+    return warnings
+
+
 def trigger_warning(trigger: str) -> str | None:
     """Allowed, but worth saying: these can fire when you didn't mean them to."""
     key = normalize_trigger(trigger)
