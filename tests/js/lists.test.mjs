@@ -174,7 +174,6 @@ function groupsSetup({ reduced = false } = {}) {
     label.className = "date-row";
     const list = animated(makeNode("ul"), log);
     list.className = "item-list";
-    list.offsetHeight = 200;
     group.append(label, list);
     return group;
   };
@@ -189,6 +188,12 @@ function groupsSetup({ reduced = false } = {}) {
 }
 
 const finishTimers = (t) => t.mock.timers.tick(5000);
+
+/* Gives a node a height, keeping the top animated() gave it. */
+function sized(node, height) {
+  const rectOf = node.getBoundingClientRect;
+  node.getBoundingClientRect = () => ({ ...rectOf(), height: height() });
+}
 
 test("syncGroups fills an empty container without motion, one group a day", async () => {
   const s = groupsSetup();
@@ -232,22 +237,53 @@ test("a new day rises in as one piece, its rows taking only the wash", async () 
   assert.ok(!s.log.some((e) => e.node === row), "and doesn't animate inside a moving group");
 });
 
-test("a row pushed past the end stays to fade while its card's height holds", async (t) => {
+test("a row pushed past the end stays to fade, and doesn't count towards its card's height", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const s = groupsSetup();
   await s.L.syncGroups(s.container, s.groups({ Today: ["a", "b"] }), {});
   const list = s.container.children[0].querySelector(".item-list");
   const pushed = list.children[1];
+  sized(list, () => list.children.length * 50);
+  sized(pushed, () => 50);
   await s.L.syncGroups(s.container, s.groups({ Today: ["n", "a"] }),
     { animate: true, stillExists: (k) => k === "b", wasKnown: () => false });
   assert.ok(pushed.classList.contains("is-leaving"));
   assert.equal(pushed.parent, list, "still in the DOM while it fades");
   assert.equal(pushed.dataset.key, undefined, "but a later update can't reuse it");
-  assert.equal(list.style.height, "200px");
+  assert.ok(!s.log.some((e) => e.node === list),
+    "one row in, one row out: the card keeps its height");
   finishTimers(t);
   await new Promise((r) => setImmediate(r));
-  assert.equal(list.style.height, "");
   assert.ok(!list.children.includes(pushed));
+});
+
+test("a card grows to fit its rows, and the day below moves with it, not over it", async () => {
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a"], Yesterday: ["c"] }), {});
+  const [today, yesterday] = s.container.children;
+  const list = today.querySelector(".item-list");
+  sized(list, () => list.children.length * 50);
+  // laid out as the browser would: Today's top holds, Yesterday's follows Today's rows
+  let top = 0;
+  today.getBoundingClientRect = () => ({ top: 0 });
+  yesterday.getBoundingClientRect = () => ({ top: list.children.length * 50 + 40 + top });
+  await s.L.syncGroups(s.container, s.groups({ Today: ["n", "a"], Yesterday: ["c"] }), { animate: true });
+
+  const growth = s.log.find((e) => e.node === list);
+  assert.deepEqual(growth.frames, [{ height: "50px" }, { height: "100px" }]);
+  assert.ok(!s.log.some((e) => e.node === yesterday),
+    "the card's own height moves it, so a transform would count the move twice");
+  assert.ok(!s.log.some((e) => e.node === today.querySelector(".date-row")), "a label never slides on its own");
+});
+
+test("a row slides within its card, whatever the card above is doing", async () => {
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a"] }), {});
+  const list = s.container.children[0].querySelector(".item-list");
+  const a = list.children[0];
+  await s.L.syncGroups(s.container, s.groups({ Today: ["n", "a"] }), { animate: true });
+  const slide = s.log.find((e) => e.node === a);
+  assert.deepEqual(slide.frames[0], { transform: "translateY(-50px)" }, "from where it stood");
 });
 
 test("reduced motion moves nothing across groups", async () => {

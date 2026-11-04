@@ -215,9 +215,8 @@ window.Voisr.lists = (function () {
   /* ---------- day groups: a label and a card per day (History, Home) ----------
 
      groups: [{ key, build, rows: [{ key, sig, build }] }] in the wanted order;
-     build() makes a group holding one .item-list. Same story as a flat list,
-     measured across every group so a day growing moves the days below it. A day
-     that empties leaves as a whole, and a new day rises in as one piece, its
+     build() makes a group holding one .item-list. Same story as a flat list. A
+     day that empties leaves as a whole, and a new day rises in as one piece, its
      rows only taking the wash. opts: animate, stillExists, wasKnown, as sync. */
   const listOf = (group) => group.querySelector(".item-list");
 
@@ -255,38 +254,88 @@ window.Voisr.lists = (function () {
     const wantedRows = new Set(groups.flatMap((g) => g.rows.map((r) => r.key)));
     const onlyPushed = (key) => !!(opts.stillExists && opts.stillExists(key));
 
-    const deleted = [], holding = [];
+    const deleted = [];
     for (const group of keyed(container)) {
       if (!wantedGroups.has(keyOf(group))) { deleted.push(group); continue; }
-      const out = keyed(listOf(group)).filter((row) => !wantedRows.has(keyOf(row)));
-      deleted.push(...out.filter((row) => !onlyPushed(keyOf(row))));
-      if (out.some((row) => onlyPushed(keyOf(row)))) holding.push(listOf(group));
+      deleted.push(...keyed(listOf(group)).filter((row) =>
+        !wantedRows.has(keyOf(row)) && !onlyPushed(keyOf(row))));
     }
     if (deleted.length) await leave(deleted);
 
-    const before = reduced() ? new Map() : measure(keyed(container)
-      .filter((group) => !deleted.includes(group))
-      .flatMap((group) => [group.querySelector(".date-row"),
-                           ...keyed(listOf(group)).filter((row) => !deleted.includes(row))]));
-    // a pushed row fades under its card's edge while the height holds still
-    for (const list of holding) {
-      if (typeof list.offsetHeight === "number") {
-        list.style.height = `${list.offsetHeight}px`;
-        list.style.overflow = "clip";
-      }
-    }
+    const still = reduced();
+    const before = still ? null : measureGroups(container, deleted);
     const { fresh, enteredRows, pushed } = applyGroups(container, groups, opts);
-    play(before);
+    if (before) playGroups(container, before, pushed);
     for (const group of fresh) enter(group, "group");
     for (const [row, kind, inFreshGroup] of enteredRows) {
       if (!inFreshGroup) enter(row, kind);
       else if (kind === "landed") wash(row);
     }
     fadeAway(pushed);
-    if (holding.length) {
-      setTimeout(() => {
-        for (const list of holding) { list.style.height = ""; list.style.overflow = ""; }
-      }, MOVE_MS + 20);
+  }
+
+  const rect = (node) => node.getBoundingClientRect();
+
+  /* Where each day and its rows stand. A row's top is taken within its list,
+     because a list above resizing is what moves the list itself. */
+  function measureGroups(container, deleted) {
+    const out = new Map();
+    for (const group of keyed(container)) {
+      if (deleted.includes(group)) continue;
+      const list = listOf(group);
+      const box = rect(list);
+      out.set(group, {
+        top: rect(group).top,
+        height: box.height || 0,
+        rows: new Map(keyed(list).filter((row) => !deleted.includes(row))
+          .map((row) => [row, rect(row).top - box.top])),
+      });
+    }
+    return out;
+  }
+
+  /* A card's height follows its rows, so whatever is below moves with it and
+     nothing slides over anything. height is the one layout property here, as
+     with an accordion: a transform would leave the card's edge behind, with the
+     next day's label on top of it. Only a day arriving or leaving moves the days
+     below by transform. A pushed row doesn't count towards its card's height,
+     since it is on its way out. All measured first: an animation started here
+     would change what the next read sees. */
+  function playGroups(container, before, pushed) {
+    const plan = [];
+    let resizing = 0;  // how far the lists above will still move this group
+    for (const group of keyed(container)) {
+      const was = before.get(group);
+      if (!was) continue;
+      const list = listOf(group);
+      const box = rect(list);
+      const gone = pushed.filter((row) => row.parent === list || row.parentElement === list)
+        .reduce((sum, row) => sum + (rect(row).height || 0), 0);
+      const height = (box.height || 0) - gone;
+      plan.push({
+        group, list,
+        dy: was.top - rect(group).top + resizing,
+        from: was.height, to: height,
+        rows: keyed(list).filter((row) => was.rows.has(row))
+          .map((row) => [row, was.rows.get(row) - (rect(row).top - box.top)]),
+      });
+      resizing += height - was.height;
+    }
+    for (const { group, list, dy, from, to, rows } of plan) {
+      if (Math.abs(dy) > 0.5 && canAnimate(group)) {
+        group.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }],
+                      { duration: MOVE_MS, easing: EASE });
+      }
+      if (Math.abs(to - from) > 0.5 && canAnimate(list)) {
+        list.animate([{ height: `${from}px` }, { height: `${to}px` }],
+                     { duration: MOVE_MS, easing: EASE });
+      }
+      for (const [row, rowDy] of rows) {
+        if (Math.abs(rowDy) > 0.5 && canAnimate(row)) {
+          row.animate([{ transform: `translateY(${rowDy}px)` }, { transform: "none" }],
+                      { duration: MOVE_MS, easing: EASE });
+        }
+      }
     }
   }
 
