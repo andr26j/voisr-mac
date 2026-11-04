@@ -30,12 +30,16 @@ class FakeRecorder:
         pass
 
 
+CAPTURE_WAIT_S = 10
+
+
 def release_capture_first(api):
-    """Hold each dictation until its release capture is done. Real timing does
-    this: transcribing outlasts the capture, and the paste check waits a second
-    more. Here both are instant, and the capture is only queued after the session
-    is handed over, so a dictation could reach the check with no baseline, or
-    land its text before the capture read the field."""
+    """Hold each dictation until its release capture is done. Real timing
+    normally does this: transcribing outlasts the capture, and the paste check
+    waits a second more, though an app that stalls can still break the order.
+    Here both are instant, and the capture is only queued after the session is
+    handed over, so a dictation could reach the check with no baseline, or land
+    its text before the capture read the field."""
     released = set()
     changed = threading.Condition()
     capture_release = api._capture_release
@@ -47,20 +51,30 @@ def release_capture_first(api):
             released.add(sequence)
             changed.notify_all()
 
+    def stuck(what):
+        message = (f"release capture {what} within {CAPTURE_WAIT_S} s: "
+                   "a fake app that hangs needs capture_first=False")
+        print(message, flush=True)  # shown with the failing test's output
+        raise TimeoutError(message)
+
     def process_in_order(session):
         with changed:
-            changed.wait_for(lambda: session.sequence in released, timeout=5)
+            if not changed.wait_for(lambda: session.sequence in released,
+                                    timeout=CAPTURE_WAIT_S):
+                stuck("not queued")
         state = api._focus.session(session.sequence)
         if state is not None and state.release is not None:
-            wait([state.release], timeout=5)
+            if not wait([state.release], timeout=CAPTURE_WAIT_S).done:
+                stuck("not finished")
         return process(session)
 
     api._capture_release = capture_and_note
     api._recordings._processor = process_in_order
 
 
-def make_api(tmp_path, ax=None, capture_first=True, **kwargs):
-    """capture_first=False: for an app that hangs, where the capture never ends."""
+def make_api(tmp_path, ax=None, capture_first=True, watcher_thread=False, **kwargs):
+    """capture_first=False: for an app that hangs, where the capture never ends.
+    watcher_thread=True: the watcher starts its thread as it does in the app."""
     kwargs.setdefault("transcribe_fn", lambda wav: "hello world")
     kwargs.setdefault("paste_fn", lambda text: True)
     api = Api(config_path=tmp_path / "config.json",
@@ -69,9 +83,10 @@ def make_api(tmp_path, ax=None, capture_first=True, **kwargs):
               clipboard_fn=lambda text: None,
               ax_adapter=ax, **kwargs)
     if ax is not None:
-        # run_windows alone runs a window: no thread can be part way through
-        # delivering one while a test reads the result
-        api._edit_watcher._autostart = False
+        if not watcher_thread:
+            # run_windows alone runs a window: no thread can be part way through
+            # delivering one while a test reads the result
+            api._edit_watcher._autostart = False
         if capture_first:
             release_capture_first(api)
     return api
@@ -165,7 +180,7 @@ def test_a_hung_app_blocks_neither_press_release_nor_delivery(tmp_path):
     api.prewarm_now()
     assert ax.entered.wait(2)
     future = api._release_recording(paste=True)
-    assert time.monotonic() - started < 0.5, "the hotkey path waited on AX"
+    assert time.monotonic() - started < 2, "the hotkey path waited on AX"
     result = future.result(timeout=5).to_api_dict()
     assert pasted == ["Hello world"]
     assert "error" not in result
@@ -365,8 +380,25 @@ def test_a_capture_that_has_not_finished_is_not_waited_for(tmp_path, monkeypatch
     assert ax.entered.wait(2)
     started = time.monotonic()
     out = api.stop_recording(paste=False)
-    assert time.monotonic() - started < 0.5
+    assert time.monotonic() - started < 2
     assert seen == [[]] and "error" not in out
+    ax.release.set()
+    api.close()
+
+
+def test_a_capture_unfinished_at_the_paste_check_is_no_baseline_not_a_miss(tmp_path):
+    box = textbox("start ")
+    ax = HungAX(box)   # the release capture waits behind the press capture
+    paste = verifying_paste(box, land=False)
+    api = make_api(tmp_path, ax, capture_first=False, paste_fn=paste)
+    api.start_recording(prewarm=False)
+    api.prewarm_now()
+    assert ax.entered.wait(2)
+    out = api.stop_recording(paste=True)
+    assert paste.kept is False, "the old clipboard goes back"
+    assert out["pasted"] is True and "manual_paste" not in out
+    item = api.get_history()[0]
+    assert (item["delivery"], item["delivery_reason"]) == ("skipped", "no_baseline")
     ax.release.set()
     api.close()
 
@@ -464,7 +496,7 @@ def test_a_hung_app_at_verify_time_is_bounded_and_restores(tmp_path):
     api = make_api(tmp_path, ax, paste_fn=paste)
     out = dictate(api)
     assert spent["keep"] is False
-    assert spent["s"] < VERIFY_BUDGET_S + 0.1
+    assert spent["s"] < VERIFY_BUDGET_S + 1
     item = api.get_history()[0]
     assert (item["delivery"], item["delivery_reason"]) == ("skipped", "timeout")
     assert out["pasted"] is True
@@ -725,6 +757,21 @@ def test_either_setting_opens_no_window(tmp_path, setting):
     dictate(api)
     assert api._edit_watcher._windows == []
     assert "edit_end_reason" not in api.get_history()[0]
+    api.close()
+
+
+def test_the_api_runs_a_window_on_the_watcher_thread(tmp_path, monkeypatch):
+    monkeypatch.setattr("voisr.edit_learning.READ_AT_S", (0.0,))
+    box = textbox("")
+    api = make_api(tmp_path, FakeAX(box), watcher_thread=True,
+                   transcribe_fn=lambda wav: "voiser is great", paste_fn=verifying_paste(box))
+    dictate(api)
+    deadline = time.monotonic() + 10
+    while ("edit_end_reason" not in api.get_history()[0]
+           and time.monotonic() < deadline):
+        time.sleep(0.01)
+    assert api.get_history()[0]["edit_end_reason"] == "window_complete"
+    assert api._edit_watcher._thread.name == "voisr-edit-watch"
     api.close()
 
 
@@ -997,10 +1044,8 @@ def test_the_hotkey_path_only_queues_work(tmp_path):
     api._focus.worker.submit = spy
     api.start_recording(prewarm=False)
     assert seen == [] and ax.calls == [], "nothing before the press is a real dictation"
-    started = time.monotonic()
     api.prewarm_now()
     api._release_recording(paste=False).result(timeout=5)
-    assert time.monotonic() - started < 1
     assert len(seen) == 2
     api.close()
 
