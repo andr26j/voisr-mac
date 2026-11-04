@@ -1134,6 +1134,8 @@ class HotkeyService:
             for _ in range(self.NOTICE_TRIES):
                 with self._state_lock:
                     if idle():
+                        if not self._widget_enabled():
+                            return  # turned off while this waited
                         self._epoch += 1
                         epoch = self._epoch
                         self._widget_action("show_notice", epoch, text)

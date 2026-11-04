@@ -38,6 +38,9 @@ class FakeWidget:
     def show_error(self):
         self.calls.append("error")
 
+    def show_notice(self, text):
+        self.calls.append("notice")
+
     def hide(self):
         self.calls.append("hide")
 
@@ -426,13 +429,13 @@ def test_widget_disabled_via_config(tmp_path):
 
 @pytest.fixture
 def settle_widget():
-    """Waits out the dictations finishing since the test began, so nothing
-    more can reach the widget."""
+    """Waits out the dictations and notices finishing since the test began, so
+    nothing more can reach the widget."""
     before = set(threading.enumerate())
 
     def settle():
         for thread in set(threading.enumerate()) - before:
-            if thread.name.startswith("voisr-widget-"):
+            if thread.name.startswith(("voisr-widget-", "voisr-notice")):
                 thread.join(5)
 
     return settle
@@ -479,6 +482,24 @@ def test_pill_never_starts_when_the_setting_came_on_during_the_dictation(
 
     api.close()
     assert [call for call in widget.calls if call != "hide"] == []
+
+
+def test_a_waiting_notice_is_dropped_when_the_setting_went_off(
+        tmp_path, settle_widget):
+    widget = FakeWidget()
+    api = make_api(tmp_path)
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.NOTICE_RETRY_S = 0.01
+    svc.NOTICE_HOLD_S = 0
+    svc.press()
+    svc.show_notice("Suggested: Voisr")   # waits: a dictation has the pill
+
+    api.set_config({"show_widget": False})
+    svc.release()
+    settle_widget()
+
+    api.close()
+    assert widget.calls == ["recording", "hide"]
 
 
 def test_pill_finishes_and_comes_down_when_the_setting_went_off_during_processing(

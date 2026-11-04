@@ -778,17 +778,20 @@ def test_the_notice_goes_to_the_pill_when_idle(tmp_path, no_system_dictionary):
             pass
 
     service = HotkeyService(api, widget=Widget(), hide_delay=0, tap_gate_s=0)
+    service.NOTICE_RETRY_S = 0.01
     service.NOTICE_HOLD_S = 0
     api.attach_hotkey_service(service)
     for _ in range(2):
         box.attrs["AXValue"] = ""
         dictate(api)
         correct(api, box)
+    added = ("notice", "Added Voisr to Dictionary")
     deadline = time.monotonic() + 2
-    while ("hide",) not in calls and time.monotonic() < deadline:
+    while ((added not in calls or ("hide",) not in calls)
+           and time.monotonic() < deadline):
         time.sleep(0.01)
     assert ("notice", "Suggested: Voisr") in calls, "the first sighting"
-    assert ("notice", "Added Voisr to Dictionary") in calls
+    assert added in calls
     assert ("hide",) in calls
     api.close()
 
