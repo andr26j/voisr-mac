@@ -184,8 +184,9 @@ window.Voisr = window.Voisr || {};
         V.views.settings.render();
       }
     });
+    V.views.home.init();
     V.views.history.initKeys();
-    V.views.dictionary.initSearch();
+    V.views.dictionary.init();
     V.views.snippets.init();
     V.views.settings.init();
     V.palette.init();

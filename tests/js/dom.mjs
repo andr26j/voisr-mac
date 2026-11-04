@@ -154,6 +154,7 @@ export function makeNode(tag = "div") {
       if (k === "id") node.id = String(v);
     },
     getAttribute(k) { return k in node.attributes ? node.attributes[k] : null; },
+    removeAttribute(k) { delete node.attributes[k]; },
     addEventListener(type, fn) { (node._listeners[type] ??= []).push(fn); },
     removeEventListener(type, fn) {
       const arr = node._listeners[type];

@@ -159,3 +159,185 @@ test("the wash ends on its own animationend, not on the stagger's or a child's",
   row.dispatch("animationend", { animationName: "wash" });
   assert.equal(row._listeners.animationend.length, 1, "washing a row again adds no second listener");
 });
+
+/* ---------- day groups (History and Home) ---------- */
+
+function groupsSetup({ reduced = false } = {}) {
+  const env = loadVoisr(["js/lists.js"]);
+  env.window.matchMedia = () => ({ matches: reduced, addEventListener() {} });
+  const log = [];
+  const container = animated(makeNode("div"), log);
+  const buildGroup = () => {
+    const group = animated(makeNode("div"), log);
+    group.className = "day-group";
+    const label = animated(makeNode("div"), log);
+    label.className = "date-row";
+    const list = animated(makeNode("ul"), log);
+    list.className = "item-list";
+    group.append(label, list);
+    return group;
+  };
+  const row = (key) => animated(Object.assign(makeNode("li"), { label: key }), log);
+  const groups = (spec) => Object.entries(spec).map(([day, keys]) => ({
+    key: day, build: buildGroup,
+    rows: keys.map((k) => ({ key: k, sig: 1, build: () => row(k) })),
+  }));
+  const shape = () => Object.fromEntries(container.children.map((g) =>
+    [g.dataset.key, g.querySelector(".item-list").children.map((r) => r.dataset.key)]));
+  return { L: env.V.lists, container, log, groups, shape };
+}
+
+const finishTimers = (t) => t.mock.timers.tick(5000);
+
+/* Gives a node a height, keeping the top animated() gave it. */
+function sized(node, height) {
+  const rectOf = node.getBoundingClientRect;
+  node.getBoundingClientRect = () => ({ ...rectOf(), height: height() });
+}
+
+test("syncGroups fills an empty container without motion, one group a day", async () => {
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a", "b"], Yesterday: ["c"] }), { animate: true });
+  assert.deepEqual(s.shape(), { Today: ["a", "b"], Yesterday: ["c"] });
+  assert.equal(s.log.length, 0, "a first fill staggers instead");
+});
+
+test("syncGroups keeps the rows it can, so a refresh moves only what changed", async () => {
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a", "b"] }), {});
+  const a = s.container.children[0].querySelector(".item-list").children[0];
+  await s.L.syncGroups(s.container, s.groups({ Today: ["new", "a", "b"] }), {});
+  assert.deepEqual(s.shape(), { Today: ["new", "a", "b"] });
+  assert.equal(s.container.children[0].querySelector(".item-list").children[1], a);
+});
+
+test("a day that empties leaves as a whole; a deleted row leaves on its own", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a", "b"], Yesterday: ["c"] }), {});
+  const gone = s.container.children[1];
+  const update = s.L.syncGroups(s.container, s.groups({ Today: ["b"] }),
+    { animate: true, stillExists: () => false });
+  await new Promise((r) => setImmediate(r));
+  assert.ok(gone.classList.contains("is-leaving"));
+  assert.ok(s.log.some((e) => e.node === gone), "the group fades as one piece");
+  finishTimers(t);
+  await update;
+  assert.deepEqual(s.shape(), { Today: ["b"] });
+});
+
+test("a new day rises in as one piece, its rows taking only the wash", async () => {
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Yesterday: ["a"] }), {});
+  await s.L.syncGroups(s.container, s.groups({ Today: ["n"], Yesterday: ["a"] }), { animate: true });
+  const today = s.container.children[0];
+  assert.ok(s.log.some((e) => e.node === today), "the group enters");
+  const row = today.querySelector(".item-list").children[0];
+  assert.ok(row.classList.contains("is-landed"), "the new row washes");
+  assert.ok(!s.log.some((e) => e.node === row), "and doesn't animate inside a moving group");
+});
+
+test("a row pushed past the end stays to fade, and doesn't count towards its card's height", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a", "b"] }), {});
+  const list = s.container.children[0].querySelector(".item-list");
+  const pushed = list.children[1];
+  sized(list, () => list.children.length * 50);
+  sized(pushed, () => 50);
+  await s.L.syncGroups(s.container, s.groups({ Today: ["n", "a"] }),
+    { animate: true, stillExists: (k) => k === "b", wasKnown: () => false });
+  assert.ok(pushed.classList.contains("is-leaving"));
+  assert.equal(pushed.parent, list, "still in the DOM while it fades");
+  assert.equal(pushed.dataset.key, undefined, "but a later update can't reuse it");
+  assert.ok(!s.log.some((e) => e.node === list),
+    "one row in, one row out: the card keeps its height");
+  finishTimers(t);
+  await new Promise((r) => setImmediate(r));
+  assert.ok(!list.children.includes(pushed));
+});
+
+test("a card grows to fit its rows, and the day below moves with it, not over it", async () => {
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a"], Yesterday: ["c"] }), {});
+  const [today, yesterday] = s.container.children;
+  const list = today.querySelector(".item-list");
+  sized(list, () => list.children.length * 50);
+  // laid out as the browser would: Today's top holds, Yesterday's follows Today's rows
+  let top = 0;
+  today.getBoundingClientRect = () => ({ top: 0 });
+  yesterday.getBoundingClientRect = () => ({ top: list.children.length * 50 + 40 + top });
+  await s.L.syncGroups(s.container, s.groups({ Today: ["n", "a"], Yesterday: ["c"] }), { animate: true });
+
+  const growth = s.log.find((e) => e.node === list);
+  assert.deepEqual(growth.frames, [{ height: "50px" }, { height: "100px" }]);
+  assert.ok(!s.log.some((e) => e.node === yesterday),
+    "the card's own height moves it, so a transform would count the move twice");
+  assert.ok(!s.log.some((e) => e.node === today.querySelector(".date-row")), "a label never slides on its own");
+});
+
+test("a second update stops the card's running resize first, so it aims at the real height", async () => {
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a"] }), {});
+  const list = s.container.children[0].querySelector(".item-list");
+  // the height a resize shows while it runs, and the natural one once it's stopped
+  let cancelled = 0, running = false;
+  const animate = list.animate;
+  list.animate = (frames, opts) => {
+    const anim = animate(frames, opts);
+    running = true;
+    anim.cancel = () => { cancelled += 1; running = false; };
+    return anim;
+  };
+  sized(list, () => (running ? 70 : list.children.length * 50));
+
+  await s.L.syncGroups(s.container, s.groups({ Today: ["b", "a"] }), { animate: true });
+  await s.L.syncGroups(s.container, s.groups({ Today: ["c", "b", "a"] }), { animate: true });
+
+  assert.equal(cancelled, 1);
+  const resizes = s.log.filter((e) => e.node === list).map((e) => e.frames);
+  assert.deepEqual(resizes.at(-1), [{ height: "70px" }, { height: "150px" }],
+    "from where it stood on screen, to the true height");
+});
+
+test("a row still fading from the last update doesn't count towards the card's height", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a", "b"] }), {});
+  const list = s.container.children[0].querySelector(".item-list");
+  const first = list.children[1];
+  sized(list, () => list.children.length * 50);
+  sized(first, () => 50);
+  await s.L.syncGroups(s.container, s.groups({ Today: ["n", "a"] }),
+    { animate: true, stillExists: (k) => k === "b", wasKnown: () => false });
+  assert.equal(first.parent, list, "still fading");
+  await s.L.syncGroups(s.container, s.groups({ Today: ["m", "n", "a"] }),
+    { animate: true, stillExists: (k) => k === "b", wasKnown: () => false });
+  const ends = s.log.filter((e) => e.node === list).map((e) => e.frames[1].height);
+  assert.ok(!ends.includes("200px"), `three real rows, not four: ${ends}`);
+  finishTimers(t);
+});
+
+test("a row slides within its card, whatever the card above is doing", async () => {
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a"] }), {});
+  const list = s.container.children[0].querySelector(".item-list");
+  const a = list.children[0];
+  await s.L.syncGroups(s.container, s.groups({ Today: ["n", "a"] }), { animate: true });
+  const slide = s.log.find((e) => e.node === a);
+  assert.deepEqual(slide.frames[0], { transform: "translateY(-50px)" }, "from where it stood");
+});
+
+test("reduced motion moves nothing across groups", async () => {
+  const s = groupsSetup({ reduced: true });
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a"] }), {});
+  await s.L.syncGroups(s.container, s.groups({ Today: ["n", "a"] }), { animate: true });
+  assert.ok(s.log.every((e) => !e.frames.some((f) => /translate/.test(f.transform || ""))));
+});
+
+test("closeUp hides a node at once where nothing can animate", async () => {
+  const { V } = loadVoisr(["js/lists.js"]);
+  const node = makeNode("section");
+  await V.lists.closeUp(node);
+  assert.equal(node.hidden, true);
+});

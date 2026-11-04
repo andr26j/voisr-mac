@@ -1575,6 +1575,7 @@ class Api:
         self._clipboard_fn = clipboard_fn
         # None = no check, so tests never probe the runner's real TCC state
         self._mic_check = mic_check
+        self._mic_heard = False  # a clip this launch held real audio
         # asks macOS for one pane's grant again after a reset (a TCC prompt)
         self._grant_requester = grant_requester or permissions.request_grant
         self._last_paste_text = None
@@ -2147,6 +2148,7 @@ class Api:
             if span.verdict == "all_zeros":
                 return SessionResult.failure(
                     session.sequence, "audio", MIC_SILENT_MESSAGE)
+            self._mic_heard = True
             if span.verdict == "no_speech":
                 return SessionResult.failure(
                     session.sequence, "audio", NO_SPEECH_MESSAGE)
@@ -2591,13 +2593,25 @@ class Api:
             for pane in panes:
                 if pane["key"] == "accessibility" and pane["granted"] is True:
                     pane["effective"] = False
-            return {"panes": panes, "fallback": True}
+            return {"panes": self._with_mic_heard(panes), "fallback": True}
         panes = permissions.states(mode=mode)
         if running and getattr(svc, "health", None) == "not_effective":
             for pane in panes:
                 if pane["hotkey"]:
                     pane["effective"] = False
-        return {"panes": panes, "fallback": False}
+        return {"panes": self._with_mic_heard(panes), "fallback": False}
+
+    def _with_mic_heard(self, panes):
+        """When recording is what brought up macOS's prompt, AVCaptureDevice keeps
+        answering "not determined" until the app relaunches, so Home would go on
+        saying macOS will ask after it already has. Real audio settles it: a mic
+        without the grant only sends zeros. Only an unknown is overruled, never a
+        known refusal."""
+        if self._mic_heard:
+            for pane in panes:
+                if pane["key"] == "microphone" and pane["granted"] is None:
+                    pane["granted"] = True
+        return panes
 
     def open_settings_pane(self, key):
         return {"ok": permissions.open_pane(key)}

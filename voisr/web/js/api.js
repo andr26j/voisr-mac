@@ -8,18 +8,25 @@ window.Voisr = window.Voisr || {};
   setTimeout(() => {
     if (window.pywebview) return;
     const now = Date.now() / 1000;
+    // Preview only: the same sample as the design's boards.
+    const HOUR = 3600, startOfToday = new Date().setHours(0, 0, 0, 0) / 1000;
+    const today = (hours) => startOfToday + hours * HOUR;
+    const yesterday = (hours) => startOfToday - 24 * HOUR + hours * HOUR;
     let mockHistory = [
-      { id: "a1", ts: now - 300, text: "Hello team, please send the invoice to TradeMate by Friday.", words: 10, duration_s: 5 },
-      { id: "a2", ts: now - 7200, text: "Draft a follow-up about the Brunswick site visit next week.", words: 10, duration_s: 6 },
-      { id: "a4", ts: now - 3600, text: "my email", words: 2, duration_s: 1, snippet: true },
-      { id: "a3", ts: now - 90000, text: "Remember to book the trailer for Saturday morning.", words: 8, duration_s: 4 },
+      { id: "a1", ts: Math.min(today(16.2), now - 120), text: "Running ten minutes late. The 96 has stopped in Brunswick East for reasons nobody has explained.", words: 15, duration_s: 6 },
+      { id: "a2", ts: Math.min(today(14.78), now - 3600), text: "Can you send me the updated quote by Friday? I'll sign it off once Sam has checked the measurements.", words: 18, duration_s: 8 },
+      { id: "a3", ts: Math.min(today(11.05), now - 7200), text: "Move the permission check into the first run, so the reset only shows up when something is actually wrong.", words: 19, duration_s: 8 },
+      { id: "a4", ts: Math.min(today(9.43), now - 10800), text: "my email", words: 2, duration_s: 1, snippet: true },
+      { id: "a5", ts: yesterday(17.52), text: "The drawings are in the shared folder. Page three has the only change that matters.", words: 15, duration_s: 6 },
+      { id: "a6", ts: yesterday(13.13), text: "Tell them Tuesday works, but not before ten.", words: 8, duration_s: 3 },
     ];
-    let mockCfg = { hotkey: "alt_r", paste: true, show_widget: true, device: ":default", pill_theme: "classic", pill_color: null, dictionary: { trademake: "TradeMate", "trade mate": "TradeMate" }, model: "small.en", launch_at_login: false, model_unload: "min5", use_screen_context: true, learn_from_edits: true, dictionary_auto_add: true };
+    let mockCfg = { hotkey: "alt_r", paste: true, show_widget: true, device: ":default", pill_theme: "classic", pill_color: null, dictionary: { trademake: "TradeMate", "trade mate": "TradeMate", voicer: "Voisr", voiser: "Voisr", "voice are": "Voisr", sam: "Sam" }, model: "small.en", launch_at_login: false, model_unload: "min5", use_screen_context: true, learn_from_edits: true, dictionary_auto_add: true, dismissed_banners: [] };
     // Preview only, to show the page's states. The rules for what may be saved
     // and what gets a warning are in voisr/snippets.py and are not repeated here.
+    // Save a snippet called "email" to see the warning.
     const SAMPLE_WARNING = "Sample warning: the real ones come from the app.";
-    let mockSnippets = { "my email": "you@example.com", "review prompt": "Please review this:\n\n- the diff\n- the tests\n", email: "you@example.com" };
-    let mockSuggestions = [{ id: "s1", heard: "trade mate", written: "TradeMate", seen: 1 }];
+    let mockSnippets = { "my email": "you@example.com", "sign off": "Thanks, Sam", "my address": "12 Example Street, Brunswick East VIC 3057" };
+    let mockSuggestions = [{ id: "s1", heard: "whisper cpp", written: "whisper.cpp", seen: 1 }];
     let recording = false;
     // mirrors voisr/ui.py's HOTKEY_OPTIONS, to resolve a human label for
     // hotkey_display() below.
@@ -34,7 +41,7 @@ window.Voisr = window.Voisr || {};
       get_permissions: async () => ({ panes: [
         { key: "microphone", label: "Microphone", granted: true,
           settings_url: "x-apple.systempreferences:", hotkey: false, effective: true },
-        { key: "accessibility", label: "Accessibility", granted: false,
+        { key: "accessibility", label: "Accessibility", granted: true,
           settings_url: "x-apple.systempreferences:", hotkey: true, effective: true },
       ]}),
       reset_permission: async () => ({ ok: true }),
@@ -42,8 +49,8 @@ window.Voisr = window.Voisr || {};
       open_settings_pane: async () => ({ ok: true }),
       get_history: async () => [...mockHistory].sort((a, b) => b.ts - a.ts),
       get_stats: async () => ({
-        total_words: 12480, dictations: mockHistory.length, avg_wpm: 132,
-        streak_days: 6, total_seconds: 5400, time_saved_seconds: 13320,
+        total_words: 41300, dictations: mockHistory.length, avg_wpm: 132,
+        streak_days: 12, total_seconds: 5400, time_saved_seconds: 11520,
         daily: Array.from({ length: 14 }, (_, i) => ({
           date: `2026-07-${String(12 + i).padStart(2, "0")}`,
           words: [0, 120, 340, 90, 0, 610, 480, 220, 0, 130, 700, 540, 310, 260][i],
@@ -64,7 +71,7 @@ window.Voisr = window.Voisr || {};
       delete_snippet: async (trigger) => { delete mockSnippets[trigger]; return { ok: true }; },
       // mirrors Api.get_suggestions() and friends in voisr/ui.py
       get_suggestions: async () => ({ pending: [...mockSuggestions],
-        auto_added: { trademake: "TradeMate" }, used: { trademake: 3 } }),
+        auto_added: { sam: "Sam" }, used: {} }),
       accept_suggestion: async (id) => {
         const hit = mockSuggestions.find((p) => p.id === id);
         if (hit) mockCfg.dictionary[hit.heard] = hit.written;
@@ -137,7 +144,7 @@ window.Voisr = window.Voisr || {};
         if (opt) return { display: opt.label };
         return { display: mockCfg.hotkey || "unset" };
       },
-      // mirrors Api.get_hotkey_status(): state drives Home's listener dot
+      // mirrors Api.get_hotkey_status(): state drives Home's status panel
       get_hotkey_status: async () => ({ status: `active on ${mockCfg.hotkey}`,
                                         state: recording ? "busy" : "listening" }),
       get_pill_themes: async () => [
