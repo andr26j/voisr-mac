@@ -24,7 +24,7 @@ MIN_SUSTAINED_SPEECH_MS = 240
 _SPACE_AFTER = ".,;!?)]}”’"
 # "To:" and "Email:" are labels; "mailto:" and "https:" run on. A lower-case word
 # could be either, and when in doubt there is no space.
-_CAPITALISED_LABEL = re.compile(r"(?:^|\s)[A-Z][\w-]*:$")
+_CAPITALISED_LABEL = re.compile(r"(?:^|\s)[A-Z][\w-]*:\Z")
 _NO_SPACE_BEFORE = ",.;:!?)]}>”’"
 SHORT_TRIGGER_LETTERS = 6  # fewer, or a single word, is easy to say by accident
 # What Whisper tends to make of a stray noise on its own.
