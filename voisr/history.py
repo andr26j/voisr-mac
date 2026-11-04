@@ -26,6 +26,10 @@ _PATH_LOCKS_GUARD = threading.Lock()
 _PATH_LOCKS: weakref.WeakValueDictionary[str, threading.RLock] = (
     weakref.WeakValueDictionary()
 )
+# Keeps fd opens and closes out of a fork. Plain on purpose: if it were reentrant,
+# a signal handler that forks could land between an open and its tracking. So
+# only __del__ may run on a thread that might hold it. A signal handler that calls
+# store.close() or store.add() can hang here. Nothing in the app does that.
 _FORK_FD_GUARD = threading.Lock()
 _OPEN_LOCK_FDS: set[int] = set()
 _PENDING_CLOSE_FDS: collections.deque[int] = collections.deque()
@@ -293,7 +297,9 @@ os.register_at_fork(
 
 
 class HistoryStore:
-    """Append-only JSONL store of dictations with derived usage stats."""
+    """Append-only JSONL store of dictations with derived usage stats.
+
+    Don't call its methods from a signal handler: see _FORK_FD_GUARD."""
 
     def __init__(self, path):
         self.path = Path(path)
