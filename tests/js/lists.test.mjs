@@ -159,3 +159,107 @@ test("the wash ends on its own animationend, not on the stagger's or a child's",
   row.dispatch("animationend", { animationName: "wash" });
   assert.equal(row._listeners.animationend.length, 1, "washing a row again adds no second listener");
 });
+
+/* ---------- day groups (History and Home) ---------- */
+
+function groupsSetup({ reduced = false } = {}) {
+  const env = loadVoisr(["js/lists.js"]);
+  env.window.matchMedia = () => ({ matches: reduced, addEventListener() {} });
+  const log = [];
+  const container = animated(makeNode("div"), log);
+  const buildGroup = () => {
+    const group = animated(makeNode("div"), log);
+    group.className = "day-group";
+    const label = animated(makeNode("div"), log);
+    label.className = "date-row";
+    const list = animated(makeNode("ul"), log);
+    list.className = "item-list";
+    list.offsetHeight = 200;
+    group.append(label, list);
+    return group;
+  };
+  const row = (key) => animated(Object.assign(makeNode("li"), { label: key }), log);
+  const groups = (spec) => Object.entries(spec).map(([day, keys]) => ({
+    key: day, build: buildGroup,
+    rows: keys.map((k) => ({ key: k, sig: 1, build: () => row(k) })),
+  }));
+  const shape = () => Object.fromEntries(container.children.map((g) =>
+    [g.dataset.key, g.querySelector(".item-list").children.map((r) => r.dataset.key)]));
+  return { L: env.V.lists, container, log, groups, shape };
+}
+
+const finishTimers = (t) => t.mock.timers.tick(5000);
+
+test("syncGroups fills an empty container without motion, one group a day", async () => {
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a", "b"], Yesterday: ["c"] }), { animate: true });
+  assert.deepEqual(s.shape(), { Today: ["a", "b"], Yesterday: ["c"] });
+  assert.equal(s.log.length, 0, "a first fill staggers instead");
+});
+
+test("syncGroups keeps the rows it can, so a refresh moves only what changed", async () => {
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a", "b"] }), {});
+  const a = s.container.children[0].querySelector(".item-list").children[0];
+  await s.L.syncGroups(s.container, s.groups({ Today: ["new", "a", "b"] }), {});
+  assert.deepEqual(s.shape(), { Today: ["new", "a", "b"] });
+  assert.equal(s.container.children[0].querySelector(".item-list").children[1], a);
+});
+
+test("a day that empties leaves as a whole; a deleted row leaves on its own", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a", "b"], Yesterday: ["c"] }), {});
+  const gone = s.container.children[1];
+  const update = s.L.syncGroups(s.container, s.groups({ Today: ["b"] }),
+    { animate: true, stillExists: () => false });
+  await new Promise((r) => setImmediate(r));
+  assert.ok(gone.classList.contains("is-leaving"));
+  assert.ok(s.log.some((e) => e.node === gone), "the group fades as one piece");
+  finishTimers(t);
+  await update;
+  assert.deepEqual(s.shape(), { Today: ["b"] });
+});
+
+test("a new day rises in as one piece, its rows taking only the wash", async () => {
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Yesterday: ["a"] }), {});
+  await s.L.syncGroups(s.container, s.groups({ Today: ["n"], Yesterday: ["a"] }), { animate: true });
+  const today = s.container.children[0];
+  assert.ok(s.log.some((e) => e.node === today), "the group enters");
+  const row = today.querySelector(".item-list").children[0];
+  assert.ok(row.classList.contains("is-landed"), "the new row washes");
+  assert.ok(!s.log.some((e) => e.node === row), "and doesn't animate inside a moving group");
+});
+
+test("a row pushed past the end stays to fade while its card's height holds", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a", "b"] }), {});
+  const list = s.container.children[0].querySelector(".item-list");
+  const pushed = list.children[1];
+  await s.L.syncGroups(s.container, s.groups({ Today: ["n", "a"] }),
+    { animate: true, stillExists: (k) => k === "b", wasKnown: () => false });
+  assert.ok(pushed.classList.contains("is-leaving"));
+  assert.equal(pushed.parent, list, "still in the DOM while it fades");
+  assert.equal(pushed.dataset.key, undefined, "but a later update can't reuse it");
+  assert.equal(list.style.height, "200px");
+  finishTimers(t);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(list.style.height, "");
+  assert.ok(!list.children.includes(pushed));
+});
+
+test("reduced motion moves nothing across groups", async () => {
+  const s = groupsSetup({ reduced: true });
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a"] }), {});
+  await s.L.syncGroups(s.container, s.groups({ Today: ["n", "a"] }), { animate: true });
+  assert.ok(s.log.every((e) => !e.frames.some((f) => /translate/.test(f.transform || ""))));
+});
+
+test("closeUp hides a node at once where nothing can animate", async () => {
+  const { V } = loadVoisr(["js/lists.js"]);
+  const node = makeNode("section");
+  await V.lists.closeUp(node);
+  assert.equal(node.hidden, true);
+});

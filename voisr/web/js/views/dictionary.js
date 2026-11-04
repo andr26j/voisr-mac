@@ -1,60 +1,94 @@
 "use strict";
 window.Voisr = window.Voisr || {};
 (function (V) {
-  const SEARCH_AT = 10;
-  let filter = "";
+  const BANNER = "dictionary";
+  let filter = "", filterText = "", tab = "all", adding = false, dismissed = false;
+  let closeEdit = null;  // closes the row being edited: one at a time
 
+  const byId = (id) => document.getElementById(id);
+  const arrow = () => V.ui.el("span", { class: "pair-arrow", "aria-hidden": "true", text: "→" });
+
+  /* A row reads as a pair, with Edit at its end; Remove lives in the edit, as it
+     always did on the row's own bin before the board moved it. An auto-added
+     word keeps Remove in plain sight, since nobody chose it. */
   function entryRow(spoken, written, { auto, used }) {
-    const value = V.ui.el("span", {
-      class: "dict-written", text: written,
-      contenteditable: "plaintext-only", role: "textbox",
-      "aria-label": `Replacement for ${spoken}`,
-    });
+    const el = V.ui.el;
+    const row = el("li", { class: "item-row is-plain" });
 
-    // Enter and blur both funnel through this single commit path (Enter
-    // just blurs) so an edit is never saved twice.
-    async function commit() {
-      const next = value.textContent.trim();
-      if (!next || next === written) { value.textContent = written; return; }
-      // Read fresh rather than reuse a closed-over `cfg` -- another commit
-      // (or a remove/undo) may have written to config.json since this row
-      // was rendered, and a stale copy here would clobber it.
-      const cfg = await V.ui.tryApi(V.api().get_config(), "Load dictionary");
-      if (!cfg) { value.textContent = written; return; }
-      cfg.dictionary = cfg.dictionary || {};
-      cfg.dictionary[spoken] = next;
-      // A failed write must not leave the new text sitting in the row: the
-      // user would read that as saved. Snap the cell back to what is
-      // actually stored, and let tryApi's toast say why.
-      const saved = await V.ui.tryApi(
-        V.api().set_config({ dictionary: cfg.dictionary }), "Save dictionary");
-      if (!saved) { value.textContent = written; return; }
-      V.ui.toast(`Updated: ${spoken} → ${next}`);
-      render();
+    function show() {
+      row.classList.remove("is-editing");
+      row.replaceChildren(
+        el("div", { class: "pair" },
+          el("span", { class: "pair-from", text: spoken }), arrow(),
+          el("span", { class: "pair-to", text: written }),
+          auto ? el("span", {
+            class: "tag", text: "Auto-added",
+            title: "Voisr added this after seeing you make the same correction twice. Remove it and it won't come back.",
+          }) : null,
+          used ? el("span", { class: "row-note", text: `used ${used}×` }) : null),
+        el("div", { class: "row-end" },
+          el("button", { type: "button", class: "text-btn", text: "Edit",
+                         "aria-label": `Edit ${spoken}`, on: { click: edit } }),
+          auto ? el("button", { type: "button", class: "text-btn", text: "Remove",
+                                "aria-label": `Remove ${spoken}`,
+                                on: { click: () => removeEntry(spoken, written) } }) : null));
     }
 
-    value.addEventListener("blur", commit);
-    value.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); value.blur(); }
-      else if (e.key === "Escape") { value.textContent = written; value.blur(); }
-    });
+    function edit() {
+      if (closeEdit) closeEdit();
+      if (adding) closeForm();
+      const close = () => { if (closeEdit === close) closeEdit = null; show(); };
+      closeEdit = close;
+      const input = el("input", { class: "row-input", type: "text", autocomplete: "off",
+                                  "aria-label": `Replacement for ${spoken}` });
+      input.value = written;
 
-    return V.ui.el("li", { class: "item-row" },
-      V.ui.el("div", { class: "item-text dict-pair" },
-        V.ui.el("span", { class: "dict-spoken", text: spoken }),
-        V.ui.el("span", { class: "dict-arrow", html: V.ui.ICONS.arrow }),
-        value,
-        auto ? V.ui.el("span", {
-          class: "dict-auto", text: "Auto-added",
-          title: "Voisr added this after seeing you make the same correction twice. Remove it and it won't come back.",
-        }) : null,
-        used ? V.ui.el("span", { class: "dict-used", text: `used ${used}×` }) : null),
-      V.ui.el("button", {
-        class: "icon-btn danger",
-        "aria-label": auto ? "Remove auto-added entry" : "Remove entry",
-        html: V.ui.ICONS.trash,
-        on: { click: () => removeEntry(spoken, written) },
-      }));
+      /* Enter or Save. Clicking away doesn't save: it would race Cancel. */
+      async function save() {
+        const next = input.value.trim();
+        if (!next) { input.focus(); return; }
+        if (next === written) { close(); return; }
+        // Read fresh rather than reuse a closed-over `cfg` -- another commit
+        // (or a remove/undo) may have written to config.json since this row
+        // was rendered, and a stale copy here would clobber it.
+        const cfg = await V.ui.tryApi(V.api().get_config(), "Load dictionary");
+        if (!cfg) return;
+        cfg.dictionary = cfg.dictionary || {};
+        cfg.dictionary[spoken] = next;
+        // A failed write keeps the edit open with what was typed, and tryApi's
+        // toast says why: the row must not read as saved.
+        if (!await V.ui.tryApi(
+          V.api().set_config({ dictionary: cfg.dictionary }), "Save dictionary")) return;
+        close();
+        V.ui.toast(`Updated: ${spoken} → ${next}`);
+        render();
+      }
+
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); save(); }
+        else if (e.key === "Escape") {
+          e.preventDefault();
+          close();
+          const back = row.querySelector(".text-btn");
+          if (back) back.focus();
+        }
+      });
+      row.classList.add("is-editing");
+      row.replaceChildren(
+        el("div", { class: "pair" },
+          el("span", { class: "pair-from", text: spoken }), arrow(), input),
+        el("div", { class: "row-end" },
+          el("button", { type: "button", class: "btn-primary", text: "Save", on: { click: save } }),
+          el("button", { type: "button", class: "btn-quiet", text: "Cancel", on: { click: close } }),
+          el("button", { type: "button", class: "text-btn", text: "Remove",
+                         "aria-label": `Remove ${spoken}`,
+                         on: { click: () => removeEntry(spoken, written) } })));
+      input.focus();
+      if (input.select) input.select();
+    }
+
+    show();
+    return row;
   }
 
   async function removeEntry(spoken, written) {
@@ -97,26 +131,27 @@ window.Voisr = window.Voisr || {};
   }
 
   function suggestionRow(pair) {
+    const el = V.ui.el;
     async function act(call, label, done) {
       if (!await V.ui.tryApi(call, label)) return;
       if (done) V.ui.toast(done);
       render();
     }
-    return V.ui.el("li", { class: "item-row" },
-      V.ui.el("div", { class: "item-text dict-pair" },
-        V.ui.el("span", { class: "dict-spoken", text: pair.heard }),
-        V.ui.el("span", { class: "dict-arrow", html: V.ui.ICONS.arrow }),
-        V.ui.el("span", { class: "dict-suggested", text: pair.written }),
-        pair.seen > 1 ? V.ui.el("span", { class: "dict-used", text: `seen ${pair.seen}×` }) : null),
-      V.ui.el("button", {
-        type: "button", class: "btn-secondary", text: "Accept",
-        on: { click: () => act(V.api().accept_suggestion(pair.id), "Accept suggestion",
-                               `Added: ${pair.heard} → ${pair.written}`) },
-      }),
-      V.ui.el("button", {
-        type: "button", class: "btn-secondary", text: "Dismiss",
-        on: { click: () => act(V.api().dismiss_suggestion(pair.id), "Dismiss suggestion") },
-      }));
+    return el("li", { class: "item-row is-plain" },
+      el("div", { class: "pair" },
+        el("span", { class: "pair-from", text: pair.heard }), arrow(),
+        el("span", { class: "pair-to", text: pair.written }),
+        pair.seen > 1 ? el("span", { class: "row-note", text: `seen ${pair.seen}×` }) : null),
+      el("div", { class: "row-end" },
+        el("button", {
+          type: "button", class: "btn-primary", text: "Accept",
+          on: { click: () => act(V.api().accept_suggestion(pair.id), "Accept suggestion",
+                                 `Added: ${pair.heard} → ${pair.written}`) },
+        }),
+        el("button", {
+          type: "button", class: "btn-quiet", text: "Dismiss",
+          on: { click: () => act(V.api().dismiss_suggestion(pair.id), "Dismiss suggestion") },
+        })));
   }
 
   /* Suggestions are extra: an entry list must still draw if these fail. */
@@ -128,14 +163,24 @@ window.Voisr = window.Voisr || {};
     }
   }
 
-  function renderSuggestions(state) {
-    const card = document.getElementById("dict-suggestions");
-    if (!card) return;
-    const pending = (state && state.pending) || [];
-    card.hidden = pending.length === 0;
-    V.lists.sync(document.getElementById("dict-suggestion-list"), pending.map((p) => ({
-      key: p.id, sig: `${p.seen}`, build: () => suggestionRow(p),
-    })));
+  function setCount(name, n) {
+    byId(`dict-count-${name}`).textContent = n ? String(n) : "";
+  }
+
+  /* The banner shows only on the All tab, and the adding form takes its place. */
+  function syncBanner() {
+    byId("dict-banner").hidden = dismissed || adding || tab !== "all";
+  }
+
+  function emptyText(cfg) {
+    if (filter) return `No words match “${filterText}”.`;
+    if (tab === "suggestions") {
+      return cfg.learn_from_edits === false || cfg.use_screen_context === false
+        ? "Learning from corrections is off in Settings."
+        : "Nothing waiting. Fix a word after dictating and it appears here.";
+    }
+    if (tab === "auto") return "Nothing added automatically.";
+    return dismissed ? "No words yet. Map what it heard to what you meant." : "No words yet.";
   }
 
   /* One data source, so the same rule as history's render(): on a failed
@@ -153,59 +198,144 @@ window.Voisr = window.Voisr || {};
       V.ui.tryApi(V.api().get_config(), "Load dictionary"), loadSuggestions(),
     ]);
     if (!cfg) return;
-    renderSuggestions(extra);
+    const pending = (extra && extra.pending) || [];
     const auto = (extra && extra.auto_added) || {};
     const used = (extra && extra.used) || {};
     const all = Object.entries(cfg.dictionary || {});
-    const search = document.getElementById("dict-search");
-    search.hidden = all.length < SEARCH_AT;
-    // A hidden input must not leave a stale filter in effect -- there is no
-    // longer any visible control to clear it, so the user would be looking
-    // at a filtered list with no way to tell (or undo) why entries are
-    // missing. Reset both the module's filter state and the input's own
-    // value so a later re-show (the list grows past SEARCH_AT again) starts
-    // clean rather than resurrecting whatever was last typed.
-    if (search.hidden) { filter = ""; search.value = ""; }
-    const shown = all.filter(([s, w]) =>
-      !filter || s.toLowerCase().includes(filter) || w.toLowerCase().includes(filter));
-    document.getElementById("dict-empty").hidden = shown.length > 0;
+    const isAuto = (s, w) => auto[s.toLowerCase()] === w;
+
+    // everything the All tab shows, so the number matches what's on the page
+    setCount("all", all.length + pending.length);
+    setCount("suggestions", pending.length);
+    setCount("auto", all.filter(([s, w]) => isAuto(s, w)).length);
+
+    const matches = (a, b) => !filter || a.toLowerCase().includes(filter) || b.toLowerCase().includes(filter);
+    const shownPending = tab === "auto" ? [] : pending.filter((p) => matches(p.heard, p.written));
+    const shownWords = tab === "suggestions" ? []
+      : all.filter(([s, w]) => (tab === "all" || isAuto(s, w)) && matches(s, w));
+
+    dismissed = V.ui.bannerDismissed(cfg, BANNER);
+    syncBanner();
+
+    byId("dict-suggestions").hidden = shownPending.length === 0;
+    V.lists.sync(byId("dict-suggestion-list"), shownPending.map((p) => ({
+      key: p.id, sig: `${p.seen}`, build: () => suggestionRow(p),
+    })));
+
+    byId("dict-words").hidden = shownWords.length === 0;
+    byId("dict-words-label").textContent = tab === "auto" ? "Auto-added" : "Your words";
+    const empty = byId("dict-empty");
+    empty.hidden = shownPending.length + shownWords.length > 0;
+    empty.textContent = emptyText(cfg);
+
     // keyed: an add, edit or removal moves only that row (js/lists.js);
     // a filter keystroke applies instantly
-    V.lists.sync(document.getElementById("dict-list"), shown.map(([s, w]) => {
-      const facts = { auto: auto[s.toLowerCase()] === w, used: used[s.toLowerCase()] || 0 };
+    V.lists.sync(byId("dict-list"), shownWords.map(([s, w]) => {
+      const facts = { auto: isAuto(s, w), used: used[s.toLowerCase()] || 0 };
       return {
         key: s, sig: `${w}|${facts.auto}|${facts.used}`, build: () => entryRow(s, w, facts),
       };
     }), { animate: animate !== false });
   }
 
+  function openForm() {
+    if (closeEdit) closeEdit();
+    adding = true;
+    syncBanner();
+    const form = byId("dict-form");
+    const wasOpen = !form.hidden;
+    form.hidden = false;
+    if (!wasOpen && V.lists.canAnimate(form)) V.lists.enter(form, "fill");
+    byId("dict-spoken").focus();
+  }
+
+  function closeForm() {
+    adding = false;
+    byId("dict-form").hidden = true;
+    byId("dict-spoken").value = "";
+    byId("dict-written").value = "";
+    syncBanner();
+  }
+
   async function addEntry(e) {
-    const $ = V.ui.$;
     e.preventDefault();
-    const spoken = $("#dict-spoken").value.trim().toLowerCase();
-    const written = $("#dict-written").value.trim();
+    const spoken = byId("dict-spoken").value.trim().toLowerCase();
+    const written = byId("dict-written").value.trim();
     if (!spoken || !written) return;
     const cfg = await V.ui.tryApi(V.api().get_config(), "Load dictionary");
     if (!cfg) return;
     const dict = cfg.dictionary || {};
     dict[spoken] = written;
-    // Only clear the form once the entry is really stored — wiping the two
+    // Only close the form once the entry is really stored: wiping the two
     // fields on a failed write would throw away what the user just typed.
     if (!await V.ui.tryApi(
       V.api().set_config({ dictionary: dict }), "Save dictionary")) return;
-    $("#dict-spoken").value = "";
-    $("#dict-written").value = "";
+    closeForm();
     V.ui.toast(`Added: ${spoken} → ${written}`);
     render();
   }
 
-  function initSearch() {
-    document.getElementById("dict-search").addEventListener("input", (e) => {
-      filter = e.target.value.trim().toLowerCase();
+  function setTab(next) {
+    if (closeEdit) closeEdit();
+    tab = next;
+    for (const button of byId("dict-tabs").querySelectorAll(".tab")) {
+      const on = button.dataset.tab === tab;
+      button.classList.toggle("active", on);
+      button.setAttribute("aria-pressed", String(on));
+    }
+    render({ animate: false });
+  }
+
+  function openSearch() {
+    byId("dict-search").hidden = false;
+    byId("dict-search-open").setAttribute("aria-expanded", "true");
+    byId("dict-search").focus();
+  }
+
+  /* A hidden input must not leave a stale filter in effect: there would be no
+     visible control left to clear it. */
+  function closeSearch() {
+    const search = byId("dict-search");
+    search.hidden = true;
+    search.value = "";
+    filter = "";
+    filterText = "";
+    byId("dict-search-open").setAttribute("aria-expanded", "false");
+    byId("dict-search-open").focus();
+    render({ animate: false });
+  }
+
+  function init() {
+    const search = byId("dict-search");
+    search.addEventListener("input", (e) => {
+      filterText = e.target.value.trim();
+      filter = filterText.toLowerCase();
       render({ animate: false });
+    });
+    search.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.preventDefault(); closeSearch(); }
+    });
+    byId("dict-search-open").addEventListener("click", () => {
+      if (search.hidden) openSearch(); else closeSearch();
+    });
+    byId("dict-tabs").addEventListener("click", (e) => {
+      const button = e.target.closest(".tab");
+      if (button) setTab(button.dataset.tab);
+    });
+    byId("dict-add").addEventListener("click", openForm);
+    byId("dict-banner-add").addEventListener("click", openForm);
+    byId("dict-cancel").addEventListener("click", closeForm);
+    byId("dict-form").addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.preventDefault(); closeForm(); byId("dict-add").focus(); }
+    });
+    byId("dict-banner-close").addEventListener("click", async () => {
+      if (await V.ui.dismissBanner(BANNER, byId("dict-banner"))) {
+        dismissed = true;
+        render({ animate: false });
+      }
     });
   }
 
   V.views = V.views || {};
-  V.views.dictionary = { render, addEntry, initSearch };
+  V.views.dictionary = { render, addEntry, init };
 })(window.Voisr);

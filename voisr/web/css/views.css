@@ -1,355 +1,284 @@
+/* ---------- Page parts ---------- */
+
+/* .banner's own display beats the UA stylesheet's [hidden], as .popover's does */
+.banner[hidden] { display: none; }
+
+/* no stray last word beside the wave */
+.banner-sub { text-wrap: pretty; }
+
+/* a quiet line under a page's list */
+.page-note { margin: 10px 2px 0; font-size: 12.5px; color: var(--muted); }
+
 /* ---------- Home ---------- */
 
-/* Home fills the scrollport so the dock lands on the bottom edge rather
-   than wherever the content happens to end; .home-main takes up the slack. */
-#view-home { display: flex; flex-direction: column; min-height: 100%; }
-#view-home[hidden] { display: none; }
+/* The feed and the stats column stay side by side down to the window's 900 px
+   minimum: a status that wrapped under the feed would be off screen just when
+   it says "Needs you". */
+.home-layout { display: flex; align-items: flex-start; gap: 20px; }
+.home-main { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
 
-/* the trailing padding is the dock's own height: the sticky pill floats over
-   this column, so the last card has to be able to scroll clear of it */
-.home-main { display: flex; flex-direction: column; gap: 18px; flex: 1 0 auto;
-             padding-bottom: 74px; }
-
-/* ---- push-to-talk status line ----
-
-   Replaces the old hero record card. The card implied dictation happens in
-   this window; it does not, so the window states the contract in one line and
-   the live dot stands in for the thing the user actually wants to know —
-   whether the key listener is alive. */
-
-.ptt-bar {
+/* Both layers sit in one grid cell, so the banner is as tall as the taller of
+   them whichever is showing, and the buttons don't move when a recording starts. */
+.hero-copy { position: relative; align-self: stretch; display: grid; }
+.hero-layer {
+  grid-area: 1 / 1;
   display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 16px 20px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow);
-}
-
-.ptt-bar[hidden] { display: none; }
-
-.ptt-key .keycap { font-size: 16px; min-width: 2.2em; padding: 6px 10px 8px; vertical-align: 0; }
-
-.keycap {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-width: 1.6em; padding: 2px 12px 4px;
-  font: inherit; font-size: .82em;
-  background: var(--surface-2); color: var(--ink);
-  border: 1px solid var(--border); border-bottom-width: 3px;
-  border-radius: var(--radius-sm);
-  vertical-align: 4px;
-}
-
-.ptt-copy { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
-.ptt-copy strong { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
-.ptt-sub { font-size: 13px; color: var(--muted); }
-
-.ptt-state {
-  display: inline-flex; align-items: center; gap: 8px;
-  flex-shrink: 0;
-  font-size: 12px; font-weight: 600; color: var(--muted);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 99px;
-  padding: 6px 14px 6px 12px;
-}
-
-.ptt-dot {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--success);
-  animation: ptt-pulse 2.4s var(--ease) infinite;
-}
-
-/* only "listening" pulses green; see renderListener() in views/home.js */
-.ptt-state[data-state="busy"] .ptt-dot { background: var(--warning); animation: none; }
-.ptt-state[data-state="off"] .ptt-dot,
-.ptt-state[data-state="unknown"] .ptt-dot { background: var(--muted); animation: none; }
-
-@keyframes ptt-pulse {
-  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 55%, transparent); }
-  70%  { box-shadow: 0 0 0 6px color-mix(in srgb, var(--success) 0%, transparent); }
-  100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 0%, transparent); }
-}
-
-/* ---- permissions ----
-
-   All three granted: one quiet line. Anything missing: the canvas, not a
-   chip. Without the push-to-talk permission (Accessibility by default, Input
-   Monitoring in listen mode) the product does nothing when you hold the key,
-   which is not a footnote-sized fact. */
-
-/* "pending": first run, the mic hasn't been asked for yet. Same quiet line. */
-.perm-strip[data-state="ok"],
-.perm-strip[data-state="pending"] { margin: -4px 2px 0; }
-
-.perm-ok { color: var(--muted); font-size: 12px; }
-
-.perm-block {
-  display: flex; flex-direction: column; align-items: center; text-align: center;
+  flex-direction: column;
   gap: 10px;
-  padding: 40px 32px 30px;
-  background: var(--surface);
-  border: 1px solid var(--warning);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow);
+  transition: opacity var(--base) ease-out, visibility var(--base);
+}
+.hero-live { opacity: 0; visibility: hidden; }
+
+.home-hero[data-state] .hero-idle { opacity: 0; visibility: hidden; }
+.home-hero[data-state] .hero-live { opacity: 1; visibility: visible; }
+
+.hero-time { color: var(--hero-muted); }
+.home-hero[data-state="processing"] .hero-time,
+.home-hero[data-state="done"] .hero-time { display: none; }
+
+/* the persistent marker in the banner: a 3.5s toast is easy to miss */
+.hero-error { position: relative; font-size: 14px; color: var(--hero-wave); }
+.hero-error:empty { display: none; }
+
+.home-hero[data-state="recording"] .record-icon { display: none; }
+.home-hero[data-state] #change-key { visibility: hidden; }
+#record-btn[aria-disabled="true"] { opacity: .5; cursor: default; transform: none; }
+
+/* "Already switched on?", under the blue banner's main actions */
+.banner-recover { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; font-size: 13px; }
+.banner-recover .text-btn {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-.perm-glyph {
-  width: 56px; height: 56px; margin-bottom: 4px;
-  display: flex; align-items: center; justify-content: center;
-  border-radius: var(--radius-md);
-  background: var(--warning-soft); color: var(--warning);
-}
-.perm-glyph svg { width: 28px; height: 28px; }
+.home-feed { position: relative; }
+.home-view-all { position: absolute; top: 21px; right: 0; }
+.home-feed .empty { padding-top: 22px; }
 
-.perm-block h2 { font-size: 22px; font-weight: 650; letter-spacing: -0.02em; }
-.perm-block > p { color: var(--muted); max-width: 52ch; }
-
-.perm-actions { display: flex; gap: 10px; margin-top: 10px; }
-/* the stale-grant way out under a denied hotkey pane: quieter than the
-   main actions, one line */
-.perm-recover {
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
-  gap: 8px; margin-top: 6px; font-size: 13px; color: var(--muted);
-}
-
-.perm-checks {
-  list-style: none; margin-top: 20px; padding-top: 16px;
-  border-top: 1px solid var(--border);
-  width: 100%; max-width: 420px;
-  display: flex; flex-direction: column; gap: 8px;
-}
-.perm-checks li { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 600; }
-.perm-checks .perm-why { font-weight: 400; color: var(--muted); margin-left: auto; }
-.perm-checks .perm-mark {
-  width: 18px; height: 18px; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-  border-radius: 50%; font-size: 11px; font-weight: 700;
-}
-.perm-checks .perm-ok-row .perm-mark      { background: var(--success-soft); color: var(--success); }
-.perm-checks .perm-denied-row .perm-mark  { background: var(--warning-soft); color: var(--warning); }
-.perm-checks .perm-unknown-row .perm-mark { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
-
-/* ---- stat tiles ----
-
-   Three equal tiles rather than one lead stat, a floating sparkline and two
-   shrunken also-rans. Every tile carries its own 14-day trend, so the chart
-   belongs to a number instead of sitting between two unrelated ones. */
-
-.tiles { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 14px; }
-
-.tile {
-  display: flex; flex-direction: column; gap: 4px;
-  padding: 18px 20px 16px;
-  background: var(--surface);
+.home-stats {
+  flex: 0 0 226px;
+  background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow);
+  border-radius: var(--radius-md);
+  overflow: hidden;
 }
 
-.stat-label { font-size: 12px; font-weight: 600; color: var(--muted);
-              text-transform: uppercase; letter-spacing: .04em; }
-.stat-num { font-size: 34px; font-weight: 650; letter-spacing: -0.025em;
-            font-variant-numeric: tabular-nums; line-height: 1.15; }
-.stat-sm { font-size: 28px; }
-.stat-note { font-size: 12px; color: var(--muted); }
-.stat-delta { font-size: 12px; font-weight: 600; color: var(--muted); min-height: 1.3em; }
-.stat-delta[data-dir="up"] { color: var(--success); }
-
-.trend { display: flex; align-items: flex-end; gap: 3px; height: 34px; margin: 8px 0 6px; }
-
-/* scaled, not resized, so a refresh grows the bar; --h carries its own
-   2 px floor (home.js renderTrend), since a scaled bar ignores min-height.
-   scaleY squashes the caps, so the vertical radius is pre-stretched by
-   1 / --h, as the pill and dock bars do. */
-.trend .bar {
-  flex: 1;
-  height: 100%;
-  transform-origin: bottom;
-  transform: scaleY(var(--h));
-  border-radius: 2px / calc(2px / var(--h));
-  transition: transform 400ms var(--ease), border-radius 400ms var(--ease);
-  background: var(--accent);
-  opacity: .30;
+@media (max-width: 960px) {
+  .home-stats { flex-basis: 200px; }
 }
-.trend .bar.zero { background: var(--border); opacity: 1; }
-.trend .bar.today { opacity: .85; }
 
-.trend-dots { align-items: center; gap: 4px; }
-.trend-dots .dot { flex: 1; height: 8px; border-radius: 99px; background: var(--border); }
-.trend-dots .dot.on { background: var(--accent); opacity: .55; }
+.stats-body { display: flex; flex-direction: column; gap: 10px; padding: 18px 18px 16px; }
 
-/* ---- docked capture strip ---- */
+.stat { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px; }
+.stat-num { font-family: var(--font-serif); font-size: 32px; line-height: 1.1; letter-spacing: -.005em; }
+.stat-unit { font-size: 13.5px; }
+.stat-note { margin-top: 2px; font-size: 12px; line-height: 1.4; color: var(--muted); }
 
-.dock {
+.home-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 18px 16px;
+  border-top: 1px solid var(--border);
+}
+.home-status:empty { display: none; }
+
+.status-label { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 500; }
+.status-dot { flex: none; width: 8px; height: 8px; border-radius: 4px; background: var(--accent); }
+.status-detail { font-size: 12.5px; line-height: 1.4; color: var(--muted); }
+.status-action { align-self: flex-start; margin-top: 4px; }
+
+.perm-checks { list-style: none; display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.perm-checks li {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  align-items: center;
+  column-gap: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.perm-why { grid-column: 2; font-size: 12px; font-weight: 400; line-height: 1.3; color: var(--muted); }
+.perm-mark {
+  width: 16px; height: 16px;
   display: flex;
   align-items: center;
-  gap: 14px;
-  /* sticky, not static: the fallback recorder has to stay reachable while
-     you scroll a long Home, without being given the fold the way the old
-     hero card was */
-  position: sticky;
-  /* a sticky edge is inset by the scroller's padding: .main's bottom
-     padding left the dock floating 60px up with rows showing beneath it.
-     This lands it 16px above the window edge. */
-  bottom: calc(16px - var(--main-pad-b));
-  z-index: 10;
-  margin-top: 18px;
-  padding: 10px 16px 10px 10px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 99px;
-  box-shadow: var(--shadow);
-  transition: border-color var(--base) var(--ease);
-}
-.dock[data-state="recording"] { border-color: var(--accent); }
-.dock[data-state="done"]      { border-color: var(--success); }
-
-.dock-mic {
-  width: 40px; height: 40px; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
+  justify-content: center;
   border-radius: 50%;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--muted);
-  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--chip);
 }
-.dock-mic svg { width: 17px; height: 17px; }
-.dock-mic:hover { background: var(--accent-soft); color: var(--accent); }
-.dock[data-state="recording"] .dock-mic {
-  background: var(--accent); border-color: var(--accent); color: var(--on-accent);
-}
-
-/* Live (js/dock-meter.js): 18 px bars scaled from the mic level, 3 px at
-   rest, the same envelope as the pill. Loop: a recorder with no meter keeps
-   the old decorative wave. */
-.dock-wave { display: flex; align-items: center; gap: 3px; height: 22px; width: 130px; flex-shrink: 0; }
-.dock-wave span {
-  flex: none; width: 3px; height: 18px; border-radius: 2px;
-  background: var(--muted); opacity: .35; transform: scaleY(.167);
-}
-.dock-wave[data-meter="loop"] span { height: 3px; transform: none; }
-
-.dock[data-state="recording"] .dock-wave span { background: var(--accent); opacity: .9; }
-.dock[data-state="recording"] .dock-wave[data-meter="loop"] span {
-  animation: dock-wave .9s ease-in-out infinite;
-}
-.dock[data-state="recording"] .dock-wave[data-meter="loop"] span:nth-child(3n+2) { animation-delay: .15s; }
-.dock[data-state="recording"] .dock-wave[data-meter="loop"] span:nth-child(3n+3) { animation-delay: .3s; }
-
-/* transcribing: bars ease to half height (JS), a highlight travels left to right */
-.dock[data-state="processing"] .dock-wave span {
-  animation: dock-throb 1.1s ease-in-out infinite;
-  animation-delay: calc(var(--i, 0) * 40ms);
-}
-
-@keyframes dock-wave  { 0%, 100% { height: 3px; } 50% { height: 18px; } }
-@keyframes dock-throb { 0%, 100% { opacity: .2; } 50% { opacity: .8; } }
-
-.dock-time {
-  font-variant-numeric: tabular-nums;
-  font-size: 13px; font-weight: 600; color: var(--muted);
-  min-width: 34px; flex-shrink: 0;
-}
-.dock[data-state="recording"] .dock-time { color: var(--ink); }
-
-.dock-hint { flex: 1; min-width: 0; font-size: 13px; color: var(--muted); }
-.dock[data-state="done"] .dock-hint { color: var(--success); font-weight: 600; }
-
-/* the persistent marker beside the button: a 3.5s toast is easy to miss */
-.dock-error { color: var(--destructive); font-size: 13px; font-weight: 600; flex-shrink: 0; }
-
-@media (prefers-reduced-motion: reduce) {
-  .ptt-dot, .dock-wave span { animation: none !important; }
-  * { transition-duration: 0.01ms !important; }
-}
+.perm-denied-row .perm-mark { background: var(--accent-soft); color: var(--accent-text); }
+.perm-unknown-row .perm-mark { background: transparent; border: 1px solid var(--border); color: var(--muted); }
 
 /* ---------- History ---------- */
 
-.day-group { margin-bottom: 22px; }
-
-.day-label { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 0 2px 8px; }
-
-.day-group .card { padding: 6px 18px; }
-
-.page-head-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
-.head-actions { display: flex; align-items: center; gap: 10px; }
-
-.search {
-  font: inherit; color: var(--ink); background: var(--surface);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  height: 36px; width: 260px; padding: 0 12px;
+.search-field {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 38px;
+  margin-top: 18px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--muted);
 }
-.search:focus-visible { outline: 2px solid var(--ring); outline-offset: -1px; }
+.search-field[hidden] { display: none; }
+.search-field:focus-within { outline: 2px solid var(--ring); outline-offset: -1px; }
+.search-field svg { flex: none; width: 15px; height: 15px; }
+.search-field input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  -webkit-appearance: none;
+  background: transparent;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--ink);
+  user-select: text;
+}
+.search-field input::placeholder { color: var(--muted); }
 
-.item-row.selected { background: var(--accent-soft); border-radius: var(--radius-sm); }
+/* one line where there's room for it, beside the wave's flat start */
+#history-banner .banner-sub { max-width: 62%; }
+
+/* the banner goes while there's a query, so results get the room */
+#history-banner[hidden] + .search-field { margin-top: 0; }
+
+.item-row.selected { background: var(--wash); box-shadow: inset 0 0 0 2px var(--ring); }
+.item-row.selected .row-actions { opacity: 1; }
 .item-row.expanded .txt { -webkit-line-clamp: unset; }
 
-mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
+/* neutral: a match doesn't need you */
+mark { background: var(--active); color: inherit; border-radius: 3px; }
 
-.history-more { display: block; margin: 4px auto 20px; }
+.history-more { display: block; margin: 16px auto 4px; }
+.history-more[hidden] { display: none; }
 
-/* ---------- Dictionary ---------- */
+/* ---------- Dictionary and Snippets ---------- */
 
-.dict-form {
+/* the small filter tabs, with search at their end */
+.tabs {
   display: flex;
-  gap: 12px;
   align-items: flex-end;
-  padding-bottom: 18px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 6px;
-}
-
-.snippet-form {
-  display: flex;
-  flex-direction: column;
+  justify-content: space-between;
   gap: 12px;
-  padding-bottom: 18px;
+  margin-bottom: 16px;
   border-bottom: 1px solid var(--border);
-  margin-bottom: 6px;
 }
-
-.snippet-actions { display: flex; align-items: center; gap: 12px; }
-.snippet-note { color: var(--warning); font-size: 13px; }
-.snippet-row { align-items: flex-start; }
-.snippet-trigger { font-weight: 600; }
-.snippet-preview {
+.tab-list { display: flex; gap: 20px; }
+.tab {
+  height: 36px;
+  margin-bottom: -1px;
+  padding: 0 2px;
+  border-bottom: 2px solid transparent;
+  font-size: 14px;
   color: var(--muted);
+}
+.tab.active { border-bottom-color: var(--ink); font-weight: 500; color: var(--ink); }
+.tab-count { margin-left: 4px; font-weight: 400; color: var(--muted); }
+.tab-count:empty { display: none; }
+
+@media (hover: hover) and (pointer: fine) {
+  .tab:hover { color: var(--ink); }
+}
+
+.tab-tools { display: flex; align-items: center; gap: 4px; padding-bottom: 4px; color: var(--muted); }
+.tab-tools .icon-btn { color: var(--muted); }
+.tab-search {
+  width: 170px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  -webkit-appearance: none;
+  background: var(--surface-2);
+  font: inherit;
   font-size: 13px;
-  margin-top: 2px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  color: var(--ink);
+  user-select: text;
+}
+.tab-search:focus { outline: 2px solid var(--ring); outline-offset: -1px; }
+.tab-search::placeholder { color: var(--muted); }
+
+.add-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; padding: 16px; }
+.add-form[hidden] { display: none; }
+.add-form .field { flex: 1 1 180px; }
+.add-form-actions { display: flex; gap: 6px; }
+.snippet-form { flex-direction: column; align-items: stretch; gap: 12px; }
+.snippet-form .field { flex: none; }
+
+/* heard -> written */
+.pair { display: flex; align-items: baseline; flex-wrap: wrap; gap: 9px; min-width: 0; }
+.pair-from { font-size: 14px; color: var(--muted); }
+.pair-arrow { font-size: 13px; color: var(--muted); }
+.pair-to { font-size: 14.5px; }
+.row-note { font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+.row-end { display: flex; align-items: center; flex: none; gap: 6px; }
+
+/* a row being edited: the word becomes a field, with its actions at the end */
+.row-input {
+  flex: 1 1 140px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  user-select: text;
+}
+.row-input:focus { outline: 2px solid var(--ring); outline-offset: -1px; }
+.is-editing .pair { flex: 1; flex-wrap: nowrap; align-items: center; }
+
+.suggest-list { display: flex; flex-direction: column; gap: 6px; }
+.suggest-list .item-row {
+  flex-wrap: wrap;
+  border-top: 0;
+  border-radius: var(--radius-md);
+  padding: 10px 12px 10px 16px;
+  background: var(--accent-soft);
+}
+.suggest-list .pair-from, .suggest-list .pair-arrow { color: var(--ink); opacity: .65; }
+
+/* the trigger -> its text, on one line however long the text is */
+.snippet-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.snippet-line { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+.snippet-trigger { flex: none; font-size: 14.5px; font-weight: 500; white-space: nowrap; }
+.snippet-preview {
+  min-width: 0;
   overflow: hidden;
+  font-size: 14px;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.snippet-warning { color: var(--warning); font-size: 12px; margin-top: 2px; }
-
-.dict-pair { display: flex; align-items: center; gap: 10px; }
-
-.dict-arrow { color: var(--muted); flex-shrink: 0; width: 14px; height: 14px; }
-
-.dict-spoken { color: var(--muted); }
-
-.dict-written {
-  font-weight: 600; padding: 2px 6px; border-radius: 6px;
-  border: 1px solid transparent;
+.snippet-warning { display: flex; align-items: baseline; gap: 7px; font-size: 12.5px; line-height: 1.4; color: var(--muted); }
+.snippet-warning::before {
+  content: "";
+  flex: none;
+  width: 6px; height: 6px;
+  border-radius: 3px;
+  background: var(--accent);
+  transform: translateY(-1px);
 }
-.dict-written:hover { border-color: var(--border); background: var(--surface-2); }
-.dict-written:focus { outline: 2px solid var(--ring); outline-offset: 1px; }
 
-.dict-suggested { font-weight: 600; padding: 2px 6px; }
-.dict-used { color: var(--muted); font-size: 12px; white-space: nowrap; }
-.dict-auto {
-  font-size: 11px; font-weight: 600; white-space: nowrap;
-  padding: 1px 6px; border-radius: 999px;
-  color: var(--accent); border: 1px solid currentColor;
-}
-#dict-suggestions .item-row { gap: 8px; }
-#dict-suggestions { margin-bottom: 12px; }
+/* a snippet being edited: the row opens into the adding form's fields */
+.item-row.is-editing.snippet-editing { display: block; padding: 14px 16px; }
+.snippet-edit { display: flex; flex-direction: column; gap: 12px; }
+.snippet-edit .field { flex: none; }
+.snippet-edit .add-form-actions { align-items: center; }
+
+/* banner chips: "my email" -> you@example.com */
+.banner-chips { display: flex; align-items: center; gap: 7px; }
+.chip-said { font-style: italic; }
+.chip-arrow { font-size: 12px; color: var(--hero-muted); }
 
 /* ---------- Settings ---------- */
 
@@ -402,15 +331,6 @@ mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
 .more summary::-webkit-details-marker { display: none; }
 .more summary::after { content: " \203A"; }
 .more[open] summary::after { content: " \2304"; }
-
-/* ---------- Narrow window ---------- */
-
-@media (max-width: 900px) {
-  .tiles { grid-template-columns: 1fr 1fr; }
-  .tile-lead { grid-column: 1 / -1; }
-  .ptt-bar { flex-wrap: wrap; }
-  .ptt-state { order: 3; }
-}
 
 .setting-status { font-size: 12px; font-weight: 600; color: var(--success); margin-top: 6px; }
 .setting-status[data-state="busy"] { color: var(--muted); }
@@ -531,12 +451,22 @@ mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; }
 
 .export-control { position: relative; }
 
-/* Three stacked format buttons rather than the colour wheel's centred
-   controls -- override the generic .popover's centring so they run the
-   popover's full width. */
-#export-popover { align-items: stretch; min-width: 190px; }
+/* a small menu rather than the colour wheel's centred controls */
+#export-popover { align-items: stretch; gap: 0; min-width: 210px; padding: 6px; }
 
-.export-fmt { height: 36px; text-align: left; padding: 0 12px; }
+.popover-title { padding: 6px 10px 6px; font-size: 12px; color: var(--muted); }
+
+.export-fmt {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 13.5px;
+  text-align: left;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .export-fmt:hover { background: var(--wash); }
+}
 
 .wheel-wrap { position: relative; width: 200px; height: 200px; flex-shrink: 0; }
 

@@ -64,163 +64,196 @@
     <section class="view" id="view-home">
       <header class="page-head">
         <h1 id="greeting">Welcome back</h1>
-        <p class="sub">Hold a key to dictate, transcribed entirely on this Mac and never sent to the cloud.</p>
       </header>
 
-      <div class="home-main">
-        <!-- Dictation happens outside this window, so the window states the
-             contract in one line rather than pretending to be the recorder.
-             Hidden entirely while a permission blocks push-to-talk: a cheerful
-             "hold this key" beside a dead key is worse than nothing. -->
-        <div class="ptt-bar" id="ptt-bar">
-          <span class="ptt-key"><kbd id="ptt-keycap" class="keycap">…</kbd></span>
-          <span class="ptt-copy">
-            <strong>Hold <span id="ptt-key-name">your push-to-talk key</span> to dictate</strong>
-            <span class="ptt-sub">Anywhere on your Mac — release and the text lands where you were typing.</span>
-          </span>
-          <span class="ptt-state" id="ptt-state" data-state="unknown"><span class="ptt-dot" aria-hidden="true"></span><span id="ptt-state-label">Listener status unknown</span></span>
-        </div>
+      <div class="home-layout">
+        <div class="home-main">
+          <!-- The key hint and click to record. Hidden while a permission or a
+               stopped listener makes "hold this key" untrue: #perm-strip takes
+               its place. See apply() in js/views/home.js. -->
+          <section class="banner home-hero" id="home-hero" aria-label="Dictate">
+            <div class="banner-wave" id="home-wave" data-wave></div>
+            <!-- Both layers share one grid cell, so a recording can't change the
+                 banner's height. -->
+            <div class="hero-copy">
+              <div class="hero-layer hero-idle">
+                <h2 class="banner-title">Hold <span id="ptt-key-name">your key</span><br>and talk</h2>
+                <p class="banner-sub" id="home-hint">Let go and it lands at your cursor.</p>
+              </div>
+              <div class="hero-layer hero-live">
+                <h2 class="banner-title"><span id="record-title"></span> <span class="hero-time" id="record-time">0:00</span></h2>
+                <p class="banner-sub" id="record-status" role="status"></p>
+              </div>
+            </div>
+            <p class="hero-error" id="record-error" role="alert"></p>
+            <div class="banner-actions">
+              <button id="record-btn" class="btn-on-hero" type="button">
+                <svg class="record-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+                <span id="record-label">Click to record</span>
+              </button>
+              <button id="change-key" class="btn-ghost-on-hero" type="button">Change key</button>
+            </div>
+          </section>
 
-        <!-- Renders either the quiet all-granted line or the blocking
-             explanation; see renderPermissions() in js/views/home.js. -->
-        <div id="perm-strip" class="perm-strip" aria-live="polite"></div>
+          <div id="perm-strip" class="perm-strip" aria-live="polite" hidden></div>
 
-        <div class="tiles">
-          <div class="tile tile-lead">
-            <span class="stat-label">Time saved</span>
-            <span class="stat-num" id="stat-saved">—</span>
-            <span class="stat-delta" id="delta-saved"></span>
-            <div class="trend" id="trend-saved" aria-hidden="true"></div>
-            <span class="stat-note">vs typing at 40 words per minute</span>
-          </div>
-          <div class="tile">
-            <span class="stat-label">Words dictated</span>
-            <span class="stat-num stat-sm" id="stat-words">0</span>
-            <span class="stat-delta" id="delta-words"></span>
-            <div class="trend" id="trend-words" aria-hidden="true"></div>
-            <span class="stat-note">all time</span>
-          </div>
-          <div class="tile">
-            <span class="stat-label">Day streak</span>
-            <span class="stat-num stat-sm" id="stat-streak">0</span>
-            <div class="trend trend-dots" id="trend-streak" aria-hidden="true"></div>
-            <span class="stat-note">a dot for every day you dictated</span>
+          <div class="home-feed">
+            <button class="link-btn home-view-all" id="home-view-all" type="button" data-view="history" hidden>View all</button>
+            <div id="recent-groups"></div>
+            <p id="recent-empty" class="empty" hidden>Nothing yet. Your dictations land here, newest first.</p>
           </div>
         </div>
 
-        <div class="card">
-          <div class="card-head">
-            <h2>Recent activity</h2>
-            <button class="link-btn" data-view="history">View all</button>
+        <aside class="home-stats" aria-label="Your stats">
+          <div class="stats-body">
+            <div class="stat"><span class="stat-num" id="stat-saved">0m</span><span class="stat-unit">saved</span></div>
+            <div class="stat"><span class="stat-num" id="stat-words">0</span><span class="stat-unit">words</span></div>
+            <div class="stat"><span class="stat-num" id="stat-streak">0</span><span class="stat-unit">day streak</span></div>
+            <p class="stat-note">All time, against typing at 40 words per minute.</p>
           </div>
-          <ul id="recent-list" class="item-list"></ul>
-          <p id="recent-empty" class="empty" hidden>No dictations yet — your recent transcripts will appear here.</p>
-        </div>
-      </div>
-
-      <!-- Click-to-record survives as the fallback for when the key can't be
-           used (screen sharing, a captured modifier, testing the mic), docked
-           rather than dominant. -->
-      <div class="dock" id="dock">
-        <button id="record-btn" class="dock-mic" aria-label="Start recording">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
-        </button>
-        <div id="dock-wave" class="dock-wave" aria-hidden="true">
-          <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-          <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-          <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-        </div>
-        <span id="dock-time" class="dock-time">0:00</span>
-        <p id="record-status" class="dock-hint" role="status">Click to record here instead</p>
-        <p id="record-error" class="dock-error" role="alert"></p>
+          <div class="home-status" id="home-status" aria-live="polite"></div>
+        </aside>
       </div>
     </section>
 
     <!-- HISTORY -->
     <section class="view" id="view-history" hidden>
       <header class="page-head">
-        <div class="page-head-row">
-          <h1>History</h1>
-          <div class="head-actions">
-            <input id="history-search" class="search" type="search"
-                   placeholder="Search dictations…  ⌘F" autocomplete="off">
-            <div class="export-control">
-              <button id="history-export" class="btn-secondary" type="button"
-                      aria-haspopup="true" aria-expanded="false">Export…</button>
-              <div id="export-popover" class="popover" hidden>
-                <button type="button" class="btn-secondary export-fmt"
-                        id="export-fmt-txt" data-fmt="txt">Plain text (.txt)</button>
-                <button type="button" class="btn-secondary export-fmt"
-                        id="export-fmt-md" data-fmt="md">Markdown (.md)</button>
-                <button type="button" class="btn-secondary export-fmt"
-                        id="export-fmt-json" data-fmt="json">JSON (.json)</button>
-              </div>
-            </div>
+        <h1>History</h1>
+        <div class="export-control">
+          <button id="history-export" class="btn-primary" type="button"
+                  aria-haspopup="true" aria-expanded="false">Export…</button>
+          <div id="export-popover" class="popover" hidden>
+            <p class="popover-title">Export all dictations</p>
+            <button type="button" class="export-fmt" id="export-fmt-txt" data-fmt="txt">Plain text (.txt)</button>
+            <button type="button" class="export-fmt" id="export-fmt-md" data-fmt="md">Markdown (.md)</button>
+            <button type="button" class="export-fmt" id="export-fmt-json" data-fmt="json">JSON (.json)</button>
           </div>
         </div>
-        <p class="sub">Every dictation, stored locally on this Mac.</p>
       </header>
+
+      <section class="banner" id="history-banner">
+        <div class="banner-wave" data-wave></div>
+        <h2 class="banner-title">Your history stays on this Mac</h2>
+        <p class="banner-sub">Search it, copy it, export it. Voisr doesn't keep it anywhere else.</p>
+      </section>
+
+      <div class="search-field" id="history-search-field">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="history-search" type="search" aria-label="Search dictations"
+               placeholder="Search dictations  ⌘F" autocomplete="off">
+      </div>
+
       <div id="history-groups"></div>
       <button id="history-more" class="btn-secondary history-more" type="button" hidden>Load more</button>
-      <p id="history-empty" class="empty" hidden>Nothing here yet. Record your first dictation from Home.</p>
+      <p id="history-empty" class="empty" hidden></p>
     </section>
 
     <!-- DICTIONARY -->
     <section class="view" id="view-dictionary" hidden>
       <header class="page-head">
-        <div class="page-head-row">
-          <h1>Dictionary</h1>
-          <input id="dict-search" class="search" type="search"
-                 placeholder="Filter entries…" autocomplete="off" hidden>
-        </div>
-        <p class="sub">When the transcriber mishears a name or term, map what it heard to what you meant. Every variant counts.</p>
+        <h1>Dictionary</h1>
+        <button id="dict-add" class="btn-primary" type="button">Add new</button>
       </header>
-      <div class="card" id="dict-suggestions" hidden>
-        <div class="card-head"><h2>Suggestions from your corrections</h2></div>
-        <ul id="dict-suggestion-list" class="item-list"></ul>
+
+      <div class="tabs">
+        <div class="tab-list" id="dict-tabs" role="group" aria-label="Filter words">
+          <button class="tab active" type="button" aria-pressed="true" data-tab="all">All<span class="tab-count" id="dict-count-all"></span></button>
+          <button class="tab" type="button" aria-pressed="false" data-tab="suggestions">Suggestions<span class="tab-count" id="dict-count-suggestions"></span></button>
+          <button class="tab" type="button" aria-pressed="false" data-tab="auto">Auto-added<span class="tab-count" id="dict-count-auto"></span></button>
+        </div>
+        <div class="tab-tools">
+          <input id="dict-search" class="tab-search" type="search" aria-label="Filter words"
+                 placeholder="Filter words" autocomplete="off" hidden>
+          <button id="dict-search-open" class="icon-btn" type="button" aria-label="Filter words" aria-expanded="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          </button>
+        </div>
       </div>
-      <div class="card">
-        <form id="dict-form" class="dict-form">
-          <div class="field">
-            <label for="dict-spoken">Heard as</label>
-            <input id="dict-spoken" type="text" placeholder="trademake" autocomplete="off" required>
-          </div>
-          <div class="field">
-            <label for="dict-written">Replace with</label>
-            <input id="dict-written" type="text" placeholder="TradeMate" autocomplete="off" required>
-          </div>
+
+      <form id="dict-form" class="group add-form" hidden>
+        <div class="field">
+          <label for="dict-spoken">Heard as</label>
+          <input id="dict-spoken" type="text" placeholder="trademake" autocomplete="off" required>
+        </div>
+        <div class="field">
+          <label for="dict-written">Replace with</label>
+          <input id="dict-written" type="text" placeholder="TradeMate" autocomplete="off" required>
+        </div>
+        <div class="add-form-actions">
           <button type="submit" class="btn-primary">Add</button>
-        </form>
-        <ul id="dict-list" class="item-list"></ul>
-        <p id="dict-empty" class="empty" hidden>No entries yet. Add one above.</p>
+          <button type="button" id="dict-cancel" class="btn-quiet">Cancel</button>
+        </div>
+      </form>
+
+      <section class="banner" id="dict-banner" hidden>
+        <div class="banner-wave" data-wave></div>
+        <h2 class="banner-title">Teach it the words it gets <em>wrong</em></h2>
+        <p class="banner-sub">Map what it heard to what you meant. Each variant needs its own line.</p>
+        <div class="banner-actions">
+          <button id="dict-banner-add" class="btn-on-hero" type="button">Add a word</button>
+        </div>
+        <button id="dict-banner-close" class="banner-close" type="button" aria-label="Dismiss">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </section>
+
+      <div id="dict-suggestions" hidden>
+        <div class="date-row"><h2 class="date-label">Suggestions from your corrections</h2></div>
+        <ul id="dict-suggestion-list" class="item-list suggest-list"></ul>
       </div>
+
+      <div id="dict-words">
+        <div class="date-row"><h2 class="date-label" id="dict-words-label">Your words</h2></div>
+        <ul id="dict-list" class="item-list list-card"></ul>
+      </div>
+      <p id="dict-empty" class="empty" hidden></p>
     </section>
 
     <!-- SNIPPETS -->
     <section class="view" id="view-snippets" hidden>
       <header class="page-head">
         <h1>Snippets</h1>
-        <p class="sub">Say a short phrase as a whole dictation and Voisr pastes your saved text instead, exactly as you wrote it. History shows only the phrase. In a sentence, the phrase stays as spoken.</p>
+        <button id="snippet-add" class="btn-primary" type="button">Add new</button>
       </header>
-      <div class="card">
-        <form id="snippet-form" class="snippet-form">
-          <div class="field">
-            <label for="snippet-trigger">When I say</label>
-            <input id="snippet-trigger" type="text" placeholder="my email" autocomplete="off" required>
-          </div>
-          <div class="field">
-            <label for="snippet-text">Paste this</label>
-            <textarea id="snippet-text" rows="5" placeholder="you@example.com" spellcheck="false"></textarea>
-          </div>
-          <div class="snippet-actions">
-            <button type="submit" id="snippet-save" class="btn-primary">Add</button>
-            <button type="button" id="snippet-cancel" class="btn-secondary" hidden>Cancel</button>
-            <p id="snippet-note" class="snippet-note" role="status"></p>
-          </div>
-        </form>
-        <ul id="snippet-list" class="item-list"></ul>
-        <p id="snippet-empty" class="empty" hidden>No snippets yet. Add one above.</p>
+
+      <form id="snippet-form" class="group add-form snippet-form" hidden>
+        <div class="field">
+          <label for="snippet-trigger">When I say</label>
+          <input id="snippet-trigger" type="text" placeholder="my email" autocomplete="off" required>
+        </div>
+        <div class="field">
+          <label for="snippet-text">Paste this</label>
+          <textarea id="snippet-text" rows="4" placeholder="you@example.com" spellcheck="false"></textarea>
+        </div>
+        <div class="add-form-actions">
+          <button type="submit" class="btn-primary">Add</button>
+          <button type="button" id="snippet-cancel" class="btn-quiet">Cancel</button>
+        </div>
+      </form>
+
+      <section class="banner" id="snippet-banner" hidden>
+        <div class="banner-wave" data-wave></div>
+        <h2 class="banner-title">Say the short <em>version</em></h2>
+        <p class="banner-sub">Say a phrase on its own and Voisr pastes your saved text, exactly as you wrote it.</p>
+        <div class="banner-extra">
+          <div class="banner-chips"><span class="banner-chip chip-said">“my email”</span><span class="chip-arrow" aria-hidden="true">→</span><span class="banner-chip">you@example.com</span></div>
+          <div class="banner-chips"><span class="banner-chip chip-said">“sign off”</span><span class="chip-arrow" aria-hidden="true">→</span><span class="banner-chip">Thanks, Sam</span></div>
+        </div>
+        <div class="banner-actions">
+          <button id="snippet-banner-add" class="btn-on-hero" type="button">Add a snippet</button>
+        </div>
+        <button id="snippet-banner-close" class="banner-close" type="button" aria-label="Dismiss">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </section>
+
+      <div id="snippet-words">
+        <div class="date-row"><h2 class="date-label">Your snippets</h2></div>
+        <ul id="snippet-list" class="item-list list-card"></ul>
       </div>
+      <p id="snippet-empty" class="empty" hidden></p>
+      <p class="page-note">In a sentence, the phrase stays as spoken. History shows only the phrase.</p>
     </section>
 
     <!-- SETTINGS -->
@@ -417,8 +450,7 @@
 <script src="js/lists.js"></script>
 <script src="js/wave.js"></script>
 <script src="js/palette.js"></script>
-<script src="js/meter.js"></script>
-<script src="js/dock-meter.js"></script>
+<script src="js/wave-meter.js"></script>
 <script src="js/views/home.js"></script>
 <script src="js/views/history.js"></script>
 <script src="js/views/dictionary.js"></script>

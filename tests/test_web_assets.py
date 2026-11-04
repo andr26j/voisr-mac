@@ -5,7 +5,7 @@ WEB = Path(__file__).resolve().parent.parent / "voisr" / "web"
 INDEX = WEB / "index.html"
 
 JS_FILES = ["js/api.js", "js/ui.js", "js/lists.js", "js/wave.js", "js/palette.js",
-            "js/meter.js", "js/dock-meter.js", "js/views/home.js", "js/views/history.js",
+            "js/wave-meter.js", "js/views/home.js", "js/views/history.js",
             "js/views/dictionary.js", "js/views/snippets.js", "js/views/settings.js", "js/main.js"]
 CSS_FILES = ["css/tokens.css", "css/base.css",
              "css/components.css", "css/views.css"]
@@ -223,27 +223,33 @@ def test_permission_strip_refreshes_on_window_focus():
     assert '"focus"' in src or "'focus'" in src
 
 
-def test_home_leads_with_a_status_line_not_a_record_card():
-    """Dictation happens outside this window — the old hero record card
-    implied otherwise, and gave the fallback recorder the whole fold."""
+def test_home_leads_with_a_banner_holding_the_key_and_click_to_record():
+    """The banner states the contract and holds the fallback recorder: no status
+    line above it, no record card, and no floating dock below."""
     html = INDEX.read_text()
-    assert 'id="ptt-bar"' in html
-    assert 'id="ptt-keycap"' in html
-    # the keycap and the sentence must both be able to name the key
-    assert 'id="ptt-key-name"' in html
-    assert 'class="record-card' not in html
-    assert 'id="hero-wave"' not in html
+    home = html[html.index('id="view-home"'):html.index("<!-- HISTORY -->")]
+    assert 'class="banner home-hero"' in home
+    assert 'id="ptt-key-name"' in home, "the headline names the key"
+    assert 'id="perm-strip"' in home, "and a blocked permission has somewhere to go"
+    for gone in ('id="ptt-bar"', 'id="ptt-keycap"', 'class="record-card', 'class="dock"', 'class="sub"'):
+        assert gone not in home, gone
 
 
-def test_record_button_is_docked_not_the_headline():
-    """Click-to-record survives as the fallback for when the key can't be
-    used, so it lives in the dock: never a primary button, never the hero."""
+def test_click_to_record_lives_in_the_banner():
     html = INDEX.read_text()
-    assert 'class="dock"' in html
-    assert 'id="record-btn" class="dock-mic"' in html
-    assert 'id="dock-time"' in html, "the dock reports elapsed time while listening"
-    dock = html[html.index('class="dock"'):html.index("</section>", html.index('class="dock"'))]
-    assert "btn-primary" not in dock
+    banner = html[html.index('id="home-hero"'):html.index('id="perm-strip"')]
+    assert 'id="record-btn" class="btn-on-hero"' in banner
+    assert 'id="record-time"' in banner, "the banner reports elapsed time while listening"
+    assert 'id="change-key"' in banner
+    assert "btn-primary" not in banner
+
+
+def test_a_recording_cannot_change_the_banners_height():
+    """Both of the banner's layers share one grid cell, whichever is showing."""
+    css = re.sub(r"/\*.*?\*/", "", (WEB / "css" / "views.css").read_text(), flags=re.S)
+    layer = re.search(r"\.hero-layer \{([^}]*)\}", css).group(1)
+    assert "grid-area: 1 / 1" in layer
+    assert "display: grid" in re.search(r"\.hero-copy \{([^}]*)\}", css).group(1)
 
 
 def test_hero_renders_the_configured_hotkey_label():
@@ -255,37 +261,51 @@ def test_hero_renders_the_configured_hotkey_label():
     assert "cfg.hotkey" not in src
 
 
-def test_stats_are_three_tiles_each_carrying_its_own_trend():
-    """One lead stat, a sparkline floating between unrelated numbers, and two
-    shrunken also-rans became three equal tiles: every chart now belongs to
-    the number above it."""
+def test_stats_are_one_column_with_no_sparklines():
     html = INDEX.read_text()
-    assert 'class="tiles"' in html
-    # `class="tile"` or `class="tile tile-lead"`, but not the `tiles` grid
-    assert len(re.findall(r'class="tile(?:"| )', html)) == 3
-    for el_id in ["stat-saved", "stat-words", "stat-streak",
-                  "trend-saved", "trend-words", "trend-streak"]:
-        assert f'id="{el_id}"' in html, el_id
-    assert 'class="stats-strip"' not in html
-    assert 'id="spark"' not in html
-    assert 'class="home-side"' not in html
+    home = html[html.index('id="view-home"'):html.index("<!-- HISTORY -->")]
+    assert 'class="home-stats"' in home
+    for el_id in ["stat-saved", "stat-words", "stat-streak", "home-status"]:
+        assert f'id="{el_id}"' in home, el_id
+    for gone in ('class="tile', 'class="trend', 'id="trend-', 'id="delta-'):
+        assert gone not in home, gone
 
 
-def test_home_uses_time_saved_and_daily():
+def test_the_stats_column_stays_beside_the_feed_at_the_minimum_window():
+    """It carries "Needs you", so it must not wrap under the feed and off screen.
+    At 900 px the panel's content is 614 wide, or 599 with a classic scrollbar."""
+    css = re.sub(r"/\*.*?\*/", "", (WEB / "css" / "views.css").read_text(), flags=re.S)
+    layout = re.search(r"\.home-layout \{([^}]*)\}", css).group(1)
+    assert "flex-wrap" not in layout
+    assert re.search(r"@media \(max-width: 960px\) \{\s*\.home-stats \{ flex-basis: 200px; \}", css)
+
+
+def test_a_hidden_element_with_its_own_display_still_hides():
+    """An author `display` beats the UA's [hidden]: "Load more" stayed on screen
+    with nothing more to load."""
+    css = re.sub(r"/\*.*?\*/", "", (WEB / "css" / "views.css").read_text(), flags=re.S)
+    html = INDEX.read_text()
+    for el_id, cls in re.findall(r'<\w+ id="([\w-]+)" class="([^"]+)"[^>]*\bhidden\b', html):
+        for name in cls.split():
+            rule = re.search(rf"^\.{name} \{{([^}}]*)\}}", css, flags=re.M)
+            if rule and "display:" in rule.group(1):
+                assert f".{name}[hidden]" in css, f"#{el_id} .{name}"
+
+
+def test_home_uses_time_saved_and_no_trends():
     src = (WEB / "js" / "views" / "home.js").read_text()
     assert "time_saved_seconds" in src
-    assert "daily" in src
-    assert "trendBars" in src
-    assert "weekDelta" in src
+    for gone in ("daily", "trendBars", "weekDelta"):
+        assert gone not in src, gone
 
 
-def test_a_blocked_permission_takes_the_canvas_from_the_status_line():
-    """Without Input Monitoring, holding the key does nothing — a chip above
-    a line still promising it works was the app lying to the user."""
+def test_a_blocked_permission_takes_the_banners_place():
+    """Without its grant, holding the key does nothing: a banner still promising
+    it works was the app lying to the user."""
     src = (WEB / "js" / "views" / "home.js").read_text()
-    assert "perm-block" in src
-    assert "#ptt-bar" in src, "the status line has to be hideable"
-    assert "perm-chip" not in src, "the chip strip is what the block replaced"
+    assert "banner-needs-you" in src
+    assert "#home-hero" in src, "the dark banner has to be hideable"
+    assert "perm-chip" not in src
 
 
 def test_ui_exposes_format_duration():
@@ -371,9 +391,39 @@ def test_export_is_wired_to_the_save_panel():
 def test_dictionary_supports_inline_edit_and_search():
     html = INDEX.read_text()
     assert 'id="dict-search"' in html
+    assert 'id="dict-search-open"' in html
     src = (WEB / "js" / "views" / "dictionary.js").read_text()
-    assert "contenteditable" in src or "beginEdit" in src
+    assert "row-input" in src
     assert "innerHTML" not in src
+
+
+def test_every_page_has_one_black_button_at_most_in_its_title_row():
+    html = INDEX.read_text()
+    for start, end in (("<!-- HISTORY -->", "<!-- DICTIONARY -->"), ("<!-- DICTIONARY -->", "<!-- SNIPPETS -->"),
+                       ("<!-- SNIPPETS -->", "<!-- SETTINGS -->")):
+        page = html[html.index(start):html.index(end)]
+        head = page[page.index('<header class="page-head">'):page.index("</header>")]
+        assert 'class="btn-primary"' in head, start
+        assert 'class="banner"' in page, start
+
+
+def test_banner_copy_says_what_the_code_does():
+    """The boards' first wording overclaimed: every paste puts text in another app,
+    and each variant is its own entry, matched as a whole phrase."""
+    html = INDEX.read_text()
+    assert "Your history stays on this Mac" in html
+    assert "Voisr doesn&#39;t keep it anywhere else" in html or "Voisr doesn't keep it anywhere else" in html
+    assert "Each variant needs its own line" in html
+    assert "History shows only the phrase" in html
+    for overclaim in ("Every word stays", "isn't stored anywhere else", "Every variant counts"):
+        assert overclaim not in html, overclaim
+
+
+def test_home_only_says_it_pastes_when_it_will():
+    src = (WEB / "js" / "views" / "home.js").read_text()
+    assert "Let go and it lands at your cursor." in src
+    assert "Let go and it's copied to your clipboard." in src
+    assert "It's copied to your clipboard, not pasted." in src, "click to record never pastes"
 
 
 def test_settings_is_split_into_four_sections():
@@ -545,17 +595,14 @@ def test_boot_toasts_a_moved_aside_config_and_the_mock_answers_it():
     assert "take_config_notice" in (WEB / "js" / "api.js").read_text()
 
 
-def test_words_tile_says_its_number_is_all_time():
-    # M9: the number is total_words; "last 14 days" described only the bars
+def test_the_stats_note_says_its_numbers_are_all_time():
+    # M9: the numbers are totals, so they say so
     src = INDEX.read_text()
-    tile = src[src.index('id="stat-words"'):]
-    tile = tile[:tile.index("</div>\n          </div>") if "</div>\n          </div>" in tile else 600]
-    assert "all time" in tile
-    assert "last 14 days" not in tile
+    assert "All time, against typing at 40 words per minute." in src
 
 
 def test_palette_dictation_goes_through_home():
-    # M7: a dock recording started from another view was invisible
+    # M7: a recording started from another view was invisible
     assert "dictateFromAnywhere" in (WEB / "js" / "palette.js").read_text()
 
 
@@ -568,9 +615,10 @@ def test_theme_pickers_are_radio_groups():
         assert 'role="radiogroup"' in tag, grid
 
 
-def test_dock_status_is_announced():
-    tag = re.search(r'<p id="record-status"[^>]*>', INDEX.read_text()).group(0)
-    assert 'role="status"' in tag
+def test_record_status_is_announced():
+    html = INDEX.read_text()
+    assert 'role="status"' in re.search(r'<p [^>]*id="record-status"[^>]*>', html).group(0)
+    assert 'role="alert"' in re.search(r'<p [^>]*id="record-error"[^>]*>', html).group(0)
 
 
 def test_apply_appearance_tells_the_rest_of_the_app():
@@ -602,26 +650,9 @@ def test_settings_status_colour_follows_its_state():
     assert '.setting-status[data-state="off"]' in css
 
 
-def test_dock_sits_near_the_window_edge_not_a_padding_above_it():
-    # sticky bottom:0 is inset by .main's 60px bottom padding, so the dock
-    # floated 60px up with rows showing through the gap
-    css = (WEB / "css" / "views.css").read_text()
-    rule = css[css.index(".dock {"):]
-    rule = rule[:rule.index("}")]
-    assert "bottom: 0;" not in rule
-
-
 def test_dead_home_code_is_gone():
     assert "PERM_HELP" not in (WEB / "js" / "views" / "home.js").read_text()
     assert 'id="delta-streak"' not in INDEX.read_text()
-
-
-def test_dock_offset_derives_from_the_main_padding():
-    # review: -44px silently encoded .main's 60px padding
-    views = (WEB / "css" / "views.css").read_text()
-    base = (WEB / "css" / "base.css").read_text()
-    assert "var(--main-pad-b)" in views and "-44px" not in views
-    assert "--main-pad-b:" in base
 
 
 def test_landed_wash_outranks_the_row_stagger():
@@ -633,16 +664,6 @@ def test_landed_wash_outranks_the_row_stagger():
     css = re.sub(r"/\*.*?\*/", "", (WEB / "css" / "base.css").read_text(), flags=re.S)
     assert re.search(
         r"\.item-list\.is-staggering \.item-row\.is-landed[^{]*\{[^}]*animation:\s*wash", css)
-
-
-def test_trend_bars_keep_round_caps_when_scaled():
-    """Trend bars grow with scaleY, which squashes a plain 2px radius into a
-    flat top. Like the pill and dock bars, the vertical radius is
-    pre-stretched by the inverse of the scale (--h)."""
-    css = re.sub(r"/\*.*?\*/", "", (WEB / "css" / "views.css").read_text(), flags=re.S)
-    rule = re.search(r"\.trend \.bar \{([^}]*)\}", css).group(1)
-    assert "scaleY(var(--h))" in rule
-    assert re.search(r"border-radius:\s*2px\s*/\s*calc\(2px\s*/\s*var\(--h\)\)", rule)
 
 
 def test_settings_say_plainly_what_screen_context_reads():
