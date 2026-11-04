@@ -961,12 +961,36 @@ def test_fork_does_not_inherit_sidecar_fd_before_tracking(tmp_path, monkeypatch,
         assert process is None or not process.is_alive()
 
 
+def _still_open_on(fd, expected):
+    try:
+        actual = os.fstat(fd)
+    except OSError:
+        return False
+    return (actual.st_dev, actual.st_ino) == (expected.st_dev, expected.st_ino)
+
+
 @pytest.fixture
-def gc_off():
-    """Only the test's own gc.collect() may finalize its store."""
+def finalizer_fds(tmp_path):
+    """Opens tracked fds for a test to queue as a finalizer would. Only the test's
+    own gc.collect() can finalize a store meanwhile. Teardown closes whatever a
+    failed test left, so it can't reach a later test."""
+    handed_out = []
+
+    def open_fd():
+        path = tmp_path / f"queued-{len(handed_out)}"
+        fd = history_module._open_tracked(path, os.O_CREAT | os.O_RDONLY, 0o600)
+        handed_out.append((fd, os.fstat(fd)))
+        return handed_out[-1]
+
     gc.disable()
-    yield
+    yield open_fd
     gc.enable()
+    gc.collect()  # any store a failed test left for __del__
+    for fd, expected in handed_out:
+        with contextlib.suppress(ValueError):
+            history_module._PENDING_CLOSE_FDS.remove(fd)
+        if _still_open_on(fd, expected):
+            history_module._close_tracked(fd)
 
 
 def test_collection_inside_a_fork_hook_does_not_deadlock(tmp_path):
@@ -981,7 +1005,6 @@ def test_collection_inside_a_fork_hook_does_not_deadlock(tmp_path):
         from voisr.history import HistoryStore
 
         gc.disable()  # only the hook's collection may finalize the store
-        spare = history._open_tracked(os.devnull, os.O_RDONLY)
         store = HistoryStore(sys.argv[1])
         store.cycle = store
         fd = store._parent_fd
@@ -995,13 +1018,11 @@ def test_collection_inside_a_fork_hook_does_not_deadlock(tmp_path):
                 os._exit(0)
             os._exit(1)
         assert os.waitpid(pid, 0)[1] == 0, "child inherited the store's fd"
-        os.fstat(fd)  # the guard was busy, so it waits for the next user
-        history._close_tracked(spare)
         try:
             os.fstat(fd)
         except OSError:
             sys.exit(0)
-        sys.exit("the next guard user did not close the store's fd")
+        sys.exit("releasing the guard after the fork did not close the store's fd")
     """)
     try:
         result = subprocess.run(
@@ -1014,18 +1035,19 @@ def test_collection_inside_a_fork_hook_does_not_deadlock(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-def test_collection_does_not_wait_for_a_fork_guard_held_elsewhere(tmp_path, gc_off):
-    spare = history_module._open_tracked(os.devnull, os.O_RDONLY)
+def test_collection_does_not_wait_for_a_fork_guard_held_elsewhere(tmp_path,
+                                                                  finalizer_fds):
     store = HistoryStore(tmp_path / "h.jsonl")
     store.cycle = store
     fd = store._parent_fd
+    expected = os.fstat(fd)
     store_ref = weakref.ref(store)
     del store
     holding = threading.Event()
     release = threading.Event()
 
     def hold_guard():
-        with history_module._FORK_FD_GUARD:
+        with history_module._fork_guard():
             holding.set()
             release.wait(timeout=5)
 
@@ -1039,17 +1061,79 @@ def test_collection_does_not_wait_for_a_fork_guard_held_elsewhere(tmp_path, gc_o
         assert store_ref() is None
         assert waited < 2
         # Still open and still tracked, so a fork would close it in the child.
-        os.fstat(fd)
+        assert _still_open_on(fd, expected)
         assert fd in history_module._OPEN_LOCK_FDS
     finally:
         release.set()
         worker.join(timeout=2)
     assert not worker.is_alive()
 
-    history_module._close_tracked(spare)
+    # The holder closed it on release, with no later store call needed.
     assert fd not in history_module._OPEN_LOCK_FDS
+    assert not _still_open_on(fd, expected)
+
+
+@pytest.mark.parametrize("use_guard", [
+    lambda other_fd: history_module._open_tracked(os.devnull, os.O_RDONLY),
+    lambda other_fd: history_module._dup_tracked(other_fd),
+], ids=["open", "dup"])
+def test_an_fd_queued_during_a_guarded_call_closes_when_it_returns(finalizer_fds,
+                                                                   monkeypatch,
+                                                                   use_guard):
+    fd, expected = finalizer_fds()
+    other_fd, _ = finalizer_fds()
+    original_track = history_module._track_lock_fd
+    queued = [fd]
+
+    def finalizer_runs_inside_the_guard(new_fd):
+        if queued:
+            history_module._close_tracked_from_finalizer(queued.pop())
+            assert _still_open_on(fd, expected)
+        original_track(new_fd)
+
+    monkeypatch.setattr(history_module, "_track_lock_fd",
+                        finalizer_runs_inside_the_guard)
+    new_fd = use_guard(other_fd)
+    try:
+        assert not queued
+        assert fd not in history_module._OPEN_LOCK_FDS
+        assert not _still_open_on(fd, expected)
+    finally:
+        history_module._close_tracked(new_fd)
+
+
+def test_a_finalizer_that_arrives_after_the_last_drain_is_not_stranded(finalizer_fds,
+                                                                       monkeypatch):
+    fd, expected = finalizer_fds()
+    original_drain = history_module._close_pending_fds
+    arriving = [fd]
+
+    def drain_then_finalizer_finds_the_guard_busy():
+        original_drain()
+        if arriving:
+            history_module._close_tracked_from_finalizer(arriving.pop())
+
+    monkeypatch.setattr(history_module, "_close_pending_fds",
+                        drain_then_finalizer_finds_the_guard_busy)
+    with history_module._fork_guard():
+        pass
+    assert not arriving
+    assert not _still_open_on(fd, expected)
+
+
+@pytest.mark.parametrize("failing_call", [
+    lambda path: history_module._close_tracked(1 << 24),
+    lambda path: history_module._dup_tracked(1 << 24),
+    lambda path: history_module._open_tracked(path / "missing", os.O_RDONLY),
+], ids=["close", "dup", "open"])
+def test_a_failed_guarded_call_still_closes_queued_fds_and_raises(tmp_path, finalizer_fds,
+                                                                  failing_call):
+    fd, expected = finalizer_fds()
+    history_module._PENDING_CLOSE_FDS.append(fd)
     with pytest.raises(OSError):
-        os.fstat(fd)
+        failing_call(tmp_path)
+    assert fd not in history_module._OPEN_LOCK_FDS
+    assert not _still_open_on(fd, expected)
 
 
 def test_a_finalizer_fd_that_fails_to_close_does_not_fail_the_next_user(tmp_path):
@@ -1057,10 +1141,14 @@ def test_a_finalizer_fd_that_fails_to_close_does_not_fail_the_next_user(tmp_path
     with pytest.raises(OSError):
         os.fstat(bad_fd)
     history_module._PENDING_CLOSE_FDS.append(bad_fd)
-    store = HistoryStore(tmp_path / "h.jsonl")
-    store.add("kept", 1.0)
-    assert not history_module._PENDING_CLOSE_FDS
-    assert [item["text"] for item in store.list()] == ["kept"]
+    try:
+        with contextlib.closing(HistoryStore(tmp_path / "h.jsonl")) as store:
+            store.add("kept", 1.0)
+            assert bad_fd not in history_module._PENDING_CLOSE_FDS
+            assert [item["text"] for item in store.list()] == ["kept"]
+    finally:
+        with contextlib.suppress(ValueError):
+            history_module._PENDING_CLOSE_FDS.remove(bad_fd)
 
 
 @pytest.mark.filterwarnings(

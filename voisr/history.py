@@ -126,26 +126,44 @@ def _close_pending_fds() -> None:
             os.close(fd)
 
 
-def _close_tracked_from_finalizer(fd: int) -> None:
-    """Close an fd without ever waiting for the fork guard.
-
-    A collection can finalize a store on any thread, including one that already
-    holds the guard, or while another thread that holds it needs this one. If
-    the guard is busy, the fd stays open and tracked, so a fork still closes it
-    in the child, and the guard's next user closes it.
-    """
-    _PENDING_CLOSE_FDS.append(fd)
-    if _FORK_FD_GUARD.acquire(blocking=False):
+def _close_pending_fds_if_guard_free() -> None:
+    """Runs after every release. A finalizer that found the guard busy queued its
+    fd before the release, so this sees it, unless a new holder now has the job."""
+    while _PENDING_CLOSE_FDS and _FORK_FD_GUARD.acquire(blocking=False):
         try:
             _close_pending_fds()
         finally:
             _FORK_FD_GUARD.release()
 
 
+@contextlib.contextmanager
+def _fork_guard():
+    """Hold the guard, and leave no finalizer's fd queued, even if the body raises."""
+    try:
+        with _FORK_FD_GUARD:
+            try:
+                yield
+            finally:
+                _close_pending_fds()
+    finally:
+        _close_pending_fds_if_guard_free()
+
+
+def _close_tracked_from_finalizer(fd: int) -> None:
+    """Close an fd without ever waiting for the fork guard.
+
+    A collection can finalize a store on any thread, including one that already
+    holds the guard, or while another thread that holds it needs this one. If
+    the guard is busy, the fd stays open and tracked, so a fork still closes it
+    in the child, and the guard's holder closes it on release.
+    """
+    _PENDING_CLOSE_FDS.append(fd)
+    _close_pending_fds_if_guard_free()
+
+
 def _open_tracked(path, flags: int, mode: int | None = None, *, dir_fd=None) -> int:
     """Open and register an fd while forks are excluded from the gap."""
-    with _FORK_FD_GUARD:
-        _close_pending_fds()
+    with _fork_guard():
         if mode is None:
             fd = os.open(path, flags, dir_fd=dir_fd)
         else:
@@ -156,17 +174,15 @@ def _open_tracked(path, flags: int, mode: int | None = None, *, dir_fd=None) -> 
 
 def _close_tracked(fd: int) -> None:
     """Unregister and close an fd as one fork-safe lifecycle operation."""
-    with _FORK_FD_GUARD:
+    with _fork_guard():
         try:
             _untrack_lock_fd(fd)
         finally:
             os.close(fd)
-        _close_pending_fds()
 
 
 def _dup_tracked(fd: int) -> int:
-    with _FORK_FD_GUARD:
-        _close_pending_fds()
+    with _fork_guard():
         duplicate = os.dup(fd)
         _track_lock_fd(duplicate)
         return duplicate
@@ -243,7 +259,11 @@ def _before_fork() -> None:
 
 
 def _after_fork_parent() -> None:
-    _FORK_FD_GUARD.release()
+    try:
+        _close_pending_fds()
+    finally:
+        _FORK_FD_GUARD.release()
+    _close_pending_fds_if_guard_free()
 
 
 def _after_fork_child() -> None:
