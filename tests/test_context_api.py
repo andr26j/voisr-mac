@@ -2,7 +2,7 @@
 import threading
 import time
 import wave
-from concurrent.futures import Future
+from concurrent.futures import Future, wait
 
 import pytest
 
@@ -30,14 +30,47 @@ class FakeRecorder:
         pass
 
 
-def make_api(tmp_path, ax=None, **kwargs):
+def release_capture_first(api):
+    """Hold each dictation until its release capture is done. Real timing does
+    this: transcribing outlasts the capture, and the paste check waits a second
+    more. Here both are instant, and the capture is only queued after the session
+    is handed over, so a dictation could reach the check with no baseline, or
+    land its text before the capture read the field."""
+    released = set()
+    changed = threading.Condition()
+    capture_release = api._capture_release
+    process = api._recordings._processor
+
+    def capture_and_note(sequence):
+        capture_release(sequence)
+        with changed:
+            released.add(sequence)
+            changed.notify_all()
+
+    def process_in_order(session):
+        with changed:
+            changed.wait_for(lambda: session.sequence in released, timeout=5)
+        state = api._focus.session(session.sequence)
+        if state is not None and state.release is not None:
+            wait([state.release], timeout=5)
+        return process(session)
+
+    api._capture_release = capture_and_note
+    api._recordings._processor = process_in_order
+
+
+def make_api(tmp_path, ax=None, capture_first=True, **kwargs):
+    """capture_first=False: for an app that hangs, where the capture never ends."""
     kwargs.setdefault("transcribe_fn", lambda wav: "hello world")
     kwargs.setdefault("paste_fn", lambda text: True)
-    return Api(config_path=tmp_path / "config.json",
-               history=HistoryStore(tmp_path / "history.jsonl"),
-               recorder_factory=FakeRecorder,
-               clipboard_fn=lambda text: None,
-               ax_adapter=ax, **kwargs)
+    api = Api(config_path=tmp_path / "config.json",
+              history=HistoryStore(tmp_path / "history.jsonl"),
+              recorder_factory=FakeRecorder,
+              clipboard_fn=lambda text: None,
+              ax_adapter=ax, **kwargs)
+    if ax is not None and capture_first:
+        release_capture_first(api)
+    return api
 
 
 @pytest.fixture(autouse=True)
@@ -121,7 +154,8 @@ class HungAX(FakeAX):
 def test_a_hung_app_blocks_neither_press_release_nor_delivery(tmp_path):
     ax = HungAX(textbox("text"))
     pasted = []
-    api = make_api(tmp_path, ax, paste_fn=lambda text: pasted.append(text) or True)
+    api = make_api(tmp_path, ax, capture_first=False,
+                   paste_fn=lambda text: pasted.append(text) or True)
     started = time.monotonic()
     api.start_recording(prewarm=False)
     api.prewarm_now()
@@ -319,7 +353,7 @@ def test_an_echoed_glossary_is_redone_without_terms(tmp_path, monkeypatch):
 def test_a_capture_that_has_not_finished_is_not_waited_for(tmp_path, monkeypatch):
     seen = []
     ax = HungAX(textbox("meet Priya today"))
-    api = make_api(tmp_path, ax, transcribe_fn=None)
+    api = make_api(tmp_path, ax, capture_first=False, transcribe_fn=None)
     monkeypatch.setattr(api, "_default_transcribe",
                         lambda wav, cfg, terms=(): seen.append(list(terms)) or ("ok", {"mode": "cli", "timings": {}}))
     api.start_recording(prewarm=False)
