@@ -187,3 +187,38 @@ def test_a_quiet_clip_is_not_silence(tmp_path):
     plan = ["good"] * 10 + ["quiet"] * 5
     run_record(tmp_path, ScriptedRecorder(plan))
     assert len(list(tmp_path.glob("silent-*.wav"))) == 5
+
+
+def test_a_too_short_clip_is_asked_for_again_and_its_file_goes(tmp_path):
+    asked = run_record(tmp_path, ScriptedRecorder(["short", "good"]))
+    assert any("again" in prompt for prompt in asked)
+    assert len(list(tmp_path.glob("*.wav"))) == len(tool.script(["my email"]))
+    assert (tmp_path / "trigger-01.txt").exists()
+
+
+def test_a_clip_shorter_than_the_app_accepts_is_asked_for_again(tmp_path):
+    class Brief(ScriptedRecorder):
+        def stop(self):
+            if self.plan and self.plan[0] == "brief":
+                self.plan.pop(0)
+                write_clip(self.path, b"\x10\x20" * 1600)  # 0.1 s
+                return ""
+            return super().stop()
+
+    asked = run_record(tmp_path, Brief(["brief", "good"]))
+    assert any("again" in prompt for prompt in asked)
+
+
+def test_a_clip_that_keeps_failing_stops_with_the_recorders_error(tmp_path):
+    with pytest.raises(SystemExit, match="ffmpeg said no"):
+        run_record(tmp_path, ScriptedRecorder(["short"] * tool.MAX_ATTEMPTS))
+    assert list(tmp_path.glob("*.wav")) == []
+
+
+def test_a_missing_file_counts_as_a_failed_clip(tmp_path):
+    class NoFile(ScriptedRecorder):
+        def stop(self):
+            return "device gone"
+
+    with pytest.raises(SystemExit, match="device gone"):
+        run_record(tmp_path, NoFile([]))

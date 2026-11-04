@@ -42,7 +42,7 @@ from bench_triggers import SCREEN, AppPath, gate_and_trim  # noqa: E402
 from voisr import speech_gate  # noqa: E402
 from voisr.app import load_config  # noqa: E402
 from voisr.recorder import Recorder  # noqa: E402
-from voisr.ui import HOTKEY_OPTIONS  # noqa: E402
+from voisr.ui import HOTKEY_OPTIONS, MIN_SPEECH_S, wav_seconds  # noqa: E402
 from voisr.snippets import MIN_SUSTAINED_SPEECH_MS, find_snippet, has_speech_evidence  # noqa: E402
 
 TRIGGERS = ["my email", "my address", "my phone number", "review prompt", "work email", "sign off"]
@@ -50,6 +50,7 @@ OTHERS = ["my emails", "my dress", "my mother", "sign up", "review", "in the off
           "I checked my email", "send the review prompt to Sam"]
 WANTED = ("trigger", "hotkey")  # clips that should expand
 SILENT_CLIPS = 5
+MAX_ATTEMPTS = 3  # of one clip, so a real failure can't loop forever
 SILENT = "(silent, pressing the key)"
 INSTALLED_CONFIG = Path.home() / "Library/Application Support/Voisr/config.json"
 APP_PROCESS = "Applications/Voisr.app/Contents/MacOS/Voisr"
@@ -99,6 +100,31 @@ def instruction(name: str, phrase: str, key: str) -> str:
     return f'After Enter, say: "{phrase}"'
 
 
+def _is_usable(wav: Path) -> bool:
+    """False for what an Enter pressed twice leaves. Same floor as the app's."""
+    return wav.exists() and wav.stat().st_size >= 1000 and wav_seconds(wav) >= MIN_SPEECH_S
+
+
+def _record_clip(wav: Path, recorder, ask, what: str) -> None:
+    """One clip, asked for again if it comes out too short. Only a clip with
+    sound in it is left behind."""
+    for attempt in range(MAX_ATTEMPTS):
+        again = "That clip was too short or empty, so once again.\n" if attempt else ""
+        ask(f"\n{again}{what}\n  Enter to start... ")
+        recorder.start(wav)
+        ask("  recording, Enter to stop... ")
+        error = recorder.stop()
+        if _is_usable(wav):
+            span = speech_gate.gate_wav(wav)
+            if span is not None and span.verdict == "all_zeros":
+                wav.unlink()
+                raise SystemExit(SILENCE_MESSAGE)
+            return
+        wav.unlink(missing_ok=True)
+    raise SystemExit(f"No usable audio after {MAX_ATTEMPTS} tries. The recorder said: "
+                     f"{error.strip()[:200] or 'nothing'}")
+
+
 def record(folder: Path, triggers, recorder_factory=Recorder, ask=input, key=None,
            running=voisr_is_running) -> None:
     if running():
@@ -112,17 +138,7 @@ def record(folder: Path, triggers, recorder_factory=Recorder, ask=input, key=Non
     recorder = recorder_factory()
     try:
         for name, phrase in script(triggers):
-            ask(f"\n{instruction(name, phrase, key)}\n  Enter to start... ")
-            wav = folder / f"{name}.wav"
-            recorder.start(wav)
-            ask("  recording, Enter to stop... ")
-            error = recorder.stop()
-            if not wav.exists() or wav.stat().st_size < 1000:
-                raise SystemExit(f"no audio recorded (microphone access?) {error.strip()[:200]}")
-            span = speech_gate.gate_wav(wav)
-            if span is not None and span.verdict == "all_zeros":
-                wav.unlink()
-                raise SystemExit(SILENCE_MESSAGE)
+            _record_clip(folder / f"{name}.wav", recorder, ask, instruction(name, phrase, key))
             (folder / f"{name}.txt").write_text(phrase + "\n")
     finally:
         recorder.close()
