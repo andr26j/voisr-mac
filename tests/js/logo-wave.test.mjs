@@ -48,6 +48,12 @@ function load({ reduced = false, focused = true, visible = "visible", mark = tru
     setVisibility(state) { doc.visibilityState = state; doc.dispatch("visibilitychange", {}); },
     setFocus(value) { hasFocus = value; win.dispatch(value ? "focus" : "blur", {}); },
     setReduced(value) { motion.matches = value; motion.listeners.forEach((fn) => fn()); },
+    /* The same changes with the event lost, as WebKit might lose one. */
+    quietly: {
+      setFocus(value) { hasFocus = value; },
+      setVisibility(state) { doc.visibilityState = state; },
+      setReduced(value) { motion.matches = value; },
+    },
     /* Reads the clock back off the screen: the moment whose drawing this is. */
     clock() {
       let best = 0, bestDiff = Infinity;
@@ -129,6 +135,38 @@ test("it stops without focus", () => {
   assert.equal(h.frames.size, 0);
   h.setFocus(true);
   assert.equal(h.frames.size, 1);
+});
+
+test("a lost blur or visibility event still stops it within a frame", () => {
+  for (const lose of [(h) => h.quietly.setFocus(false), (h) => h.quietly.setVisibility("hidden")]) {
+    const h = load();
+    h.run(200);
+    const held = h.brand.d;
+    lose(h);
+    h.run(FRAME);
+    assert.equal(h.frames.size, 0);
+    h.run(2000);
+    assert.equal(h.brand.d, held);
+  }
+});
+
+test("it starts again on the next event after a lost one", () => {
+  const h = load();
+  h.run(200);
+  h.quietly.setFocus(false);
+  h.run(FRAME);
+  assert.equal(h.frames.size, 0);
+  h.setFocus(true);
+  assert.equal(h.frames.size, 1);
+});
+
+test("a lost reduced-motion event still goes back to the logo", () => {
+  const h = load();
+  h.run(200);
+  h.quietly.setReduced(true);
+  h.run(FRAME);
+  assert.equal(h.frames.size, 0);
+  assert.equal(h.brand.d, MARKUP);
 });
 
 test("only one frame is ever pending", () => {

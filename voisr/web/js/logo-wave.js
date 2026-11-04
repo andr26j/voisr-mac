@@ -61,6 +61,13 @@ window.Voisr = window.Voisr || {};
   }
 
   function tick(now) {
+    // Checked here as well as on events: if WebKit missed a blur, the wave
+    // would otherwise keep painting behind other apps.
+    if (!canRun()) {
+      frame = 0;
+      sync();
+      return;
+    }
     frame = window.requestAnimationFrame(tick);
     if (!last) { last = now; return; }
     // the allowance keeps a 60 Hz display on every second frame rather than
