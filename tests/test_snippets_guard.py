@@ -106,6 +106,14 @@ def test_tap_then_hold_clips_pass_the_gate_but_never_fire_a_snippet(tmp_path, se
     api.close()
 
 
+def test_a_held_back_snippet_is_logged_without_naming_it(tmp_path, capsys):
+    api, _ = guard_api(tmp_path, tap_then_hold())
+    dictate(api)
+    api.close()
+    out = capsys.readouterr().out
+    assert "snippet held back" in out and "email" not in out.casefold() and SECRET not in out
+
+
 def test_real_speech_still_fires(tmp_path):
     api, pasted = guard_api(tmp_path, spoken())
     dictate(api)

@@ -2152,6 +2152,10 @@ class Api:
             if snippet is not None:
                 text = snippet.text
             else:
+                if find_snippet(raw, cfg.get("snippets")) is not None:
+                    # names no trigger: the only trace of why it pasted as words
+                    print(f"Voisr: snippet held back, sustained speech "
+                          f"{span.sustained_ms if span else 'unknown'} ms", flush=True)
                 text = clean(raw, dictionary=cfg.get("dictionary", {}),
                              on_replace=lambda key: fired.__setitem__(key, fired.get(key, 0) + 1))
             t_cleaned = self._clock()
