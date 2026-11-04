@@ -17,6 +17,7 @@ class BlockingApi:
 
     def __init__(self, result=None):
         self.result = result or {"recording": True}
+        self.config = {"show_widget": True}
         self.go = threading.Event()
         self.entered = threading.Event()
         self.starts = 0
@@ -28,7 +29,7 @@ class BlockingApi:
         self.cancel_entered = threading.Event()
 
     def get_config(self):
-        return {"show_widget": True}
+        return self.config
 
     def start_recording(self):
         self.starts += 1
@@ -303,6 +304,46 @@ def test_main_thread_widget_callback_runs_while_a_mid_start_chord_closes_the_mic
     assert callback_ran
     assert api.cancels == 1 and not svc.holding
     assert widget.calls[-1:] == ["hide"]
+
+
+def older_pill_on_its_hold(svc, api, widget):
+    """A finished dictation's pill, still showing its result. The next press's
+    new epoch orphans that pill's own hide."""
+    api.go.set()
+    svc.press()
+    svc.release()
+    deadline = time.monotonic() + 3
+    while "done" not in widget.calls and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert widget.calls == ["recording", "processing", "done"]
+    api.go.clear()
+    api.entered.clear()
+
+
+def test_a_mid_start_chord_takes_down_an_older_pill_when_the_setting_is_off():
+    api = BlockingApi()
+    widget = FakeWidget()
+    svc = HotkeyService(api, widget=widget, hide_delay=5)
+    older_pill_on_its_hold(svc, api, widget)
+    press = start_blocked_press(svc, api, at=100.0)
+    api.config = {"show_widget": False}
+    assert returns_promptly(svc.cancel_chord, 100.1)
+    finish_start(api, press)
+    assert api.cancels == 1
+    assert widget.calls == ["recording", "processing", "done", "hide"]
+
+
+def test_a_mid_start_release_takes_down_an_older_pill_when_the_setting_is_off():
+    api = BlockingApi()
+    widget = FakeWidget()
+    svc = HotkeyService(api, widget=widget, hide_delay=5)
+    older_pill_on_its_hold(svc, api, widget)
+    press = start_blocked_press(svc, api)
+    api.config = {"show_widget": False}
+    assert returns_promptly(svc.release)
+    finish_start(api, press)
+    assert api.releases == 2
+    assert widget.calls == ["recording", "processing", "done", "hide"]
 
 
 def test_a_start_that_raises_is_logged(capsys):
