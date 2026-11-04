@@ -127,15 +127,14 @@ def test_default_config_includes_pill_theme(tmp_path):
 
 def test_pill_theme_roundtrip(tmp_path):
     api = make_api(tmp_path)
-    api.set_config({"pill_theme": "ember"})
-    assert api.get_config()["pill_theme"] == "ember"
+    api.set_config({"pill_theme": "quiet"})
+    assert api.get_config()["pill_theme"] == "quiet"
 
 
 def test_get_pill_themes_shape(tmp_path):
     api = make_api(tmp_path)
     themes = api.get_pill_themes()
-    assert [t["value"] for t in themes] == [
-        "classic", "ember", "aurora", "ocean", "neon", "breathe", "scanner"]
+    assert [t["value"] for t in themes] == ["classic", "quiet"]
     assert all(set(t) == {"value", "label"} for t in themes)
 
 
@@ -1192,7 +1191,7 @@ def test_concurrent_set_config_calls_keep_every_update(tmp_path, monkeypatch):
     monkeypatch.setattr(ui_mod, "load_config", slow_load)
     api = make_api(tmp_path)
     # eight real settings (set_config rejects unknown keys), none at default
-    updates = [("device", ":1"), ("pill_theme", "ember"),
+    updates = [("device", ":1"), ("pill_theme", "quiet"),
                ("pill_color", "#112233"), ("appearance", "dark"),
                ("model", "base.en"), ("hotkey_label", "X"),
                ("paste", False), ("show_widget", False)]

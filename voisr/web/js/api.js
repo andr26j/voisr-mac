@@ -141,10 +141,7 @@ window.Voisr = window.Voisr || {};
       get_hotkey_status: async () => ({ status: `active on ${mockCfg.hotkey}`,
                                         state: recording ? "busy" : "listening" }),
       get_pill_themes: async () => [
-        { value: "classic", label: "Classic" }, { value: "ember", label: "Ember" },
-        { value: "aurora", label: "Aurora" }, { value: "ocean", label: "Ocean" },
-        { value: "neon", label: "Neon EQ" }, { value: "breathe", label: "Breathe" },
-        { value: "scanner", label: "Scanner" },
+        { value: "classic", label: "Signature" }, { value: "quiet", label: "Quiet" },
       ],
       start_recording: async () => { recording = true; return { recording: true }; },
       // mirrors Api.get_level(): a simulated voice (syllables and pauses)
