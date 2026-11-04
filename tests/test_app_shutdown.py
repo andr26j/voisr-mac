@@ -1,5 +1,7 @@
+import array
 import builtins
 import sys
+import wave
 from types import SimpleNamespace
 
 import pytest
@@ -71,6 +73,14 @@ FFMPEG_MISSING_DEVICE = (
     "[in#0 @ 0x7516c14000] Error opening input: Input/output error\n")
 
 
+def write_wav(path, samples):
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(array.array("h", samples).tobytes())
+
+
 def toggle_one_recording(monkeypatch, capsys, write_capture, stderr=""):
     """One start and stop in toggle mode: write_capture makes the file ffmpeg
     would have left. Returns what was printed and the files sent to Whisper."""
@@ -121,6 +131,32 @@ def test_toggle_failed_capture_says_when_ffmpeg_reported_nothing(monkeypatch, ca
 
     assert sent == []
     assert "ffmpeg reported no error" in out
+
+
+def test_toggle_all_zero_capture_says_silence_and_skips_whisper(monkeypatch, capsys):
+    out, sent = toggle_one_recording(
+        monkeypatch, capsys, lambda path: write_wav(path, [0] * 16000))
+
+    assert sent == []
+    assert "only silence" in out
+    assert ":Studio Mic" in out
+    assert "-list_devices" in out
+
+
+def test_toggle_capture_with_any_sound_goes_to_whisper(monkeypatch, capsys):
+    out, sent = toggle_one_recording(
+        monkeypatch, capsys, lambda path: write_wav(path, [0] * 15999 + [1]))
+
+    assert len(sent) == 1
+    assert "only silence" not in out
+
+
+def test_toggle_capture_the_gate_cant_read_still_goes_to_whisper(monkeypatch, capsys):
+    out, sent = toggle_one_recording(
+        monkeypatch, capsys, lambda path: path.write_bytes(b"not a wav" * 200))
+
+    assert len(sent) == 1
+    assert "only silence" not in out
 
 
 def test_hotkey_ctrl_c_stops_listener_then_closes_api(monkeypatch):

@@ -5,7 +5,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from voisr import snippets
+from voisr import snippets, speech_gate
 from voisr.cleanup import clean
 from voisr.inject import paste_at_cursor, set_clipboard
 from voisr.pasteboard import PasteDeliveryError
@@ -190,6 +190,14 @@ def toggle_mode(cfg) -> None:
                     report = err.strip()[:200] or "ffmpeg reported no error"
                     print(f"  recording failed on {cfg['device']}: {report}")
                     print(f"  {LIST_DEVICES_HINT}")
+                    continue
+                span = speech_gate.gate_wav(wav)  # None: unreadable, skip the check
+                if span is not None and span.verdict == "all_zeros":
+                    print(f"  the microphone sent only silence on {cfg['device']}, "
+                          "so nothing was transcribed.")
+                    print(f"  It may be the wrong input. {LIST_DEVICES_HINT}")
+                    print("  If it's the right input, check that this terminal is on "
+                          "under Microphone in Privacy & Security.")
                     continue
                 deliver(process_audio(wav, cfg["dictionary"]), cfg["paste"])
             finally:
