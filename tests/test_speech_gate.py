@@ -226,7 +226,7 @@ def test_the_reading_says_what_it_was_judged_against():
 def test_describe_gives_every_measurement():
     span = SpeechSpan("speech", 240, 0, 16000, 80, 120, -62.14, -59.14)
     assert speech_gate.describe(span, 2.4) == (
-        "clip 2.40 s, speech, speech 240 ms, longest run 120 ms, sustained 80 ms, "
+        "clip 2.40 s, gate2, speech, speech 240 ms, longest run 120 ms, sustained 80 ms, "
         "floor -62.1 dBFS, threshold -59.1 dBFS")
 
 

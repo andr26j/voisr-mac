@@ -24,6 +24,9 @@ GATE_SUSTAINED_MS = 160  # or this long at a steady level, which a thump doesn't
 # or this much in all: soft, choppy speech. Four key events reached 840 ms, so a
 # hands-free start and stop, six events, could reach about 1260 ms.
 ENOUGH_SPEECH_MS = 1500
+# Names the rule in each log row, so rows from different rules aren't mixed up.
+# 1: 200 ms in all. 2: also a run, a steady stretch or a larger total.
+GATE_RULE = "gate2"
 SPEECH_MARGIN_DB = 3.0   # a speech block sits this far above the room's floor
 FLOOR_PERCENTILE = 0.10  # the room's floor: the quietest tenth of the clip
 # The floor adapts to the room but never climbs above this, so a loud room
@@ -151,7 +154,7 @@ def describe(span: SpeechSpan | None, seconds: float) -> str:
     """The gate's reading for the log: measurements only, never what was said."""
     if span is None:
         return f"clip {seconds:.2f} s, gate skipped: unreadable"
-    return (f"clip {seconds:.2f} s, {span.verdict}, speech {span.speech_ms} ms, "
+    return (f"clip {seconds:.2f} s, {GATE_RULE}, {span.verdict}, speech {span.speech_ms} ms, "
             f"longest run {span.longest_run_ms} ms, sustained {span.sustained_ms} ms, "
             f"floor {span.floor_dbfs:.1f} dBFS, threshold {span.threshold_dbfs:.1f} dBFS")
 
