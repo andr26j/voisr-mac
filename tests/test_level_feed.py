@@ -86,9 +86,10 @@ def test_a_meter_failure_never_loses_audio(tmp_path, monkeypatch):
     assert rec._frames == [block]
 
 
-def test_stop_resets_level_after_the_stream_has_closed(tmp_path):
+def test_stop_resets_level_after_the_stream_has_closed(tmp_path, monkeypatch):
     """A callback still in flight when stop() begins must not leave a
     stale level behind: the reset comes after the stream is closed."""
+    monkeypatch.setattr(StreamRecorder, "SELF_STOP_WAIT_S", 0.01)
     rec = StreamRecorder()
     rec._recording = True
     rec._out = str(tmp_path / "z.wav")
@@ -97,7 +98,8 @@ def test_stop_resets_level_after_the_stream_has_closed(tmp_path):
     class LateCallbackStream:
         def stop(self):
             rec._recording = True   # simulate a callback that already passed
-            rec._on_audio(loud, len(loud) // 2, None, None)  # the check
+            rec._stop_requested = False
+            rec._on_audio(loud, len(loud) // 2, None, None)  # the checks
             rec._recording = False
 
         def close(self):

@@ -3,13 +3,15 @@ import math
 import operator
 import subprocess
 import threading
+import time
 import wave
 
-# Stopping a PortAudio stream can deadlock inside macOS for good: the stopping
-# thread holds the AudioUnit's lock and wants the IO thread's, while the IO
-# thread, in PortAudio's start/stop listener, holds its own and wants the
-# AudioUnit's. Nothing can interrupt that, so such a stream is abandoned and
-# every later recording in this process uses the ffmpeg fallback: opening
+# Stopping a PortAudio stream from another thread can deadlock inside macOS for
+# good: the stopping thread holds the AudioUnit's lock and wants the IO thread's,
+# while the IO thread, in PortAudio's start/stop listener, holds its own and
+# wants the AudioUnit's. So the IO thread stops its own stream (_close_stream).
+# If a stop still sticks, nothing can interrupt it, so the stream is abandoned
+# and every later recording in this process uses the ffmpeg fallback: opening
 # another stream could wait on the same locks. Only a restart clears it.
 _mic_wedged = threading.Event()
 _abandoned_streams = []  # kept referenced: collecting one could close it
@@ -69,10 +71,11 @@ def level_from_int16(block) -> float:
     return min(1.0, max(0.0, level))
 
 
-def _default_stream_factory(samplerate, callback):
+def _default_stream_factory(samplerate, callback, finished_callback):
     import sounddevice as sd
     return sd.RawInputStream(samplerate=samplerate, channels=1, dtype="int16",
-                             callback=callback)
+                             callback=callback,
+                             finished_callback=finished_callback)
 
 
 class StreamRecorder:
@@ -93,12 +96,15 @@ class StreamRecorder:
     ZERO_REOPEN_S = 6.0
 
     # How long to wait for a stopping stream before abandoning it. Real stops
-    # take milliseconds; this only ever catches the deadlock above.
+    # take about 100 ms; this only ever catches the deadlock above.
     STOP_TIMEOUT_S = 3.0
-    # A stream stopped before its first audio is still starting up, when the
-    # IO thread is most likely to be in the start/stop listener. Wait this
-    # long for that first block, which costs only very short presses.
-    STARTUP_SETTLE_S = 0.3
+    # How long the IO thread gets to stop its own stream. A healthy one does it
+    # within a block; this much covers a stream still starting up. After it, a
+    # device sending nothing is stopped from outside, with the deadlock's risk.
+    SELF_STOP_WAIT_S = 0.5
+    # PortAudio reports the stop from inside its listener: let that return
+    # before touching the AudioUnit again.
+    SELF_STOP_UNWIND_S = 0.02
 
     def __init__(self, stream_factory=None, timer_factory=threading.Timer):
         self._lock = threading.Lock()
@@ -118,7 +124,8 @@ class StreamRecorder:
         self._heard = False  # a non-zero sample arrived this recording
         self._reopened = False
         self._watchdog = None
-        self._first_audio = threading.Event()
+        self._stop_requested = False
+        self._stream_finished = threading.Event()
 
     @property
     def reopened(self) -> bool:
@@ -132,7 +139,9 @@ class StreamRecorder:
         return self._level
 
     def _on_audio(self, indata, frames, time_info, status):
-        self._first_audio.set()
+        if self._stop_requested:
+            import sounddevice as sd
+            raise sd.CallbackAbort
         if not self._recording:
             return
         chunk = bytes(indata)
@@ -188,8 +197,9 @@ class StreamRecorder:
         watchdog.start()
 
     def _open_stream(self):
-        self._first_audio.clear()
-        stream = self._stream_factory(self.SAMPLERATE, self._on_audio)
+        self._stop_requested = False
+        finished = self._stream_finished = threading.Event()
+        stream = self._stream_factory(self.SAMPLERATE, self._on_audio, finished.set)
         try:
             stream.start()
         except Exception:
@@ -256,7 +266,11 @@ class StreamRecorder:
         stream, self._stream = self._stream, None
         if stream is None:
             return
-        self._first_audio.wait(self.STARTUP_SETTLE_S)
+        began = time.monotonic()
+        self._stop_requested = True
+        stopped_itself = self._stream_finished.wait(self.SELF_STOP_WAIT_S)
+        if stopped_itself:
+            time.sleep(self.SELF_STOP_UNWIND_S)
         errors = []
 
         def stop_and_close():
@@ -267,6 +281,12 @@ class StreamRecorder:
                     stream.close()
             except Exception as error:
                 errors.append(error)
+            # Also runs after the stream was abandoned: a stuck stop that
+            # logs nothing never finished, and one that logs a long time was
+            # only slow. Timing only, never audio or text.
+            elapsed = (time.monotonic() - began) * 1000
+            how = "" if stopped_itself else ", from outside"
+            print(f"Voisr audio: mic stop {elapsed:.0f} ms{how}", flush=True)
 
         closer = threading.Thread(target=stop_and_close,
                                   name="voisr-mic-close", daemon=True)
