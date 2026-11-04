@@ -20,6 +20,7 @@ DEFAULT_CONFIG = {"hotkey": "alt_r", "paste": True, "device": DEFAULT_DEVICE, "d
                   "dictionary_auto_add": True, "snippets": {}}
 # Every config used to be saved with this, so it doesn't mean anyone chose it.
 _OLD_DEFAULT_DEVICE = ":0"
+LIST_DEVICES_HINT = 'To see the inputs: ffmpeg -f avfoundation -list_devices true -i ""'
 
 
 def _is_str(v):
@@ -186,7 +187,9 @@ def toggle_mode(cfg) -> None:
                 input("  recording — [Enter] to STOP... ")
                 err = recorder.stop()
                 if not wav.exists() or wav.stat().st_size < 1000:
-                    print(f"  recording failed (mic permission?): {err.strip()[:200]}")
+                    report = err.strip()[:200] or "ffmpeg reported no error"
+                    print(f"  recording failed on {cfg['device']}: {report}")
+                    print(f"  {LIST_DEVICES_HINT}")
                     continue
                 deliver(process_audio(wav, cfg["dictionary"]), cfg["paste"])
             finally:

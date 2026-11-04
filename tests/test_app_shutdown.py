@@ -66,6 +66,63 @@ def test_toggle_start_failure_cancels_recorder_and_removes_temp_wav(monkeypatch)
     assert recorder.path.exists() is False
 
 
+FFMPEG_MISSING_DEVICE = (
+    "[AVFoundation indev @ 0x7516c14140] Audio device not found\n"
+    "[in#0 @ 0x7516c14000] Error opening input: Input/output error\n")
+
+
+def toggle_one_recording(monkeypatch, capsys, write_capture, stderr=""):
+    """One start and stop in toggle mode: write_capture makes the file ffmpeg
+    would have left. Returns what was printed and the files sent to Whisper."""
+
+    class CapturingRecorder(FakeRecorder):
+        def stop(self):
+            write_capture(self.path)
+            return stderr
+
+    sent = []
+    answers = iter(["", "", KeyboardInterrupt()])
+
+    def fake_input(_prompt):
+        answer = next(answers)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    def fake_process_audio(wav, _dictionary):
+        sent.append(wav)
+        return "heard"
+
+    monkeypatch.setattr(app, "Recorder", lambda device: CapturingRecorder())
+    monkeypatch.setattr(builtins, "input", fake_input)
+    monkeypatch.setattr(app, "process_audio", fake_process_audio)
+    monkeypatch.setattr(app, "deliver", lambda text, paste: None)
+
+    with pytest.raises(KeyboardInterrupt):
+        app.toggle_mode({"device": ":Studio Mic", "dictionary": {}, "paste": False})
+    return capsys.readouterr().out, sent
+
+
+def test_toggle_failed_capture_names_the_device_and_what_ffmpeg_said(monkeypatch, capsys):
+    out, sent = toggle_one_recording(
+        monkeypatch, capsys, lambda path: path.write_bytes(b""),
+        stderr=FFMPEG_MISSING_DEVICE)
+
+    assert sent == []
+    assert ":Studio Mic" in out
+    assert "Audio device not found" in out
+    assert "-list_devices" in out
+    assert "permission" not in out.lower()
+
+
+def test_toggle_failed_capture_says_when_ffmpeg_reported_nothing(monkeypatch, capsys):
+    out, sent = toggle_one_recording(
+        monkeypatch, capsys, lambda path: path.write_bytes(b""))
+
+    assert sent == []
+    assert "ffmpeg reported no error" in out
+
+
 def test_hotkey_ctrl_c_stops_listener_then_closes_api(monkeypatch):
     events = []
 
