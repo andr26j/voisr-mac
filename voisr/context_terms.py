@@ -175,3 +175,17 @@ def prompt_echoed(raw: str, terms, seconds: float | None = None) -> bool:
         if re.search(run, raw, re.IGNORECASE):
             return True
     return seconds is not None and _mostly_terms_unsupported(raw, terms, seconds)
+
+
+def triggers_recited(raw: str, triggers, other_terms=()) -> bool:
+    """Is this the prompt's list of snippet triggers, not speech? Two or more
+    entries, nothing else, and at least one of them a trigger."""
+    def key(text: str) -> str:
+        return " ".join(text.split()).strip(_STRIP).casefold()
+
+    said = [key(part) for part in re.split(r"[,;:.!?\n]+", raw)]
+    said = [part for part in said if part and part != "glossary"]
+    wanted = {key(trigger) for trigger in triggers}
+    known = wanted | {key(term) for term in other_terms}
+    return len(said) >= 2 and all(part in known for part in said) and any(
+        part in wanted for part in said)

@@ -12,7 +12,7 @@ from voisr.app import config_errors, load_config
 from voisr.ax_context import FocusTracker, make_ax_adapter
 from voisr.cleanup import clean
 from voisr.context_terms import (cli_safe_terms, context_terms, prompt_echoed,
-                                 terms_for_clip)
+                                 terms_for_clip, triggers_recited)
 from voisr.edit_learning import EditWatcher, is_term_fix
 from voisr.history import HistoryStore
 from voisr.inject import paste_at_cursor, set_clipboard
@@ -26,7 +26,7 @@ from voisr.recording_queue import (
     RecordingSession,
     SessionResult,
 )
-from voisr.snippets import (SnippetError, find_spoken_snippet, tidy_trigger,
+from voisr.snippets import (SnippetError, find_snippet, find_spoken_snippet, tidy_trigger,
                             trigger_hints, trigger_warning, triggers_for_clip, with_saved)
 from voisr.status_item import StatusItem
 from voisr.suggestions import (ACCEPTED, AUTO_ADDED, DISMISSED, PENDING, SuggestionStore,
@@ -1948,9 +1948,10 @@ class Api:
             return []
 
     def _transcribe_with_terms(self, wav, cfg, terms):
-        """Context terms may only ever help. A failure with them, or a
-        transcript that recites them (screen words must not reach a paste or
-        History that way), is redone without; a second failure is the real one."""
+        """Context terms and trigger hints may only ever help. A failure with
+        them, or a transcript that recites them (screen words must not reach a
+        paste or History that way), is redone without; a second failure is the
+        real one."""
         seconds = wav_seconds(wav)
         triggers = triggers_for_clip(trigger_hints(cfg.get("snippets")), seconds)
         if not terms and not triggers:
@@ -1961,7 +1962,10 @@ class Api:
             print(f"Voisr: transcription with context terms failed "
                   f"({error.__class__.__name__}); retrying without", flush=True)
             return self._transcribe_audio(wav, cfg)
-        if not prompt_echoed(raw, terms, seconds):
+        # One trigger, said, is what hints are for, even if its words are on screen.
+        if find_snippet(raw, cfg.get("snippets")) is not None or not (
+                prompt_echoed(raw, terms, seconds)
+                or triggers_recited(raw, triggers, [*(cfg.get("dictionary") or {}).values(), *terms])):
             return raw, info
         print("Voisr: transcript echoed the glossary; retrying without context terms",
               flush=True)

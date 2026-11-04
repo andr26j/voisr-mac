@@ -174,3 +174,42 @@ def test_a_short_clip_is_sent_them_on_both_prompts(tmp_path, monkeypatch):
     assert sent == [(wanted, wanted)] and pasted == [SECRET]
     assert wav_seconds is not None
     api.close()
+
+
+# ---- recited prompts
+
+
+@pytest.mark.parametrize("recital", [
+    "Glossary: my email, review prompt.", "my email, review prompt.", "My email. Review prompt.",
+    "Tareq, my email, review prompt.", "Glossary: my email.",
+])
+def test_a_recited_list_is_redone_without_triggers(tmp_path, monkeypatch, recital):
+    api, sent, pasted = prompts_for(tmp_path, monkeypatch, spoken(), [recital, "Hello there."])
+    dictate(api)
+    assert len(sent) == 2
+    assert "my email" not in sent[1][0] and "my email" not in sent[1][1]
+    assert pasted == ["Hello there."]
+    assert "review prompt" not in (tmp_path / "history.jsonl").read_text()
+    api.close()
+
+
+def test_one_spoken_trigger_is_not_an_echo(tmp_path, monkeypatch):
+    api, sent, pasted = prompts_for(tmp_path, monkeypatch, spoken(), ["My email."])
+    dictate(api)
+    assert len(sent) == 1 and pasted == [SECRET]
+    api.close()
+
+
+def test_a_trigger_whose_words_are_also_screen_terms_is_not_an_echo(tmp_path, monkeypatch):
+    api, sent, pasted = prompts_for(tmp_path, monkeypatch, spoken(), ["Review prompt."])
+    monkeypatch.setattr(api, "_session_terms", lambda session, wav: ["Review", "Prompt"])
+    dictate(api)
+    assert len(sent) == 1 and pasted == ["Please review"]
+    api.close()
+
+
+def test_saying_a_trigger_inside_a_sentence_is_not_a_recital(tmp_path, monkeypatch):
+    api, sent, pasted = prompts_for(tmp_path, monkeypatch, spoken(), ["Send my email, please."])
+    dictate(api)
+    assert len(sent) == 1 and pasted == ["Send my email, please."]
+    api.close()
