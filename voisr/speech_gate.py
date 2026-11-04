@@ -21,17 +21,22 @@ FLOOR_PERCENTILE = 0.10  # the room's floor: the quietest tenth of the clip
 # can't make normal speech (-35..-20 dBFS) read as silence.
 FLOOR_CAP_DBFS = -50.0
 ABS_MIN_DBFS = -60.0     # nothing quieter is speech, however silent the room
+SUSTAINED_MARGIN_DB = 15.0  # a sustained run stays this close to the clip's peak
 _FULL_SCALE_SQ = 32768.0 * 32768.0
 
 
 @dataclass(frozen=True)
 class SpeechSpan:
     """verdict: "speech", "no_speech" or "all_zeros" (the device sent exact
-    zeros only). start/end: the sample window to keep, end exclusive."""
+    zeros only). start/end: the sample window to keep, end exclusive.
+    sustained_ms: the longest unbroken run near the clip's peak. No part of the
+    verdict: speech_ms totals scattered blocks, so key thumps can add up to it,
+    and only what is riskier than plain dictation asks for this."""
     verdict: str
     speech_ms: int
     start: int
     end: int
+    sustained_ms: int = 0
 
 
 def block_dbfs(samples) -> float:
@@ -50,6 +55,15 @@ def _first_nonzero(samples) -> int:
         if sample:
             return index
     return -1
+
+
+def _sustained_ms(levels, threshold: float) -> int:
+    floor = max(threshold, max(levels) - SUSTAINED_MARGIN_DB)
+    longest = run = 0
+    for level in levels:
+        run = run + 1 if level >= floor else 0
+        longest = max(longest, run)
+    return longest * BLOCK_MS
 
 
 def analyze(samples, samplerate: int = SAMPLERATE) -> SpeechSpan:
@@ -76,7 +90,7 @@ def analyze(samples, samplerate: int = SAMPLERATE) -> SpeechSpan:
     low = max(0, speech[0] - PAD_BLOCKS)
     high = min(len(levels), speech[-1] + PAD_BLOCKS + 1)
     return SpeechSpan("speech", speech_ms, first + low * block,
-                      min(count, first + high * block))
+                      min(count, first + high * block), _sustained_ms(levels, threshold))
 
 
 def gate_wav(path) -> SpeechSpan | None:

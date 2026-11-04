@@ -13,11 +13,6 @@ LONG = ("Please review this:\n\n  - um, the diff\n  - the tests\n\n" + "Keep it 
         + "\n")
 
 
-@pytest.fixture(autouse=True)
-def no_speech_gate(monkeypatch):
-    monkeypatch.setattr("voisr.speech_gate.gate_wav", lambda wav: None)
-
-
 def snippet_api(tmp_path, spoken="My email.", ax=None, snippets=None, **kwargs):
     pasted = []
     kwargs.setdefault("paste_fn", lambda text: pasted.append(text) or True)

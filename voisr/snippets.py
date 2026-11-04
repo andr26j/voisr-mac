@@ -13,6 +13,11 @@ _OUTER_PUNCTUATION = re.compile(r"^[\W_]+|[\W_]+$")
 MAX_TRIGGER_HINTS = 20      # the rest of the prompt is the Dictionary's
 MAX_TRIGGER_HINT_CHARS = 60
 MAX_TRIGGER_HINTS_TOTAL_CHARS = 250  # of the prompt's 600, so the Dictionary keeps room
+# Key thumps can pass the speech gate, and with triggers in the prompt Whisper
+# can answer them with one. Speech holds its level; a thump falls away from its
+# peak. 240 ms within 15 dB of the clip's peak: 0/250 made-up tap-then-holds
+# reach it, 826/840 say clips do. A clip held back pastes as plain dictation.
+MIN_SUSTAINED_SPEECH_MS = 240
 SHORT_TRIGGER_LETTERS = 6  # fewer, or a single word, is easy to say by accident
 # What Whisper tends to make of a stray noise on its own.
 _NOISE_PHRASES = {"thank you", "thanks", "thank you very much", "thanks for watching",
@@ -50,6 +55,14 @@ def find_snippet(raw: str, snippets) -> Snippet | None:
         if normalize_trigger(trigger) == spoken:
             return Snippet(trigger, text)
     return None
+
+
+def find_spoken_snippet(raw: str, snippets, span) -> Snippet | None:
+    """find_snippet, only with evidence of real speech from the gate's reading of
+    this clip, taken before it was trimmed. No reading is no evidence."""
+    if span is None or span.sustained_ms < MIN_SUSTAINED_SPEECH_MS:
+        return None
+    return find_snippet(raw, snippets)
 
 
 def trigger_hints(snippets) -> list[str]:

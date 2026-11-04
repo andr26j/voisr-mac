@@ -26,7 +26,7 @@ from voisr.recording_queue import (
     RecordingSession,
     SessionResult,
 )
-from voisr.snippets import (SnippetError, find_snippet, tidy_trigger, trigger_hints,
+from voisr.snippets import (SnippetError, find_spoken_snippet, tidy_trigger, trigger_hints,
                             trigger_warning, with_saved)
 from voisr.status_item import StatusItem
 from voisr.suggestions import (ACCEPTED, AUTO_ADDED, DISMISSED, PENDING, SuggestionStore,
@@ -2128,7 +2128,7 @@ class Api:
             fired = {}
             # Before clean(): a snippet matches what Whisper heard, and its text
             # is pasted as saved, with no cleanup or Dictionary changes.
-            snippet = find_snippet(raw, cfg.get("snippets"))
+            snippet = find_spoken_snippet(raw, cfg.get("snippets"), span)
             if snippet is not None:
                 text = snippet.text
             else:

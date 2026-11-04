@@ -174,11 +174,10 @@ def snippet_api(tmp_path, adapter, saved):
     return api
 
 
-def test_a_long_multi_line_snippet_lands_exactly_and_teaches_nothing(tmp_path, textedit, monkeypatch):
+def test_a_long_multi_line_snippet_lands_exactly_and_teaches_nothing(tmp_path, textedit):
     from voisr.ax_context import MacAXAdapter
     from voisr.pasteboard import AppKitPasteboard
 
-    monkeypatch.setattr("voisr.speech_gate.gate_wav", lambda wav: None)
     adapter = MacAXAdapter()
     if not adapter._hi.AXIsProcessTrusted():
         pytest.skip("this process has no Accessibility grant")
@@ -202,12 +201,11 @@ def test_a_long_multi_line_snippet_lands_exactly_and_teaches_nothing(tmp_path, t
     assert [i.payloads for i in after.items] == [i.payloads for i in clipboard_before.items]
 
 
-def test_a_snippet_in_a_real_password_field(tmp_path, monkeypatch):
+def test_a_snippet_in_a_real_password_field(tmp_path):
     """A hidden-answer dialog, whose focused field is a real secure one. What a
     hotkey does under Secure Input can't be tested here: no key is pressed."""
     from voisr.ax_context import MacAXAdapter, capture_focus
 
-    monkeypatch.setattr("voisr.speech_gate.gate_wav", lambda wav: None)
     adapter = MacAXAdapter()
     if not adapter._hi.AXIsProcessTrusted():
         pytest.skip("this process has no Accessibility grant")
