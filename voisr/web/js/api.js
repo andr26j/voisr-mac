@@ -14,7 +14,7 @@ window.Voisr = window.Voisr || {};
       { id: "a4", ts: now - 3600, text: "my email", words: 2, duration_s: 1, snippet: true },
       { id: "a3", ts: now - 90000, text: "Remember to book the trailer for Saturday morning.", words: 8, duration_s: 4 },
     ];
-    let mockCfg = { hotkey: "alt_r", paste: true, show_widget: true, device: ":0", pill_theme: "classic", pill_color: null, dictionary: { trademake: "TradeMate", "trade mate": "TradeMate" }, model: "small.en", launch_at_login: false, model_unload: "min5", use_screen_context: true, learn_from_edits: true, dictionary_auto_add: true };
+    let mockCfg = { hotkey: "alt_r", paste: true, show_widget: true, device: ":default", pill_theme: "classic", pill_color: null, dictionary: { trademake: "TradeMate", "trade mate": "TradeMate" }, model: "small.en", launch_at_login: false, model_unload: "min5", use_screen_context: true, learn_from_edits: true, dictionary_auto_add: true };
     // Preview only, to show the page's states. The rules for what may be saved
     // and what gets a warning are in voisr/snippets.py and are not repeated here.
     const SAMPLE_WARNING = "Sample warning: the real ones come from the app.";
