@@ -856,30 +856,51 @@ def test_fork_does_not_close_reused_fd_after_sidecar_close(tmp_path, monkeypatch
 @pytest.mark.filterwarnings(
     "ignore:This process .* is multi-threaded.*:DeprecationWarning"
 )
-def test_fork_does_not_inherit_sidecar_fd_before_tracking(tmp_path, monkeypatch):
+@pytest.mark.parametrize("pause_at", ["after_open", "before_tracking_sidecar",
+                                      "before_tracking_parent_dup"])
+def test_fork_does_not_inherit_sidecar_fd_before_tracking(tmp_path, monkeypatch, pause_at):
     store = HistoryStore(tmp_path / "h.jsonl")
     opened_fds = []
     opened = threading.Event()
     allow_tracking = threading.Event()
     fork_entered = threading.Event()
     allow_fork = threading.Event()
+    fork_finished = threading.Event()
     worker_done = threading.Event()
     errors = []
     original_track = history_module._track_lock_fd
+    original_open = history_module.os.open
     original_fork = history_module.os.fork
 
-    def pause_before_tracking(fd):
+    def pause_worker(fd):
         opened_fds.append(fd)
         opened.set()
         assert allow_tracking.wait(timeout=2)
+
+    def pause_before_tracking(fd):
+        is_sidecar = stat.S_ISREG(os.fstat(fd).st_mode)
+        if not opened_fds and is_sidecar == (pause_at == "before_tracking_sidecar"):
+            pause_worker(fd)
         original_track(fd)
+
+    def pause_after_open(*args, **kwargs):
+        fd = original_open(*args, **kwargs)
+        if threading.current_thread() is worker and not opened_fds:
+            pause_worker(fd)
+        return fd
 
     def pause_before_fork():
         fork_entered.set()
         assert allow_fork.wait(timeout=2)
-        return original_fork()
+        pid = original_fork()
+        if pid:
+            fork_finished.set()
+        return pid
 
-    monkeypatch.setattr(history_module, "_track_lock_fd", pause_before_tracking)
+    if pause_at == "after_open":
+        monkeypatch.setattr(history_module.os, "open", pause_after_open)
+    else:
+        monkeypatch.setattr(history_module, "_track_lock_fd", pause_before_tracking)
     monkeypatch.setattr(history_module.os, "fork", pause_before_fork)
 
     def add_item():
@@ -916,6 +937,9 @@ def test_fork_does_not_inherit_sidecar_fd_before_tracking(tmp_path, monkeypatch)
     assert fork_entered.wait(timeout=2)
     try:
         allow_fork.set()
+        # The worker is paused holding an untracked fd, which must hold the fork
+        # back. Letting it go at once would let the worker win the race under any bug.
+        fork_ran_during_gap = fork_finished.wait(timeout=0.2)
         allow_tracking.set()
         assert starter_done.wait(timeout=2)
         assert worker_done.wait(timeout=2)
@@ -923,6 +947,7 @@ def test_fork_does_not_inherit_sidecar_fd_before_tracking(tmp_path, monkeypatch)
         process.join(timeout=2)
         assert process.exitcode == 0
         assert not errors
+        assert not fork_ran_during_gap
     finally:
         allow_fork.set()
         allow_tracking.set()
