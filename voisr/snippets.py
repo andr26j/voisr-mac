@@ -22,7 +22,10 @@ HINT_CLIP_PER_CHAR_S = 0.1
 # peak. 240 ms within 15 dB of the clip's peak: 0/250 made-up tap-then-holds
 # reach it, 826/840 say clips do. A clip held back pastes as plain dictation.
 MIN_SUSTAINED_SPEECH_MS = 240
-_NO_SPACE_AFTER = "([{<\"'“‘/-"
+_SPACE_AFTER = ".,;!?)]}”’"
+# "To:" and "Email:" are labels; "mailto:" and "https:" run on. A lower-case word
+# could be either, and when in doubt there is no space.
+_CAPITALISED_LABEL = re.compile(r"(?:^|\s)[A-Z][\w-]*:$")
 _NO_SPACE_BEFORE = ",.;:!?)]}>”’"
 SHORT_TRIGGER_LETTERS = 6  # fewer, or a single word, is easy to say by accident
 # What Whisper tends to make of a stray noise on its own.
@@ -141,14 +144,15 @@ def with_saved(snippets: dict, old_trigger, trigger, text) -> dict:
 def needs_leading_space(focus, text: str) -> bool:
     """After words, a snippet needs a space. It can't be taken for granted, as in
     an empty field it could get an email address refused, so no space unless the
-    field was read at the caret and shows it's wanted. `focus`: a read just
-    before the paste, or None."""
+    field was read at the caret and shows a word or sentence has just ended.
+    `focus`: a read just before the paste, or None."""
     if (focus is None or focus.secure or not focus.readable or not focus.caret_known
-            or not focus.before_text or not text):
+            or not focus.before_text or not text
+            or text[0].isspace() or text[0] in _NO_SPACE_BEFORE):
         return False
     last = focus.before_text[-1]
-    return not (last.isspace() or last in _NO_SPACE_AFTER
-                or text[0].isspace() or text[0] in _NO_SPACE_BEFORE)
+    return last.isalnum() or last in _SPACE_AFTER or _CAPITALISED_LABEL.search(
+        focus.before_text) is not None
 
 
 def snippet_warnings(snippets: dict) -> dict:
