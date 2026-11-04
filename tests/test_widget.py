@@ -1,3 +1,4 @@
+import inspect
 import json
 import re
 import threading
@@ -842,13 +843,13 @@ def test_panel_holds_the_pill_and_its_shadow_around_the_same_centre():
     assert RecordingWidget.BOTTOM_MARGIN + RecordingWidget.HEIGHT / 2 == 98
 
 
-def test_panel_sits_on_the_screen_it_was_built_for():
-    from Foundation import NSMakeRect
-
+def test_panel_is_built_on_the_primary_display():
+    """It is placed once. mainScreen() could be a display that later goes away,
+    and its frame doesn't start at (0, 0)."""
     from voisr.ui import RecordingWidget
-    assert RecordingWidget._panel_origin(NSMakeRect(0, 0, 1440, 900)) == (596, 38)
-    # a display arranged to the left of, and lower than, the primary one
-    assert RecordingWidget._panel_origin(NSMakeRect(-1920, -200, 1920, 1080)) == (-1084, -162)
+    source = inspect.getsource(RecordingWidget._build)
+    assert "NSScreen.screens()[0].frame()" in source
+    assert "mainScreen" not in source
 
 
 class FakeWebview:

@@ -394,13 +394,6 @@ class RecordingWidget:
         self._feed_gen = 0  # main thread only; bumping it ends the running feed
         self._vis_gen = 0   # main thread only; a show cancels a pending panel fade
 
-    @classmethod
-    def _panel_origin(cls, frame) -> tuple[float, float]:
-        """Centred along the bottom of a screen. Window positions are global,
-        and only the primary display's frame starts at (0, 0)."""
-        return (frame.origin.x + (frame.size.width - cls.WIDTH) / 2,
-                frame.origin.y + cls.BOTTOM_MARGIN)
-
     def create(self) -> None:
         """Build the panel + webview on the main thread and preload the HTML.
         Safe to call from a worker thread (dispatches onto the main thread)."""
@@ -417,7 +410,11 @@ class RecordingWidget:
             from WebKit import WKWebView, WKWebViewConfiguration
             from Foundation import NSMakeRect, NSURL
 
-            x, y = self._panel_origin(NSScreen.mainScreen().frame())
+            # Always the primary display, whose frame starts at (0, 0). The
+            # panel is placed once, and another display can be unplugged.
+            frame = NSScreen.screens()[0].frame()
+            x = (frame.size.width - self.WIDTH) / 2
+            y = self.BOTTOM_MARGIN
             rect = NSMakeRect(x, y, self.WIDTH, self.HEIGHT)
 
             panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
