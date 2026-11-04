@@ -9,7 +9,9 @@ import wave
 import pytest
 
 from tests.test_context_api import make_api
+from voisr.snippets import trigger_hints, triggers_for_clip
 from voisr.speech_gate import analyze
+from voisr.ui import wav_seconds
 
 SECRET = "12 Home Street"
 SNIPPETS = {"my email": SECRET, "review prompt": "Please review"}
@@ -124,4 +126,51 @@ def test_the_gate_itself_is_unchanged_for_other_dictation(tmp_path):
     api, pasted = guard_api(tmp_path, tap_then_hold(), raw="Subs by someone.")
     dictate(api)
     assert pasted == ["Subs by someone."]
+    api.close()
+
+
+# ---- hints by clip length
+
+
+def test_only_triggers_a_clip_could_hold_are_hinted():
+    short, long_ = "my email", "the standard code review prompt for pull requests"
+    assert triggers_for_clip([short, long_], 1.0) == [short, long_]
+    assert triggers_for_clip([short, long_], 5.0) == [long_]
+    assert triggers_for_clip([short, long_], 30.0) == []
+    assert triggers_for_clip([short, long_], -1) == [], "unknown length: no hints"
+
+
+def prompts_for(tmp_path, monkeypatch, samples, replies):
+    sent = []
+    replies = iter(replies)
+
+    def routed(wav, model, prompt=None, server=None, unload="min5", cli_prompt=None):
+        sent.append((prompt, cli_prompt))
+        return next(replies), {"mode": "cli", "timings": {}}
+
+    monkeypatch.setattr("voisr.transcriber.transcribe_routed", routed)
+    from voisr.history import HistoryStore
+    from voisr.ui import Api
+    recorder = type("R", (ClipRecorder,), {"samples": samples})
+    pasted = []
+    api = Api(config_path=tmp_path / "config.json", history=HistoryStore(tmp_path / "history.jsonl"),
+              recorder_factory=recorder, clipboard_fn=lambda text: None,
+              paste_fn=lambda text: pasted.append(text) or True)
+    api.set_config({"snippets": SNIPPETS, "dictionary": {"tariq": "Tareq"}})
+    return api, sent, pasted
+
+
+def test_a_long_dictation_is_sent_no_triggers_on_either_prompt(tmp_path, monkeypatch):
+    api, sent, _ = prompts_for(tmp_path, monkeypatch, spoken(seconds=12.0), ["A long thought."])
+    dictate(api)
+    assert sent == [("Glossary: Tareq.", "Glossary: Tareq.")]
+    api.close()
+
+
+def test_a_short_clip_is_sent_them_on_both_prompts(tmp_path, monkeypatch):
+    api, sent, pasted = prompts_for(tmp_path, monkeypatch, spoken(), ["My email."])
+    dictate(api)
+    wanted = "Glossary: Tareq, my email, review prompt."
+    assert sent == [(wanted, wanted)] and pasted == [SECRET]
+    assert wav_seconds is not None
     api.close()

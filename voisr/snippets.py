@@ -13,6 +13,10 @@ _OUTER_PUNCTUATION = re.compile(r"^[\W_]+|[\W_]+$")
 MAX_TRIGGER_HINTS = 20      # the rest of the prompt is the Dictionary's
 MAX_TRIGGER_HINT_CHARS = 60
 MAX_TRIGGER_HINTS_TOTAL_CHARS = 250  # of the prompt's 600, so the Dictionary keeps room
+# Trimmed clips measured, say at 100 words a minute, the slowest tried: 2.1 s for
+# up to 19 characters, 4.2 s for 49. These allow about twice that.
+HINT_CLIP_BASE_S = 3.0
+HINT_CLIP_PER_CHAR_S = 0.1
 # Key thumps can pass the speech gate, and with triggers in the prompt Whisper
 # can answer them with one. Speech holds its level; a thump falls away from its
 # peak. 240 ms within 15 dB of the clip's peak: 0/250 made-up tap-then-holds
@@ -55,6 +59,13 @@ def find_snippet(raw: str, snippets) -> Snippet | None:
         if normalize_trigger(trigger) == spoken:
             return Snippet(trigger, text)
     return None
+
+
+def triggers_for_clip(hints, seconds: float) -> list[str]:
+    """The hints a clip of this length could be saying. Longer clips can't match
+    one, so ordinary dictation isn't biased. Unknown length (-1) gets none."""
+    return [trigger for trigger in hints
+            if 0 <= seconds <= HINT_CLIP_BASE_S + HINT_CLIP_PER_CHAR_S * len(trigger)]
 
 
 def find_spoken_snippet(raw: str, snippets, span) -> Snippet | None:

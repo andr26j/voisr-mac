@@ -26,8 +26,8 @@ from voisr.recording_queue import (
     RecordingSession,
     SessionResult,
 )
-from voisr.snippets import (SnippetError, find_spoken_snippet, tidy_trigger, trigger_hints,
-                            trigger_warning, with_saved)
+from voisr.snippets import (SnippetError, find_spoken_snippet, tidy_trigger,
+                            trigger_hints, trigger_warning, triggers_for_clip, with_saved)
 from voisr.status_item import StatusItem
 from voisr.suggestions import (ACCEPTED, AUTO_ADDED, DISMISSED, PENDING, SuggestionStore,
                                dictionary_allows, ready_to_auto_add)
@@ -1603,12 +1603,11 @@ class Api:
             clock=clock,
         )
 
-    def _default_transcribe(self, wav, cfg, terms=()):
+    def _default_transcribe(self, wav, cfg, terms=(), triggers=()):
         """Transcribe with the release-time model and dictionary prompt, plus
-        any terms read off the screen.
+        any terms read off the screen and snippet triggers this clip could be.
         Returns (text, info): see transcriber.transcribe_routed."""
         from voisr.transcriber import resolve_model, transcribe_routed
-        triggers = trigger_hints(cfg.get("snippets"))
         if self._warm is not None:
             self._warm.configure(self.get_config().get("model_unload", "min5"))
         return transcribe_routed(
@@ -1925,10 +1924,12 @@ class Api:
         except Exception as error:
             print(f"Voisr history: timings not recorded: {error}", flush=True)
 
-    def _transcribe_audio(self, wav, cfg, terms=()):
+    def _transcribe_audio(self, wav, cfg, terms=(), triggers=()):
         """(raw text, info) where info has the mode and any extra timings."""
         if self._transcribe_fn is not None:
             return self._transcribe_fn(wav), {"mode": None, "timings": {}}
+        if triggers:
+            return self._default_transcribe(wav, cfg, terms, triggers)
         return self._default_transcribe(wav, cfg, terms)
 
     def _session_terms(self, session, wav):
@@ -1950,15 +1951,17 @@ class Api:
         """Context terms may only ever help. A failure with them, or a
         transcript that recites them (screen words must not reach a paste or
         History that way), is redone without; a second failure is the real one."""
-        if not terms:
+        seconds = wav_seconds(wav)
+        triggers = triggers_for_clip(trigger_hints(cfg.get("snippets")), seconds)
+        if not terms and not triggers:
             return self._transcribe_audio(wav, cfg)
         try:
-            raw, info = self._transcribe_audio(wav, cfg, terms)
+            raw, info = self._transcribe_audio(wav, cfg, terms, triggers)
         except Exception as error:
             print(f"Voisr: transcription with context terms failed "
                   f"({error.__class__.__name__}); retrying without", flush=True)
             return self._transcribe_audio(wav, cfg)
-        if not prompt_echoed(raw, terms, wav_seconds(wav)):
+        if not prompt_echoed(raw, terms, seconds):
             return raw, info
         print("Voisr: transcript echoed the glossary; retrying without context terms",
               flush=True)
