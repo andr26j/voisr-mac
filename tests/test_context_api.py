@@ -68,8 +68,12 @@ def make_api(tmp_path, ax=None, capture_first=True, **kwargs):
               recorder_factory=FakeRecorder,
               clipboard_fn=lambda text: None,
               ax_adapter=ax, **kwargs)
-    if ax is not None and capture_first:
-        release_capture_first(api)
+    if ax is not None:
+        # run_windows alone runs a window: no thread can be part way through
+        # delivering one while a test reads the result
+        api._edit_watcher._autostart = False
+        if capture_first:
+            release_capture_first(api)
     return api
 
 
