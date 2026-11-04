@@ -1,7 +1,10 @@
+import builtins
 import json
+import sys
 
 import pytest
 
+from voisr import app
 from voisr import recorder as recorder_module
 from voisr.app import load_config
 from voisr.history import HistoryStore
@@ -112,3 +115,30 @@ def test_a_device_the_user_chose_is_kept(device, monkeypatch, tmp_path):
 
 def test_the_recorder_opens_exactly_the_device_it_is_given(monkeypatch, tmp_path):
     assert ffmpeg_input(Recorder(":0"), monkeypatch, tmp_path) == ":0"
+
+
+@pytest.mark.parametrize("saved, opened", [
+    (":MacBook Air Microphone", ":MacBook Air Microphone"),
+    (":1", ":1"),
+    (":0", ":default"),
+])
+def test_toggle_mode_opens_the_device_saved_in_the_config(
+        saved, opened, monkeypatch, tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"device": saved}))
+    commands = record_ffmpeg_commands(monkeypatch)
+    answers = iter(["", KeyboardInterrupt()])
+
+    def fake_input(_prompt):
+        answer = next(answers)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(builtins, "input", fake_input)
+    monkeypatch.setattr(sys, "argv", ["voisr", "--config", str(config)])
+
+    with pytest.raises(SystemExit):
+        app.main()
+
+    assert [input_of(command) for command in commands] == [opened]

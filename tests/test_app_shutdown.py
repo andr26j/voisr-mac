@@ -43,7 +43,7 @@ def test_toggle_ctrl_c_cancels_recorder_and_removes_temp_wav(monkeypatch):
     monkeypatch.setattr(builtins, "input", fake_input)
 
     with pytest.raises(KeyboardInterrupt):
-        app.toggle_mode({"device": ":0", "dictionary": {}, "paste": False})
+        app.toggle_mode({"device": ":default", "dictionary": {}, "paste": False})
 
     assert recorder.cancelled is True
     assert recorder.closed is True
@@ -61,7 +61,7 @@ def test_toggle_start_failure_cancels_recorder_and_removes_temp_wav(monkeypatch)
     monkeypatch.setattr(builtins, "input", lambda prompt: "")
 
     with pytest.raises(RuntimeError, match="microphone unavailable"):
-        app.toggle_mode({"device": ":0", "dictionary": {}, "paste": False})
+        app.toggle_mode({"device": ":default", "dictionary": {}, "paste": False})
 
     assert recorder.cancelled is True
     assert recorder.closed is True
