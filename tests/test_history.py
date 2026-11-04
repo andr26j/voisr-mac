@@ -691,12 +691,19 @@ def test_nested_mutation_lock_reuses_one_sidecar_fd(tmp_path, monkeypatch):
 
 def test_mutation_lock_closes_fd_when_unlock_fails(tmp_path, monkeypatch):
     store = HistoryStore(tmp_path / "h.jsonl")
+    opened = []
     closed = []
+    original_track = history_module._track_lock_fd
     original_close = history_module.os.close
     original_flock = history_module.fcntl.flock
 
+    def track_open(fd):
+        opened.append(fd)
+        original_track(fd)
+
     def track_close(fd):
-        closed.append(fd)
+        if fd in opened:  # not an fd from another store's finalizer
+            closed.append(fd)
         original_close(fd)
 
     def fail_unlock(fd, operation):
@@ -704,6 +711,7 @@ def test_mutation_lock_closes_fd_when_unlock_fails(tmp_path, monkeypatch):
             raise OSError("unlock failed")
         return original_flock(fd, operation)
 
+    monkeypatch.setattr(history_module, "_track_lock_fd", track_open)
     monkeypatch.setattr(history_module.os, "close", track_close)
     monkeypatch.setattr(history_module.fcntl, "flock", fail_unlock)
 
@@ -712,6 +720,7 @@ def test_mutation_lock_closes_fd_when_unlock_fails(tmp_path, monkeypatch):
             pass
 
     assert len(closed) == 2  # sidecar plus its duplicated parent-dir lease
+    assert sorted(closed) == sorted(opened)
 
 
 def test_store_path_stays_relative_while_writes_use_symlink_target(tmp_path,
