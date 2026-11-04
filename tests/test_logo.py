@@ -1,6 +1,7 @@
 """The Ribbon logo: the approved geometry, and the assets drawn from it."""
 import importlib.util
 import math
+import os
 import shutil
 import subprocess
 from functools import lru_cache
@@ -148,6 +149,30 @@ def test_the_old_orange_is_gone(size):
     for _count, (r, _g, b, a) in colours:
         if a == 255:
             assert r - b <= 6, f"warm pixel ({r}, {b})"
+
+
+def test_a_failed_icon_build_leaves_nothing_behind(tmp_path):
+    """The partial iconset used to stay in assets/, where `git add assets`
+    would pick up a folder of PNGs. Run against a stand-in renderer, because
+    the real one writes to the real assets."""
+    scripts = tmp_path / "scripts"
+    assets = tmp_path / "assets"
+    temp = tmp_path / "temp"
+    for folder in (scripts, assets, temp):
+        folder.mkdir()
+    shutil.copy(ROOT / "scripts" / "make_icon.sh", scripts / "make_icon.sh")
+    (scripts / "make_icon.py").write_text(
+        "import pathlib, sys\n"
+        "(pathlib.Path(sys.argv[1]) / 'icon_16x16.png').write_bytes(b'partial')\n"
+        "sys.exit(1)\n")
+
+    result = subprocess.run(["bash", str(scripts / "make_icon.sh")],
+                            capture_output=True, text=True,
+                            env={**os.environ, "TMPDIR": str(temp)})
+
+    assert result.returncode != 0
+    assert list(assets.iterdir()) == []
+    assert list(temp.iterdir()) == []
 
 
 def test_the_committed_logo_is_what_the_script_draws():

@@ -190,7 +190,7 @@ def main(iconset):
 
     icon(1024).save(ASSETS / "icon_1024.png", icc_profile=srgb)
     (ASSETS / "logo.svg").write_text(logo_svg())
-    print(f"wrote {iconset}, assets/icon_1024.png and assets/logo.svg")
+    print("wrote the iconset, assets/icon_1024.png and assets/logo.svg")
 
 
 if __name__ == "__main__":
