@@ -91,6 +91,8 @@ window.Voisr = window.Voisr || {};
       if (e.target.id === "palette") close();   // click the scrim to dismiss
     });
 
+    document.getElementById("commands-open").addEventListener("click", open);
+
     input.addEventListener("input", () => {
       filtered = match(input.value, commands);
       cursor = 0;

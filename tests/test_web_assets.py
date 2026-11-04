@@ -4,7 +4,7 @@ from pathlib import Path
 WEB = Path(__file__).resolve().parent.parent / "voisr" / "web"
 INDEX = WEB / "index.html"
 
-JS_FILES = ["js/api.js", "js/ui.js", "js/lists.js", "js/palette.js",
+JS_FILES = ["js/api.js", "js/ui.js", "js/lists.js", "js/wave.js", "js/palette.js",
             "js/meter.js", "js/dock-meter.js", "js/views/home.js", "js/views/history.js",
             "js/views/dictionary.js", "js/views/snippets.js", "js/views/settings.js", "js/main.js"]
 CSS_FILES = ["css/tokens.css", "css/base.css",
@@ -150,6 +150,21 @@ def test_no_unlisted_literal_colours_outside_tokens():
         found = LITERAL_COLOUR_RE.findall(stripped)
         unlisted = [c for c in found if c not in ALLOWED_LITERAL_COLOURS]
         assert unlisted == [], f"{rel} has unlisted literal colours: {unlisted}"
+
+
+def test_the_serif_is_bundled_and_never_fetched():
+    """Nothing leaves this Mac, and that includes a request for a font. The
+    design's canvas loads Instrument Serif from Google; the app must not."""
+    css = (WEB / "css" / "base.css").read_text()
+    for file in ("InstrumentSerif-Regular.ttf", "InstrumentSerif-Italic.ttf"):
+        assert f'url("../fonts/{file}")' in css, file
+        assert (WEB / "fonts" / file).stat().st_size > 0, file
+    # the OFL requires the licence to travel with the font
+    assert "SIL Open Font License" in (WEB / "fonts" / "OFL.txt").read_text()
+    for path in [*WEB.rglob("*.css"), *WEB.rglob("*.html")]:
+        text = re.sub(r"http://www\.w3\.org/\S+", "", path.read_text())
+        assert "http://" not in text and "https://" not in text, path
+        assert "googleapis" not in text and "gstatic" not in text, path
 
 
 def test_titlebar_inset_is_reserved():

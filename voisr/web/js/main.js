@@ -8,6 +8,7 @@ window.Voisr = window.Voisr || {};
   // stuck with a stale "entering" class or an orphaned listener
   let enteringTarget = null;
   let enteringController = null;
+  let currentView = null;
 
   /* One highlight glides behind the sidebar to the active item (180 ms,
      base.css) instead of each item painting its own. The first placement
@@ -26,7 +27,18 @@ window.Voisr = window.Voisr || {};
     }
   }
 
+  /* Settings sits at the bottom of the sidebar, so its offset changes with the
+     window's height. Drop .is-live so the highlight tracks the resize instead of
+     trailing it: glideTo switches the transition back on after placing it. */
+  window.addEventListener("resize", () => {
+    if (!currentView) return;
+    const glide = document.getElementById("nav-glide");
+    if (glide) glide.classList.remove("is-live");
+    glideTo(currentView);
+  });
+
   function show(view) {
+    currentView = view;
     document.querySelectorAll(".view").forEach((v) => { v.hidden = v.id !== `view-${view}`; });
     document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     glideTo(view);
