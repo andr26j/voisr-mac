@@ -1,3 +1,4 @@
+import collections
 import contextlib
 import fcntl
 import json
@@ -27,6 +28,7 @@ _PATH_LOCKS: weakref.WeakValueDictionary[str, threading.RLock] = (
 )
 _FORK_FD_GUARD = threading.Lock()
 _OPEN_LOCK_FDS: set[int] = set()
+_PENDING_CLOSE_FDS: collections.deque[int] = collections.deque()
 _MUTATION_STATES = threading.local()
 _FORK_EPOCH = 0
 
@@ -114,9 +116,36 @@ def _untrack_lock_fd(fd: int) -> None:
     _OPEN_LOCK_FDS.discard(fd)
 
 
+def _close_pending_fds() -> None:
+    """Close what finalizers handed over. The caller holds the fork guard."""
+    while _PENDING_CLOSE_FDS:
+        fd = _PENDING_CLOSE_FDS.popleft()
+        _untrack_lock_fd(fd)
+        # This caller is doing something else, and must not fail for this fd.
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+
+def _close_tracked_from_finalizer(fd: int) -> None:
+    """Close an fd without ever waiting for the fork guard.
+
+    A collection can finalize a store on any thread, including one that already
+    holds the guard, or while another thread that holds it needs this one. If
+    the guard is busy, the fd stays open and tracked, so a fork still closes it
+    in the child, and the guard's next user closes it.
+    """
+    _PENDING_CLOSE_FDS.append(fd)
+    if _FORK_FD_GUARD.acquire(blocking=False):
+        try:
+            _close_pending_fds()
+        finally:
+            _FORK_FD_GUARD.release()
+
+
 def _open_tracked(path, flags: int, mode: int | None = None, *, dir_fd=None) -> int:
     """Open and register an fd while forks are excluded from the gap."""
     with _FORK_FD_GUARD:
+        _close_pending_fds()
         if mode is None:
             fd = os.open(path, flags, dir_fd=dir_fd)
         else:
@@ -132,10 +161,12 @@ def _close_tracked(fd: int) -> None:
             _untrack_lock_fd(fd)
         finally:
             os.close(fd)
+        _close_pending_fds()
 
 
 def _dup_tracked(fd: int) -> int:
     with _FORK_FD_GUARD:
+        _close_pending_fds()
         duplicate = os.dup(fd)
         _track_lock_fd(duplicate)
         return duplicate
@@ -217,7 +248,8 @@ def _after_fork_parent() -> None:
 
 def _after_fork_child() -> None:
     global _PATH_LOCKS_GUARD, _PATH_LOCKS
-    global _FORK_FD_GUARD, _OPEN_LOCK_FDS, _MUTATION_STATES, _FORK_EPOCH
+    global _FORK_FD_GUARD, _OPEN_LOCK_FDS, _PENDING_CLOSE_FDS
+    global _MUTATION_STATES, _FORK_EPOCH
 
     for fd in tuple(_OPEN_LOCK_FDS):
         try:
@@ -227,6 +259,7 @@ def _after_fork_child() -> None:
     _PATH_LOCKS_GUARD = threading.Lock()
     _PATH_LOCKS = weakref.WeakValueDictionary()
     _OPEN_LOCK_FDS = set()
+    _PENDING_CLOSE_FDS = collections.deque()  # every one was tracked, so closed above
     _MUTATION_STATES = threading.local()
     _FORK_EPOCH += 1
     _FORK_FD_GUARD = threading.Lock()
@@ -261,8 +294,13 @@ class HistoryStore:
             raise
 
     def __del__(self):
+        # Nothing else can reach this store now, so _lifecycle_lock has no holder.
         try:
-            self.close()
+            self._ensure_current_process()
+            fd = self._parent_fd
+            self._parent_fd = None
+            if fd is not None:
+                _close_tracked_from_finalizer(fd)
         except (AttributeError, OSError):
             pass
 
