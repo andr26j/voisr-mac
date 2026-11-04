@@ -829,9 +829,21 @@ def test_fork_does_not_close_reused_fd_after_sidecar_close(tmp_path, monkeypatch
         assert process is None or not process.is_alive()
 
 
+@pytest.fixture
+def no_collection_during_test():
+    """A collection on the main thread runs the __del__ of stores left by
+    earlier tests, which waits on the fork guard. If this test's paused worker
+    holds that guard, the main thread can't release it until the wait times out."""
+    gc.collect()
+    gc.disable()
+    yield
+    gc.enable()
+
+
 @pytest.mark.filterwarnings(
     "ignore:This process .* is multi-threaded.*:DeprecationWarning"
 )
+@pytest.mark.usefixtures("no_collection_during_test")
 def test_fork_does_not_inherit_sidecar_fd_before_tracking(tmp_path, monkeypatch):
     store = HistoryStore(tmp_path / "h.jsonl")
     opened_fds = []
