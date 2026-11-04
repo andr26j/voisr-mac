@@ -1,18 +1,19 @@
 #!/bin/bash
-# Builds assets/Voisr.icns from the 1024px master rendered by make_icon.py
+# Builds assets/Voisr.icns, assets/icon_1024.png and assets/logo.svg.
+# make_icon.py draws every size itself; scaling one master with sips would lose
+# the different curve the small sizes use.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-./venv/bin/pip show pillow >/dev/null 2>&1 || ./venv/bin/pip install -q pillow
-./venv/bin/python scripts/make_icon.py
+PY=./venv/bin/python
+[ -x "$PY" ] || PY=python3
+"$PY" -c "import PIL" 2>/dev/null || "$PY" -m pip install -q pillow
 
-ICONSET=assets/Voisr.iconset
-rm -rf "$ICONSET" && mkdir -p "$ICONSET"
-for size in 16 32 128 256 512; do
-  sips -z $size $size assets/icon_1024.png --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
-  double=$((size * 2))
-  sips -z $double $double assets/icon_1024.png --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
-done
+# Outside the repo, so a failed build can't leave PNGs for `git add` to find.
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+ICONSET="$WORK/Voisr.iconset"
+mkdir "$ICONSET"
+"$PY" scripts/make_icon.py "$ICONSET"
 iconutil -c icns "$ICONSET" -o assets/Voisr.icns
-rm -rf "$ICONSET"
 echo "wrote assets/Voisr.icns"
