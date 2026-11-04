@@ -116,3 +116,74 @@ def test_a_clip_the_gate_refuses_is_not_transcribed(tmp_path, monkeypatch):
 
     rows = tool.score(recorded(tmp_path), boom, ["run"])
     assert all(r["raw"] == "" and r["fired"] is None for r in rows)
+
+
+# ---- silence and bad clips while recording
+
+
+def write_clip(path, data):
+    with wave.open(str(path), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(16000)
+        out.writeframes(data)
+
+
+class ScriptedRecorder:
+    """Writes the next clip of a script: "good", "zeros", "quiet" or "short"."""
+
+    def __init__(self, plan):
+        self.plan = list(plan)
+        self.errors = "ffmpeg said no"
+
+    def __call__(self):
+        return self
+
+    def start(self, path):
+        self.path = path
+
+    def stop(self):
+        kind = self.plan.pop(0) if self.plan else "good"
+        if kind == "good":
+            write_clip(self.path, b"\x10\x20" * 16000)
+        elif kind == "zeros":
+            write_clip(self.path, b"\x00\x00" * 16000)
+        elif kind == "quiet":  # room noise only, which a silent key clip can be
+            write_clip(self.path, b"\x01\x00\xff\xff" * 8000)
+        elif kind == "short":
+            write_clip(self.path, b"")
+        return self.errors
+
+    def close(self):
+        pass
+
+
+def run_record(tmp_path, recorder):
+    asked = []
+    tool.record(tmp_path, ["my email"], recorder, ask=lambda prompt: asked.append(prompt) or "",
+                key="k", running=lambda: False)
+    return asked
+
+
+def test_silence_from_the_first_clip_stops_at_once_and_says_why(tmp_path):
+    asked = []
+    with pytest.raises(SystemExit) as stop:
+        tool.record(tmp_path, ["my email"], ScriptedRecorder(["zeros"]),
+                    ask=lambda prompt: asked.append(prompt) or "", key="k", running=lambda: False)
+    said = str(stop.value)
+    assert "silence" in said and "microphone access" in said and "Terminal app" in said
+    assert "Privacy & Security" in said and "tccutil" not in said
+    assert len(asked) == 2, "no more clips asked for"
+    assert [p for p in tmp_path.iterdir() if p.suffix in (".wav", ".txt")] == []
+
+
+def test_silence_on_a_later_clip_stops_too(tmp_path):
+    with pytest.raises(SystemExit, match="silence"):
+        run_record(tmp_path, ScriptedRecorder(["good", "good", "zeros"]))
+    assert sorted(p.stem for p in tmp_path.glob("*.txt")) == ["hotkey-01", "trigger-01"]
+
+
+def test_a_quiet_clip_is_not_silence(tmp_path):
+    plan = ["good"] * 10 + ["quiet"] * 5
+    run_record(tmp_path, ScriptedRecorder(plan))
+    assert len(list(tmp_path.glob("silent-*.wav"))) == 5

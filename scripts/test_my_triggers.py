@@ -39,6 +39,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path[:0] = [str(ROOT), str(ROOT / "scripts")]
 
 from bench_triggers import SCREEN, AppPath, gate_and_trim  # noqa: E402
+from voisr import speech_gate  # noqa: E402
 from voisr.app import load_config  # noqa: E402
 from voisr.recorder import Recorder  # noqa: E402
 from voisr.ui import HOTKEY_OPTIONS  # noqa: E402
@@ -54,6 +55,10 @@ INSTALLED_CONFIG = Path.home() / "Library/Application Support/Voisr/config.json"
 APP_PROCESS = "Applications/Voisr.app/Contents/MacOS/Voisr"
 QUIT_COMMAND = f'pkill -TERM -f "{APP_PROCESS}"'
 REOPEN_COMMAND = "open ~/Applications/Voisr.app"
+SILENCE_MESSAGE = (
+    "macOS is giving this app silence: that clip was all zeros, so it needs microphone "
+    "access.\nRun this from the Mac's Terminal app, not a terminal inside another app, and "
+    "check System Settings → Privacy & Security → Microphone.")
 
 
 def script(triggers=TRIGGERS, others=OTHERS):
@@ -114,6 +119,10 @@ def record(folder: Path, triggers, recorder_factory=Recorder, ask=input, key=Non
             error = recorder.stop()
             if not wav.exists() or wav.stat().st_size < 1000:
                 raise SystemExit(f"no audio recorded (microphone access?) {error.strip()[:200]}")
+            span = speech_gate.gate_wav(wav)
+            if span is not None and span.verdict == "all_zeros":
+                wav.unlink()
+                raise SystemExit(SILENCE_MESSAGE)
             (folder / f"{name}.txt").write_text(phrase + "\n")
     finally:
         recorder.close()
