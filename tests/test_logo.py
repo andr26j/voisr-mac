@@ -2,6 +2,7 @@
 import importlib.util
 import math
 import os
+import re
 import shutil
 import subprocess
 from functools import lru_cache
@@ -150,6 +151,37 @@ def test_the_old_orange_is_gone(size):
     for _count, (r, _g, b, a) in colours:
         if a == 255:
             assert r - b <= 6, f"warm pixel ({r}, {b})"
+
+
+def test_the_sidebar_mark_is_the_small_ribbon_on_the_approved_tile():
+    """The mark is 26 px, so its glyph takes the small curve. Its wave is
+    written out in the markup, and the JS tests hold logo-wave.js to that same
+    path, so this ties the moving mark to the geometry too."""
+    web = ROOT / "voisr" / "web"
+    html = (web / "index.html").read_text()
+    mark = re.search(r'<span class="brand-mark".*?</span>', html, re.S).group(0)
+    assert f'stroke-width="{logo_wave.SMALL.stroke:g}"' in mark
+    assert 'stroke-linecap="round"' in mark
+
+    d = re.search(r'id="brand-wave" d="([^"]+)"', mark).group(1)
+    drawn = [(float(x), float(y)) for x, y in re.findall(r"[ML]([\d.]+) ([\d.]+)", d)]
+    assert len(drawn) == 45
+    for (x, y), (want_x, want_y) in zip(drawn, logo_wave.wave_points(logo_wave.SMALL, samples=44)):
+        assert x == pytest.approx(want_x, abs=0.006)
+        assert y == pytest.approx(want_y, abs=0.006)
+
+    css = (web / "css" / "base.css").read_text()
+    rule = re.search(r"\.brand-mark \{(.*?)\}", css, re.S).group(1)
+    width = re.search(r"width: (\d+)px", rule).group(1)
+    assert logo_wave.style_for(int(width) * logo_wave.GLYPH_SCALE) is logo_wave.SMALL
+    assert f"border-radius: {logo_wave.TILE_RADIUS:.0%}" in rule
+    assert f"linear-gradient({logo_wave.TILE_ANGLE_DEG}deg" in rule
+    assert f"width: {logo_wave.GLYPH_SCALE:.0%}; height: {logo_wave.GLYPH_SCALE:.0%}" in css
+
+    tokens = (web / "css" / "tokens.css").read_text()
+    assert f"--tile-from: {logo_wave.TILE_START};" in tokens
+    assert f"--tile-to: {logo_wave.TILE_END};" in tokens
+    assert f"--hero-wave: {logo_wave.WAVE_COLOUR};" in tokens
 
 
 def test_a_failed_icon_build_leaves_nothing_behind(tmp_path):
