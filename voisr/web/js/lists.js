@@ -265,13 +265,13 @@ window.Voisr.lists = (function () {
     const still = reduced();
     const before = still ? null : measureGroups(container, deleted);
     const { fresh, enteredRows, pushed } = applyGroups(container, groups, opts);
-    if (before) playGroups(container, before, pushed);
+    fadeAway(pushed);
+    if (before) playGroups(container, before);
     for (const group of fresh) enter(group, "group");
     for (const [row, kind, inFreshGroup] of enteredRows) {
       if (!inFreshGroup) enter(row, kind);
       else if (kind === "landed") wash(row);
     }
-    fadeAway(pushed);
   }
 
   const rect = (node) => node.getBoundingClientRect();
@@ -298,10 +298,17 @@ window.Voisr.lists = (function () {
      nothing slides over anything. height is the one layout property here, as
      with an accordion: a transform would leave the card's edge behind, with the
      next day's label on top of it. Only a day arriving or leaving moves the days
-     below by transform. A pushed row doesn't count towards its card's height,
+     below by transform. A row fading out doesn't count towards its card's height,
      since it is on its way out. All measured first: an animation started here
-     would change what the next read sees. */
-  function playGroups(container, before, pushed) {
+     would change what the next read sees, and so would one still running from
+     the last update, which is why those stop before anything is read. Each card
+     starts from the height measured on screen, so nothing jumps. */
+  function playGroups(container, before) {
+    const lists = keyed(container).map(listOf);
+    for (const list of lists) {
+      if (list._resize) list._resize.cancel();
+      list._resize = null;
+    }
     const plan = [];
     let resizing = 0;  // how far the lists above will still move this group
     for (const group of keyed(container)) {
@@ -309,7 +316,7 @@ window.Voisr.lists = (function () {
       if (!was) continue;
       const list = listOf(group);
       const box = rect(list);
-      const gone = pushed.filter((row) => row.parent === list || row.parentElement === list)
+      const gone = Array.from(list.children).filter((row) => row.classList.contains("is-leaving"))
         .reduce((sum, row) => sum + (rect(row).height || 0), 0);
       const height = (box.height || 0) - gone;
       plan.push({
@@ -327,8 +334,8 @@ window.Voisr.lists = (function () {
                       { duration: MOVE_MS, easing: EASE });
       }
       if (Math.abs(to - from) > 0.5 && canAnimate(list)) {
-        list.animate([{ height: `${from}px` }, { height: `${to}px` }],
-                     { duration: MOVE_MS, easing: EASE });
+        list._resize = list.animate([{ height: `${from}px` }, { height: `${to}px` }],
+                                    { duration: MOVE_MS, easing: EASE });
       }
       for (const [row, rowDy] of rows) {
         if (Math.abs(rowDy) > 0.5 && canAnimate(row)) {

@@ -276,6 +276,48 @@ test("a card grows to fit its rows, and the day below moves with it, not over it
   assert.ok(!s.log.some((e) => e.node === today.querySelector(".date-row")), "a label never slides on its own");
 });
 
+test("a second update stops the card's running resize first, so it aims at the real height", async () => {
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a"] }), {});
+  const list = s.container.children[0].querySelector(".item-list");
+  // the height a resize shows while it runs, and the natural one once it's stopped
+  let cancelled = 0, running = false;
+  const animate = list.animate;
+  list.animate = (frames, opts) => {
+    const anim = animate(frames, opts);
+    running = true;
+    anim.cancel = () => { cancelled += 1; running = false; };
+    return anim;
+  };
+  sized(list, () => (running ? 70 : list.children.length * 50));
+
+  await s.L.syncGroups(s.container, s.groups({ Today: ["b", "a"] }), { animate: true });
+  await s.L.syncGroups(s.container, s.groups({ Today: ["c", "b", "a"] }), { animate: true });
+
+  assert.equal(cancelled, 1);
+  const resizes = s.log.filter((e) => e.node === list).map((e) => e.frames);
+  assert.deepEqual(resizes.at(-1), [{ height: "70px" }, { height: "150px" }],
+    "from where it stood on screen, to the true height");
+});
+
+test("a row still fading from the last update doesn't count towards the card's height", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const s = groupsSetup();
+  await s.L.syncGroups(s.container, s.groups({ Today: ["a", "b"] }), {});
+  const list = s.container.children[0].querySelector(".item-list");
+  const first = list.children[1];
+  sized(list, () => list.children.length * 50);
+  sized(first, () => 50);
+  await s.L.syncGroups(s.container, s.groups({ Today: ["n", "a"] }),
+    { animate: true, stillExists: (k) => k === "b", wasKnown: () => false });
+  assert.equal(first.parent, list, "still fading");
+  await s.L.syncGroups(s.container, s.groups({ Today: ["m", "n", "a"] }),
+    { animate: true, stillExists: (k) => k === "b", wasKnown: () => false });
+  const ends = s.log.filter((e) => e.node === list).map((e) => e.frames[1].height);
+  assert.ok(!ends.includes("200px"), `three real rows, not four: ${ends}`);
+  finishTimers(t);
+});
+
 test("a row slides within its card, whatever the card above is doing", async () => {
   const s = groupsSetup();
   await s.L.syncGroups(s.container, s.groups({ Today: ["a"] }), {});

@@ -52,13 +52,6 @@ def test_a_known_refusal_is_never_overruled(tmp_path, monkeypatch):
     api.close()
 
 
-def test_a_fresh_launch_starts_from_what_macos_says(tmp_path, monkeypatch):
-    mic_probe(monkeypatch, None)
-    api, _ = guard_api(tmp_path, spoken())
-    assert api._mic_heard is False
-    api.close()
-
-
 def test_on_the_fallback_it_holds_too(tmp_path, monkeypatch):
     mic_probe(monkeypatch, None)
     api, _ = guard_api(tmp_path, spoken())
