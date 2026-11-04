@@ -218,6 +218,16 @@ def test_the_committed_png_is_what_the_script_draws():
         assert committed.info.get("icc_profile"), "unlabelled colour can shift"
 
 
+def test_the_colour_profile_carries_no_build_time():
+    """createProfile stamps the time into bytes 24-36, so without this every
+    build shows the PNG as changed in git when not one pixel has."""
+    from PIL import Image
+    profile = _make_icon().srgb_profile()
+    assert profile[24:36] == bytes(12)
+    with Image.open(ASSETS / "icon_1024.png") as committed:
+        assert committed.info["icc_profile"] == profile
+
+
 def test_the_committed_icns_is_what_the_script_draws(tmp_path):
     """This is the file the installer copies into the app, so a change to the
     geometry that forgot to rebuild it would ship the old logo."""

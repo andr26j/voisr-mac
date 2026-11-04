@@ -173,8 +173,17 @@ def logo_svg():
 """
 
 
+def srgb_profile():
+    """The sRGB profile to embed, without the creation time in its header,
+    which would make every build rewrite the PNG with no visible change."""
+    profile = bytearray(
+        ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+    profile[24:36] = bytes(12)
+    return bytes(profile)
+
+
 def main(iconset):
-    srgb = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    srgb = srgb_profile()
     iconset = Path(iconset)
     icons = {}
 
