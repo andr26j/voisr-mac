@@ -151,3 +151,97 @@ def test_capture_paste_verify_edit_suggestion(tmp_path, textedit, monkeypatch):
     # back to what it was
     after = AppKitPasteboard().snapshot()
     assert [i.payloads for i in after.items] == [i.payloads for i in clipboard_before.items]
+
+
+def dictate_snippet(api):
+    api.start_recording(prewarm=False)
+    api.prewarm_now()
+    api._focus.worker.submit(lambda: None).result(timeout=5)
+    return api.stop_recording(paste=True)
+
+
+def snippet_api(tmp_path, adapter, saved):
+    from voisr.history import HistoryStore
+    from voisr.inject import paste_at_cursor, prepare_paste_controller
+    from voisr.ui import Api
+    from tests.test_snippets_guard import ClipRecorder, spoken
+
+    prepare_paste_controller()
+    api = Api(config_path=tmp_path / "config.json",
+              history=HistoryStore(tmp_path / "history.jsonl"),
+              recorder_factory=type("R", (ClipRecorder,), {"samples": spoken()}),
+              ax_adapter=adapter,
+              transcribe_fn=lambda wav: "My email.", paste_fn=paste_at_cursor)
+    assert "error" not in api.set_config({"snippets": {"my email": saved}})
+    return api
+
+
+def test_a_long_multi_line_snippet_lands_exactly_and_teaches_nothing(tmp_path, textedit):
+    from voisr.ax_context import MacAXAdapter
+    from voisr.pasteboard import AppKitPasteboard
+
+    adapter = MacAXAdapter()
+    if not adapter._hi.AXIsProcessTrusted():
+        pytest.skip("this process has no Accessibility grant")
+    wait_focused(adapter)
+    saved = "Please review:\n\n  - um, the diff\n  - the tests\n\n" + "Keep it short. " * 200 + "\n"
+    clipboard_before = AppKitPasteboard().snapshot()
+    api = snippet_api(tmp_path, adapter, saved)
+    try:
+        out = dictate_snippet(api)
+        print("delivery:", out.get("delivery"), api.get_history()[0].get("timings_ms"))
+        assert out["delivery"] == "verified", out
+        assert out["pasted"] is True and "manual_paste" not in out
+        assert saved in adapter.attribute(wait_focused(adapter), "AXValue", 1.0)
+        assert api._edit_watcher._windows == []
+        item = api.get_history()[0]
+        assert item["text"] == "my email" and item["snippet"] is True
+        assert "Keep it short" not in (tmp_path / "history.jsonl").read_text()
+    finally:
+        api.close()
+    after = AppKitPasteboard().snapshot()
+    assert [i.payloads for i in after.items] == [i.payloads for i in clipboard_before.items]
+
+
+def test_a_snippet_in_a_real_password_field(tmp_path):
+    """A hidden-answer dialog, whose focused field is a real secure one. What a
+    hotkey does under Secure Input can't be tested here: no key is pressed."""
+    from voisr.ax_context import MacAXAdapter, capture_focus
+
+    adapter = MacAXAdapter()
+    if not adapter._hi.AXIsProcessTrusted():
+        pytest.skip("this process has no Accessibility grant")
+    dialog = subprocess.Popen(
+        ["osascript", "-e", "tell me to activate", "-e",
+         f'display dialog "{DOC_MARK}" default answer "" with hidden answer giving up after 15'],
+        stdout=subprocess.PIPE, text=True)
+    api = None
+    try:
+        end = time.monotonic() + 6
+        while True:
+            spin_run_loop()
+            focus = capture_focus(adapter, budget_s=0.5)
+            if focus.secure:
+                break
+            if time.monotonic() > end:
+                pytest.skip(f"the dialog's field never took focus: {focus.reason}")
+        saved = "not-a-real-password-123"
+        api = snippet_api(tmp_path, adapter, saved)
+        out = dictate_snippet(api)
+        print("result:", {k: out.get(k) for k in ("delivery", "pasted", "copied", "manual_paste")})
+        item = api.get_history()[0]
+        print("row:", {k: v for k, v in item.items() if k != "timings_ms"})
+        assert out["delivery"] == "skipped" and "manual_paste" not in out
+        assert item["delivery_reason"] == "secure" and "app" not in item
+        assert item["text"] == "my email"
+        assert saved not in (tmp_path / "history.jsonl").read_text()
+        assert api._edit_watcher._windows == []
+        osa('tell application "System Events" to key code 36')  # Return: OK
+        answer = dialog.communicate(timeout=10)[0]
+        print("dialog got the text:", saved in answer)
+        assert f"text returned:{saved}" in answer
+    finally:
+        if api is not None:
+            api.close()
+        if dialog.poll() is None:
+            dialog.terminate()

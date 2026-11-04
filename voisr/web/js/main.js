@@ -68,6 +68,7 @@ window.Voisr = window.Voisr || {};
     if (view === "home") V.views.home.render({ entering: true });
     if (view === "history") V.views.history.render();
     if (view === "dictionary") V.views.dictionary.render();
+    if (view === "snippets") V.views.snippets.render();
     if (view === "settings") V.views.settings.render();
   }
 
@@ -173,6 +174,7 @@ window.Voisr = window.Voisr || {};
     });
     V.views.history.initKeys();
     V.views.dictionary.initSearch();
+    V.views.snippets.init();
     V.views.settings.init();
     V.palette.init();
 

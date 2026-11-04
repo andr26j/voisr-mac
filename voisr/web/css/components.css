@@ -71,7 +71,7 @@
 
 .field label { font-size: 12px; font-weight: 600; color: var(--muted); }
 
-.field input {
+.field input, .field textarea {
   font: inherit;
   color: var(--ink);
   background: var(--bg);
@@ -81,7 +81,9 @@
   height: 44px;
 }
 
-.field input:focus { outline: 2px solid var(--ring); outline-offset: -1px; }
+.field textarea { height: auto; padding: 10px 12px; resize: vertical; }
+
+.field input:focus, .field textarea:focus { outline: 2px solid var(--ring); outline-offset: -1px; }
 
 .btn-primary {
   height: 44px;

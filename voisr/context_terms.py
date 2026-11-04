@@ -175,3 +175,29 @@ def prompt_echoed(raw: str, terms, seconds: float | None = None) -> bool:
         if re.search(run, raw, re.IGNORECASE):
             return True
     return seconds is not None and _mostly_terms_unsupported(raw, terms, seconds)
+
+
+def triggers_recited(raw: str, triggers, other_terms=()) -> bool:
+    """Is this the prompt's list of snippet triggers, not speech? The words must
+    be wholly used up by two or more entries, at least one a trigger, with or
+    without punctuation between them."""
+    def words_of(text: str) -> tuple[str, ...]:
+        words = (word.strip(_STRIP).casefold() for word in text.split())
+        return tuple(word for word in words if word)
+
+    wanted = {words_of(trigger) for trigger in triggers}
+    entries = wanted | {words_of(term) for term in other_terms}
+    entries.discard(())
+    words = words_of(raw)
+    if words[:1] == ("glossary",):
+        words = words[1:]
+    # for each position, what the ways of reaching it have used: (entries so far
+    # capped at 2, whether one was a trigger)
+    reached = [set() for _ in range(len(words) + 1)]
+    reached[0].add((0, False))
+    for at, states in enumerate(reached):
+        for entry in entries:
+            if states and words[at:at + len(entry)] == entry:
+                reached[at + len(entry)] |= {
+                    (min(count + 1, 2), used or entry in wanted) for count, used in states}
+    return (2, True) in reached[len(words)]
