@@ -5,6 +5,8 @@ import math
 import random
 import wave
 
+import pytest
+
 from voisr import speech_gate
 from voisr.speech_gate import (
     SpeechSpan, analyze, block_dbfs, gate_wav, trim_wav)
@@ -32,6 +34,9 @@ def test_thresholds_match_the_spec():
     assert speech_gate.PAD_BLOCKS == 2
     assert speech_gate.MIN_SPEECH_MS == 200
     assert speech_gate.SPEECH_MARGIN_DB == 3.0
+    assert speech_gate.MIN_RUN_MS == 360
+    assert speech_gate.GATE_SUSTAINED_MS == 160
+    assert speech_gate.ENOUGH_SPEECH_MS == 1500
 
 
 def test_block_dbfs_full_scale_and_silence():
@@ -116,6 +121,91 @@ def test_steady_loud_sound_is_accepted_and_kept_whole():
     span = analyze(pcm(noise(1, 2000)))
     assert span.verdict == "speech"
     assert (span.start, span.end) == (0, R)
+
+
+# speech, longest run and sustained ms from the owner's own "Voisr audio:" rows,
+# Right Option on a MacBook Air, 2026-11-04. Real keys and a real voice, but only
+# 17 clips, one room and normal loudness: a soft voice is unmeasured.
+REAL_SILENT = [
+    (200, 80, 40), (320, 80, 0), (800, 320, 0),  # plain holds
+    (160, 40, 0), (680, 120, 0),
+    (720, 240, 80), (560, 240, 120), (520, 240, 120),  # tap-then-holds
+    (320, 200, 120), (600, 200, 80), (840, 320, 120),
+]
+REAL_SPEECH = [
+    (480, 360, 360), (680, 560, 320), (960, 880, 200), (680, 600, 200),  # yes no okay stop
+    (720, 440, 160),  # it
+    (4640, 2080, 560),  # a sentence
+]
+
+
+@pytest.mark.parametrize("reading", REAL_SILENT)
+def test_real_silent_presses_are_not_speech(reading):
+    assert not speech_gate.heard_speech(*reading)
+
+
+def test_a_silent_hands_free_start_and_stop_is_not_speech():
+    # an estimate, not a row: six key events at the rate four reached in real rows
+    assert not speech_gate.heard_speech(1260, 320, 120)
+
+
+@pytest.mark.parametrize("reading", REAL_SPEECH)
+def test_real_short_words_and_a_sentence_are_speech(reading):
+    assert speech_gate.heard_speech(*reading)
+
+
+@pytest.mark.parametrize("reading", [(1500, 200, 0), (240, 40, 160), (360, 360, 0)])
+def test_any_one_kind_of_evidence_is_enough(reading):
+    assert speech_gate.heard_speech(*reading)
+
+
+def blocks_at(levels):
+    """One 40 ms block of a tone at each level, in dBFS (a tone's RMS is its peak
+    less 3 dB). Made up, to give analyze the shape of a real row."""
+    out = []
+    for level in levels:
+        amp = 32768 * 10 ** ((level + 3.01) / 20)
+        out.extend(int(amp * math.sin(2 * math.pi * 400 * i / R)) for i in range(BLOCK))
+    return out
+
+
+ROOM = [-62.0] * 8
+THUMPS = [-30.0, -40.0, -50.0, -55.0, -58.0, -59.0]  # falls away fast
+
+
+def test_a_merged_thump_like_a_real_tap_then_hold_is_rejected():
+    # the shape of a real row: a run of 240 ms, more than the old 200 ms total
+    span = analyze(pcm(blocks_at(ROOM + THUMPS + ROOM * 3 + THUMPS[:2] + ROOM)))
+    assert span.verdict == "no_speech"
+    assert span.longest_run_ms == 240 and span.speech_ms == 320
+    assert span.sustained_ms < speech_gate.GATE_SUSTAINED_MS
+
+
+def test_a_short_word_passes_on_a_steady_stretch_alone():
+    # no longer than a real thump's run, but its level holds
+    span = analyze(pcm(blocks_at(ROOM + [-30.0] * 5 + ROOM)))
+    assert span.verdict == "speech"
+    assert span.longest_run_ms == 200 and span.sustained_ms == 200
+
+
+def test_a_word_with_an_uneven_level_passes_on_its_run():
+    uneven = [-20.0, -32.0, -44.0, -32.0, -20.0, -32.0, -44.0, -32.0, -20.0, -32.0]
+    span = analyze(pcm(blocks_at(ROOM + uneven + ROOM)))
+    assert span.verdict == "speech"
+    assert span.longest_run_ms == 400 and span.sustained_ms < speech_gate.GATE_SUSTAINED_MS
+
+
+def test_long_choppy_speech_passes_on_its_total():
+    choppy = ([-30.0, -48.0] + [-62.0] * 3) * 19
+    span = analyze(pcm(blocks_at(ROOM + choppy + ROOM)))
+    assert span.verdict == "speech"
+    assert span.speech_ms >= 1500 and span.longest_run_ms < speech_gate.MIN_RUN_MS
+
+
+def test_a_rejected_clip_still_reports_its_sustained_run():
+    span = analyze(pcm(blocks_at(ROOM + [-30.0] * 4 + ROOM)))
+    assert span.verdict == "no_speech"
+    assert span.sustained_ms == 160 and span.speech_ms == 160
 
 
 def test_longest_run_counts_only_unbroken_blocks():

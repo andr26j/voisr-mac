@@ -130,6 +130,30 @@ def test_a_rejected_clip_logs_its_reading_too(tmp_path, capsys):
     assert audio_rows(capsys)[0].startswith("Voisr audio: clip 1.00 s, no_speech, ")
 
 
+def test_a_too_short_clip_logs_its_length(tmp_path, capsys):
+    api, _ = make_api(tmp_path, tone(0.1, 3000))
+    res = dictate(api)
+    assert "too short" in res["error"]
+    assert audio_rows(capsys) == ["Voisr audio: clip 0.10 s, too short"]
+
+
+def test_a_missing_recording_is_logged(tmp_path, capsys):
+    class NoFile:
+        def start(self, path):
+            pass
+
+        def stop(self):
+            return ""
+
+        def cancel(self):
+            pass
+
+    api, _ = make_api(tmp_path, [])
+    api._recordings._recorder_factory = NoFile
+    dictate(api)
+    assert "Voisr audio: no usable recording" in capsys.readouterr().out
+
+
 def test_a_clip_the_gate_cannot_read_is_logged_as_skipped(tmp_path, capsys):
     api, _ = make_api(tmp_path, tone(1.0, 3000), width=1)
     dictate(api)

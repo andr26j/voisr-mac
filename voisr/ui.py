@@ -2116,17 +2116,20 @@ class Api:
         duration = max((session.released_at - session.started_at), 0.1)
         # Some audio but too little is a tap, not a mic fault. No audio at
         # all still falls through to the permission message below.
-        if 0 < wav_seconds(wav) < MIN_SPEECH_S:
+        seconds = wav_seconds(wav)
+        if 0 < seconds < MIN_SPEECH_S:
+            print(f"Voisr audio: clip {seconds:.2f} s, too short", flush=True)
             return SessionResult.failure(
                 session.sequence, "audio",
                 "too short — hold the key while you speak")
         if not wav.exists() or wav.stat().st_size < 1000:
+            print("Voisr audio: no usable recording", flush=True)
             detail = session.capture_stderr.strip()[:120]
             return SessionResult.failure(
                 session.sequence, "audio",
                 f"recording failed (mic permission?) {detail}".rstrip())
         span = speech_gate.gate_wav(wav)  # None: unreadable, skip the gate
-        print(f"Voisr audio: {speech_gate.describe(span, wav_seconds(wav))}", flush=True)
+        print(f"Voisr audio: {speech_gate.describe(span, seconds)}", flush=True)
         if span is not None:
             if span.verdict == "all_zeros":
                 return SessionResult.failure(
