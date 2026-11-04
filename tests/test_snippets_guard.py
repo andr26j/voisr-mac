@@ -183,7 +183,7 @@ def test_no_gate_reading_means_no_evidence(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("seed", range(8))
-def test_a_silent_tap_then_hold_never_reaches_whisper(tmp_path, seed):
+def test_most_made_up_tap_then_holds_stop_at_the_gate(tmp_path, seed):
     heard = []
     api, pasted = guard_api(tmp_path, tap_then_hold(seed))
     api._transcribe_fn = lambda wav: heard.append(wav) or "Subs by someone."
