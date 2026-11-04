@@ -753,6 +753,7 @@ def test_fork_does_not_close_reused_fd_after_sidecar_close(tmp_path, monkeypatch
     allow_close = threading.Event()
     fork_entered = threading.Event()
     allow_fork = threading.Event()
+    fork_finished = threading.Event()
     worker_done = threading.Event()
     errors = []
     original_track = history_module._track_lock_fd
@@ -782,7 +783,10 @@ def test_fork_does_not_close_reused_fd_after_sidecar_close(tmp_path, monkeypatch
     def pause_before_fork():
         fork_entered.set()
         assert allow_fork.wait(timeout=2)
-        return original_fork()
+        pid = original_fork()
+        if pid:
+            fork_finished.set()
+        return pid
 
     monkeypatch.setattr(history_module, "_track_lock_fd", track_sidecar)
     monkeypatch.setattr(history_module.os, "close", pause_after_close)
@@ -823,6 +827,9 @@ def test_fork_does_not_close_reused_fd_after_sidecar_close(tmp_path, monkeypatch
     assert fork_entered.wait(timeout=2)
     try:
         allow_fork.set()
+        # The worker is paused inside os.close, which must hold the fork back.
+        # Letting it go at once would let the worker win the race under any bug.
+        fork_ran_during_close = fork_finished.wait(timeout=0.2)
         allow_close.set()
         assert starter_done.wait(timeout=2)
         assert worker_done.wait(timeout=2)
@@ -830,6 +837,7 @@ def test_fork_does_not_close_reused_fd_after_sidecar_close(tmp_path, monkeypatch
         process.join(timeout=2)
         assert process.exitcode == 0
         assert not errors
+        assert not fork_ran_during_close
     finally:
         allow_fork.set()
         allow_close.set()
