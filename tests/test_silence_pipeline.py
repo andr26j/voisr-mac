@@ -107,3 +107,54 @@ def test_a_failed_trim_still_transcribes(tmp_path, monkeypatch, capsys):
     assert res["text"] == "Hello there"
     assert heard[0] > 2.0  # untrimmed
     assert "Voisr audio: trim failed: disk full" in capsys.readouterr().out
+
+
+def audio_rows(capsys):
+    return [line for line in capsys.readouterr().out.splitlines()
+            if line.startswith("Voisr audio: clip ")]
+
+
+def test_each_dictation_logs_its_reading_and_never_its_words(tmp_path, capsys):
+    api, _ = make_api(tmp_path, noise(1.0, 10) + tone(0.5, 3000) + noise(1.0, 10, seed=2))
+    dictate(api)
+    rows = audio_rows(capsys)
+    assert len(rows) == 1
+    assert rows[0].startswith("Voisr audio: clip 2.50 s, speech, speech ")
+    assert "longest run" in rows[0] and "floor" in rows[0] and "threshold" in rows[0]
+    assert "hello" not in rows[0].casefold()
+
+
+def test_a_rejected_clip_logs_its_reading_too(tmp_path, capsys):
+    api, _ = make_api(tmp_path, noise(1.0, 10))
+    dictate(api)
+    assert audio_rows(capsys)[0].startswith("Voisr audio: clip 1.00 s, no_speech, ")
+
+
+def test_a_too_short_clip_logs_its_length(tmp_path, capsys):
+    api, _ = make_api(tmp_path, tone(0.1, 3000))
+    res = dictate(api)
+    assert "too short" in res["error"]
+    assert audio_rows(capsys) == ["Voisr audio: clip 0.10 s, too short"]
+
+
+def test_a_missing_recording_is_logged(tmp_path, capsys):
+    class NoFile:
+        def start(self, path):
+            pass
+
+        def stop(self):
+            return ""
+
+        def cancel(self):
+            pass
+
+    api, _ = make_api(tmp_path, [])
+    api._recordings._recorder_factory = NoFile
+    dictate(api)
+    assert "Voisr audio: no usable recording" in capsys.readouterr().out
+
+
+def test_a_clip_the_gate_cannot_read_is_logged_as_skipped(tmp_path, capsys):
+    api, _ = make_api(tmp_path, tone(1.0, 3000), width=1)
+    dictate(api)
+    assert audio_rows(capsys) == ["Voisr audio: clip 1.00 s, gate skipped: unreadable"]
