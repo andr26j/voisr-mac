@@ -52,15 +52,16 @@
     transition: opacity 160ms var(--ease-in), transform 160ms var(--ease-in);
   }
 
-  /* ---- the dot: the mic is live -----------------------------------------
-     Shown only while recording, in every theme and meter mode, and never
-     recoloured: it is a promise about the mic, not decoration. */
+  /* ---- the dot: Quiet's only sign that the mic is live ------------------
+     Shown only while recording and never recoloured. Signature has no dot, by
+     the owner's call after trying it: its moving bars say the same. */
   .dot {
+    display: none;
     position: absolute;
-    left: 42px;
-    top: 17.5px;
-    width: 9px;
-    height: 9px;
+    left: 22px;
+    top: 8px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     background: var(--live);
     box-shadow: 0 0 10px 2px var(--live-glow);
@@ -80,8 +81,7 @@
   /* ---- bars --------------------------------------------------------------
      Live (the default): 26 px bars the page scales per frame from the mic
      level. Loop: a recorder with no meter (the ffmpeg fallback) plays each
-     bar's own rhythm. The group sits 10 px right of the dot's space while
-     recording and slides back to centre when the dot goes. */
+     bar's own rhythm. */
   .bars {
     position: absolute;
     left: 53px;
@@ -89,9 +89,7 @@
     height: 26px;
     display: flex;
     gap: 3px;
-    transition: transform 180ms var(--ease);
   }
-  .pill[data-state="recording"] .bars { transform: translateX(10px); transition: none; }
   .bar {
     flex: none;
     display: block;
@@ -195,7 +193,7 @@
   }
   .pill[data-theme="quiet"] { width: 52px; height: 24px; border-radius: 12px; }
   .pill[data-theme="quiet"][data-state="label"] { width: var(--label-w, 140px); }
-  .pill[data-theme="quiet"] .dot { left: 22px; top: 8px; width: 8px; height: 8px; }
+  .pill[data-theme="quiet"] .dot { display: block; }
   .pill[data-theme="quiet"] .bars { display: none; }
   .pill[data-theme="quiet"] .qdots { display: flex; }
   .pill[data-theme="quiet"][data-state="processing"] .qdots { opacity: 1; }
@@ -212,7 +210,6 @@
      shake or pulse. */
   @media (prefers-reduced-motion: reduce) {
     .pill, .pill.is-shown, .pill.is-leaving { transform: none !important; transition: opacity 120ms linear !important; }
-    .bars { transition: none; }
     .dot, .bar, .qdot { animation: none !important; }
     .pill[data-meter="loop"][data-state="recording"] .bar {
       transform: scaleY(var(--hold));

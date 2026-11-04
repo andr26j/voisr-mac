@@ -776,6 +776,18 @@ def _css_rule(html, selector):
     return html[start:html.index("}", start)]
 
 
+def test_only_quiet_has_the_live_dot():
+    """Signature's circle was taken out at the owner's request, after trying
+    it. Quiet keeps it, because it has nothing else to show while listening."""
+    from voisr.ui import WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    assert "display: none" in _css_rule(html, ".dot")
+    assert "display: block" in _css_rule(html, '.pill[data-theme="quiet"] .dot')
+    # the bars no longer make way for it
+    assert "translateX" not in _css_rule(html, ".bars")
+    assert not re.search(r"\.bars \{ [^}]*translateX", html)
+
+
 def test_the_live_dot_shows_only_while_recording_and_keeps_its_colour():
     """It promises the mic is on: no other state may show it, and a custom
     colour must not turn it into decoration."""
