@@ -164,11 +164,13 @@ def snippet_api(tmp_path, adapter, saved):
     from voisr.history import HistoryStore
     from voisr.inject import paste_at_cursor, prepare_paste_controller
     from voisr.ui import Api
+    from tests.test_snippets_guard import ClipRecorder, spoken
 
     prepare_paste_controller()
     api = Api(config_path=tmp_path / "config.json",
               history=HistoryStore(tmp_path / "history.jsonl"),
-              recorder_factory=FakeRecorder, ax_adapter=adapter,
+              recorder_factory=type("R", (ClipRecorder,), {"samples": spoken()}),
+              ax_adapter=adapter,
               transcribe_fn=lambda wav: "My email.", paste_fn=paste_at_cursor)
     assert "error" not in api.set_config({"snippets": {"my email": saved}})
     return api

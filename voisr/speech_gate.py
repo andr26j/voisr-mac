@@ -5,6 +5,7 @@ robustness, item 5). Plain Python, no numpy, like
 stream_recorder.level_from_int16: a 10-minute clip takes about 0.5 s, on the
 queue worker, never on the tap thread."""
 import array
+from collections import deque
 import math
 import operator
 import os
@@ -21,7 +22,10 @@ FLOOR_PERCENTILE = 0.10  # the room's floor: the quietest tenth of the clip
 # can't make normal speech (-35..-20 dBFS) read as silence.
 FLOOR_CAP_DBFS = -50.0
 ABS_MIN_DBFS = -60.0     # nothing quieter is speech, however silent the room
-SUSTAINED_MARGIN_DB = 15.0  # a sustained run stays this close to the clip's peak
+# A sustained run: speech holds its level, a thump falls away fast. Judged within
+# the run itself, so a thump elsewhere in the clip can't change it.
+SUSTAINED_RANGE_DB = 12.0        # loudest to quietest block in the run
+SUSTAINED_ABOVE_ROOM_DB = 6.0    # all of it this far above the room, even a loud one
 _FULL_SCALE_SQ = 32768.0 * 32768.0
 
 
@@ -29,7 +33,7 @@ _FULL_SCALE_SQ = 32768.0 * 32768.0
 class SpeechSpan:
     """verdict: "speech", "no_speech" or "all_zeros" (the device sent exact
     zeros only). start/end: the sample window to keep, end exclusive.
-    sustained_ms: the longest unbroken run near the clip's peak. No part of the
+    sustained_ms: the longest unbroken run at a steady level. No part of the
     verdict: speech_ms totals scattered blocks, so key thumps can add up to it,
     and only what is riskier than plain dictation asks for this."""
     verdict: str
@@ -57,12 +61,30 @@ def _first_nonzero(samples) -> int:
     return -1
 
 
-def _sustained_ms(levels, threshold: float) -> int:
-    floor = max(threshold, max(levels) - SUSTAINED_MARGIN_DB)
-    longest = run = 0
-    for level in levels:
-        run = run + 1 if level >= floor else 0
-        longest = max(longest, run)
+def _sustained_ms(levels, least: float) -> int:
+    """The longest unbroken run of blocks at `least` or above whose loudest and
+    quietest are within SUSTAINED_RANGE_DB."""
+    longest = start = 0
+    loud, quiet = deque(), deque()  # indexes: each run's loudest and quietest first
+    for at, level in enumerate(levels):
+        if level < least:
+            start = at + 1
+            loud.clear()
+            quiet.clear()
+            continue
+        while loud and levels[loud[-1]] <= level:
+            loud.pop()
+        loud.append(at)
+        while quiet and levels[quiet[-1]] >= level:
+            quiet.pop()
+        quiet.append(at)
+        while levels[loud[0]] - levels[quiet[0]] > SUSTAINED_RANGE_DB:
+            start += 1
+            if loud[0] < start:
+                loud.popleft()
+            if quiet[0] < start:
+                quiet.popleft()
+        longest = max(longest, at - start + 1)
     return longest * BLOCK_MS
 
 
@@ -81,7 +103,8 @@ def analyze(samples, samplerate: int = SAMPLERATE) -> SpeechSpan:
     levels = [block_dbfs(samples[at:at + block])
               for at in range(first, count, block)]
     heard = sorted(level for level in levels if level > -math.inf)
-    floor = min(heard[int(len(heard) * FLOOR_PERCENTILE)], FLOOR_CAP_DBFS)
+    room = heard[int(len(heard) * FLOOR_PERCENTILE)]
+    floor = min(room, FLOOR_CAP_DBFS)
     threshold = max(floor + SPEECH_MARGIN_DB, ABS_MIN_DBFS)
     speech = [i for i, level in enumerate(levels) if level >= threshold]
     speech_ms = len(speech) * BLOCK_MS
@@ -90,7 +113,8 @@ def analyze(samples, samplerate: int = SAMPLERATE) -> SpeechSpan:
     low = max(0, speech[0] - PAD_BLOCKS)
     high = min(len(levels), speech[-1] + PAD_BLOCKS + 1)
     return SpeechSpan("speech", speech_ms, first + low * block,
-                      min(count, first + high * block), _sustained_ms(levels, threshold))
+                      min(count, first + high * block),
+                      _sustained_ms(levels, max(threshold, room + SUSTAINED_ABOVE_ROOM_DB)))
 
 
 def gate_wav(path) -> SpeechSpan | None:

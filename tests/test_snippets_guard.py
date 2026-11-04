@@ -106,6 +106,47 @@ def test_tap_then_hold_clips_pass_the_gate_but_never_fire_a_snippet(tmp_path, se
     api.close()
 
 
+def with_thumps_around(speech_seconds=1.0, speech_scale=0.1, thump_db=-3.0, seed=3):
+    """Made-up: soft buzz between two loud made-up thuds, the shape a real hotkey
+    press and release might give."""
+    rng = random.Random(seed)
+    samples = noise(speech_seconds + 0.9, rng)
+    peak = 32768 * 10 ** (thump_db / 20)
+    for i in range(int(0.35 * RATE), int((0.35 + speech_seconds) * RATE)):
+        samples[i] += 4000 * speech_scale * math.sin(2 * math.pi * 140 * i / RATE)
+    add_thump(samples, 0.1, rng, peak=peak, length=0.15)
+    add_thump(samples, 0.45 + speech_seconds, rng, peak=peak, length=0.15)
+    return samples
+
+
+def clip_span(samples):
+    return analyze(array.array("h", (max(-32768, min(32767, int(s))) for s in samples)))
+
+
+@pytest.mark.parametrize("scale", [1.0, 0.25, 0.1])
+@pytest.mark.parametrize("thump_db", [-20.0, -10.0, -3.0])
+def test_a_thump_cannot_push_real_speech_below_the_guard(scale, thump_db):
+    assert clip_span(with_thumps_around(speech_scale=scale, thump_db=thump_db)).sustained_ms >= 240
+
+
+def loud_room_tap_then_hold(seed, room_db):
+    rng = random.Random(seed)
+    samples = noise(2.0, rng, db=room_db)
+    for at in (0.05, 0.14, 0.32, 1.9):
+        add_thump(samples, at, rng, peak=8000.0, length=0.1)
+    return samples
+
+
+@pytest.mark.parametrize("room_db", [-70.0, -60.0, -52.0, -44.0, -38.0])
+@pytest.mark.parametrize("seed", range(4))
+def test_a_thump_only_clip_stays_below_the_guard_in_any_room(seed, room_db):
+    assert clip_span(loud_room_tap_then_hold(seed, room_db)).sustained_ms < 240
+
+
+def test_steady_room_noise_is_not_sustained_speech():
+    assert clip_span(noise(2.0, random.Random(5), db=-38.0)).sustained_ms == 0
+
+
 def test_a_held_back_snippet_is_logged_without_naming_it(tmp_path, capsys):
     api, _ = guard_api(tmp_path, tap_then_hold())
     dictate(api)
@@ -247,7 +288,7 @@ def test_ordinary_words_are_not_a_recital(tmp_path, monkeypatch, said):
     api.close()
 
 
-@pytest.mark.parametrize("samples,expands", [(spoken(seconds=12.0), True), (tap_then_hold(), False)])
+@pytest.mark.parametrize("samples,expands", [(spoken(), True), (tap_then_hold(), False)])
 def test_one_lookup_decides_the_expansion_and_the_log_line(tmp_path, monkeypatch, capsys, samples, expands):
     import voisr.snippets
     import voisr.ui

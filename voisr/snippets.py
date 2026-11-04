@@ -18,9 +18,8 @@ MAX_TRIGGER_HINTS_TOTAL_CHARS = 250  # of the prompt's 600, so the Dictionary ke
 HINT_CLIP_BASE_S = 3.0
 HINT_CLIP_PER_CHAR_S = 0.1
 # Key thumps can pass the speech gate, and with triggers in the prompt Whisper
-# can answer them with one. Speech holds its level; a thump falls away from its
-# peak. 240 ms within 15 dB of the clip's peak: 0/250 made-up tap-then-holds
-# reach it, 826/840 say clips do. A clip held back pastes as plain dictation.
+# can answer them with one. See speech_gate._sustained_ms and the design doc for
+# what 240 ms was measured against. A clip held back pastes as plain dictation.
 MIN_SUSTAINED_SPEECH_MS = 240
 _SPACE_AFTER = ".,;!?)]}”’"
 # "To:" and "Email:" are labels; "mailto:" and "https:" run on. A lower-case word

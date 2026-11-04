@@ -5,9 +5,11 @@ import json
 import pytest
 
 from tests.fake_ax import FakeAX, FakeElement, textbox
+from tests.test_snippets_guard import ClipRecorder, spoken
 from tests.test_context_api import (correct, dictate, make_api, no_system_dictionary,  # noqa: F401
                                     run_windows, settle, verifying_paste)
 
+SpeechRecorder = type("SpeechRecorder", (ClipRecorder,), {"samples": spoken()})
 SECRET = "andre@example.com"
 LONG = ("Please review this:\n\n  - um, the diff\n  - the tests\n\n" + "Keep it short. " * 400
         + "\n")
@@ -18,6 +20,7 @@ def snippet_api(tmp_path, spoken="My email.", ax=None, snippets=None, **kwargs):
     kwargs.setdefault("paste_fn", lambda text: pasted.append(text) or True)
     said = [spoken]
     api = make_api(tmp_path, ax, transcribe_fn=lambda wav: said[0], **kwargs)
+    api._recordings._recorder_factory = SpeechRecorder
     api.set_config({"snippets": {"my email": SECRET} if snippets is None else snippets})
     return api, pasted, said
 
@@ -320,9 +323,8 @@ def test_whisper_gets_the_triggers_and_never_the_text(tmp_path, monkeypatch):
     pasted = []
     from voisr.history import HistoryStore
     from voisr.ui import Api
-    from tests.test_context_api import FakeRecorder
     api = Api(config_path=tmp_path / "config.json", history=HistoryStore(tmp_path / "h.jsonl"),
-              recorder_factory=FakeRecorder, clipboard_fn=lambda text: None,
+              recorder_factory=SpeechRecorder, clipboard_fn=lambda text: None,
               paste_fn=lambda text: pasted.append(text) or True)
     api.set_config({"snippets": {"my email": SECRET}})
     dictate(api)
