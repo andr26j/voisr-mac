@@ -375,6 +375,116 @@ def test_a_missed_paste_asks_for_a_manual_one(tmp_path):
     api.close()
 
 
+class StallsOnCapture(FakeAX):
+    """An app that stops answering at one capture until it recovers: 1 is the
+    press capture, 2 the release capture."""
+
+    def __init__(self, box, stall_on):
+        super().__init__(box)
+        self.stall_on, self.captures = stall_on, 0
+        self.stalled, self.recovered = threading.Event(), threading.Event()
+
+    def focused_element(self, timeout_s):
+        self.captures += 1
+        if self.captures == self.stall_on:
+            self.stalled.set()
+            self.recovered.wait(5)
+        return super().focused_element(timeout_s)
+
+
+def release_capture(api):
+    """The latest dictation's release capture, once it has been queued."""
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        sessions = dict(api._focus._sessions)
+        if sessions and sessions[max(sessions)].release is not None:
+            return sessions[max(sessions)].release
+        time.sleep(0.001)
+    raise AssertionError("the release capture was never queued")
+
+
+def dictate_through_a_stall(tmp_path, stall_on, recovers_in_grace=True, lands_again=False):
+    """The text lands while the app is stalled, so the release capture can only
+    end after it. The Api is built here because nothing may hold the dictation
+    back until that capture is done."""
+    box = textbox("start ")
+    ax = StallsOnCapture(box, stall_on)
+
+    def paste(text, on_sent=None, verifier=None):
+        assert ax.stalled.wait(5)
+        box.attrs["AXValue"] += text
+        on_sent()
+        if recovers_in_grace:
+            ax.recovered.set()
+            release_capture(api).result(timeout=5)
+        if lands_again:
+            box.attrs["AXValue"] += text
+        paste.kept = verifier("OLD COPY")
+        return True
+
+    paste.kept = None
+    api = Api(config_path=tmp_path / "config.json",
+              history=HistoryStore(tmp_path / "history.jsonl"),
+              recorder_factory=FakeRecorder, clipboard_fn=lambda text: None,
+              ax_adapter=ax, transcribe_fn=lambda wav: "hello world", paste_fn=paste)
+    api.start_recording(prewarm=False)
+    api.prewarm_now()
+    if stall_on == 2:
+        settle(api)
+    out = api.stop_recording(paste=True)
+    ax.recovered.set()
+    assert "start Hello world" in box.attrs["AXValue"]
+    return api, paste, out
+
+
+@pytest.mark.parametrize("stall_on", [1, 2],
+                         ids=["queued_behind_the_press_capture", "stalled_in_its_own_read"])
+def test_a_baseline_read_after_the_text_landed_is_not_a_miss(tmp_path, stall_on):
+    api, paste, out = dictate_through_a_stall(tmp_path, stall_on)
+    assert out["delivery"] == "skipped" and out["pasted"] is True
+    assert "manual_paste" not in out
+    assert paste.kept is False, "the old clipboard goes back"
+    item = api.get_history()[0]
+    assert (item["delivery"], item["delivery_reason"]) == ("skipped", "late_baseline")
+    assert api._edit_watcher._windows == [], "nothing to learn from without a baseline"
+    assert api._last_paste_text == "Hello world", "the next dictation joins onto it"
+    api.close()
+
+
+def test_a_late_capture_holding_the_text_never_anchors_an_edit_window(tmp_path):
+    """A second copy in the grace would read as verified against that capture,
+    and its anchors would have the pasted text inside them."""
+    api, paste, out = dictate_through_a_stall(tmp_path, 2, lands_again=True)
+    item = api.get_history()[0]
+    assert (item["delivery"], item["delivery_reason"]) == ("skipped", "late_baseline")
+    assert api._edit_watcher._windows == []
+    api.close()
+
+
+def test_a_capture_still_running_at_the_check_is_no_baseline(tmp_path):
+    api, paste, out = dictate_through_a_stall(tmp_path, 2, recovers_in_grace=False)
+    assert paste.kept is False and out["pasted"] is True
+    item = api.get_history()[0]
+    assert (item["delivery"], item["delivery_reason"]) == ("skipped", "no_baseline")
+    api.close()
+
+
+def test_a_real_miss_is_still_a_miss_when_the_baseline_came_first(tmp_path):
+    box = textbox("start ")
+    paste = verifying_paste(box, land=False)
+
+    def transcribe(wav):
+        release_capture(api).result(timeout=5)
+        return "hello world"
+
+    api = make_api(tmp_path, FakeAX(box), transcribe_fn=transcribe, paste_fn=paste)
+    out = dictate(api)
+    assert paste.kept is True
+    assert out["delivery"] == "not_found" and out["manual_paste"] is True
+    assert out["pasted"] is False
+    api.close()
+
+
 def test_a_skip_records_its_reason_and_changes_nothing(tmp_path):
     box = textbox("")     # stays empty: proves nothing
     paste = verifying_paste(box, land=False)
