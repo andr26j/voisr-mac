@@ -4,6 +4,8 @@ import importlib.util
 import wave
 from pathlib import Path
 
+import pytest
+
 from voisr.speech_gate import SpeechSpan
 
 spec = importlib.util.spec_from_file_location(
@@ -29,7 +31,8 @@ class FakeRecorder:
 
 
 def recorded(tmp_path):
-    tool.record(tmp_path, ["my email", "sign off"], FakeRecorder, ask=lambda prompt: "")
+    tool.record(tmp_path, ["my email", "sign off"], FakeRecorder, ask=lambda prompt: "",
+                key="Right Option", running=lambda: False)
     return tool.clips_in(tmp_path)
 
 
@@ -40,18 +43,53 @@ def test_about_twenty_five_clips_by_default():
 def test_record_writes_a_clip_and_its_phrase(tmp_path):
     clips = recorded(tmp_path)
     assert [(n, p) for n, p, _ in clips if p == "sign off"] == [
-        ("trigger-03", "sign off"), ("trigger-04", "sign off")]
+        ("hotkey-02", "sign off"), ("trigger-02", "sign off")]
     assert all(wav.stat().st_size > 1000 for _, _, wav in clips)
+
+
+def test_record_refuses_while_voisr_runs_and_says_how_to_quit_and_reopen(tmp_path):
+    with pytest.raises(SystemExit) as stop:
+        tool.record(tmp_path, ["my email"], FakeRecorder, ask=lambda prompt: "", key="k",
+                    running=lambda: True)
+    assert tool.QUIT_COMMAND in str(stop.value) and tool.REOPEN_COMMAND in str(stop.value)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_key_clips_tell_you_to_use_your_key(tmp_path):
+    asked = []
+    tool.record(tmp_path, ["my email"], FakeRecorder, ask=lambda prompt: asked.append(prompt) or "",
+                key="Right Option", running=lambda: False)
+    said = "\n".join(asked)
+    assert 'press and hold Right Option, say "my email", release Right Option' in said
+    assert "tap Right Option once, then press and hold" in said
+
+
+@pytest.mark.parametrize("config,name", [
+    ('{"hotkey_label": "Fn"}', "Fn"), ('{"hotkey": "alt_r"}', "Right Option (⌥)"),
+    ('{"hotkey": "cmd_r"}', "Right Command (⌘)"), ('{"hotkey": "weird"}', "your push-to-talk key"),
+    ("{not json", "Right Option (⌥)"), ('["list"]', "Right Option (⌥)"),
+])
+def test_the_key_is_named_from_config_and_the_file_is_left_alone(tmp_path, config, name):
+    path = tmp_path / "config.json"
+    path.write_text(config)
+    assert tool.hotkey_name(path) == name
+    assert [p.name for p in tmp_path.iterdir()] == ["config.json"] and path.read_text() == config
+
+
+def test_a_missing_config_means_the_default_key(tmp_path):
+    assert tool.hotkey_name(tmp_path / "none.json") == "Right Option (⌥)"
 
 
 def span(ms):
     return SpeechSpan("speech", ms, 0, 16000, sustained_ms=ms)
 
 
-def test_score_tells_hits_misses_misfires_and_the_guard(tmp_path, monkeypatch, capsys):
+def test_score_reports_each_kind_of_clip_apart(tmp_path, monkeypatch, capsys):
     clips = recorded(tmp_path)
-    silent = next(w for n, _, w in clips if n == "silent-01")
-    monkeypatch.setattr(tool, "gate_and_trim", lambda wav: span(100 if wav == silent else 500))
+    by_name = {n: w for n, _, w in clips}
+    silent, held = by_name["silent-01"], by_name["hotkey-01"]
+    monkeypatch.setattr(tool, "gate_and_trim",
+                        lambda wav: span(100 if wav in (silent, held) else 500))
     heard = {"my email": "My email.", "sign off": "Sign of.", "sign up": "Sign off."}
 
     def transcribe(wav, condition):
@@ -61,11 +99,13 @@ def test_score_tells_hits_misses_misfires_and_the_guard(tmp_path, monkeypatch, c
 
     tool.report(tool.score(clips, transcribe, ["run"]), ["run"])
     out = capsys.readouterr().out
-    assert "triggers fire 2/4" in out
-    assert 'missed  "sign off"' in out
-    assert 'MISFIRE "sign up"' in out and 'pastes "sign off"' in out
-    assert "held back by the guard" in out and "100 ms" in out
-    assert "silent clips highest 500 ms" in out
+    assert "triggers, Enter: fire 1/2" in out
+    assert "triggers, push-to-talk key: fire 0/2" in out
+    assert "other phrases: fire 1/8" in out and "silent key clips: fire 0/5" in out
+    assert 'missed  trigger-02 "sign off"' in out
+    assert 'MISFIRE other-04 "sign up"' in out and 'pastes "sign off"' in out
+    assert 'held back by the guard: silent-01' in out and 'held back by the guard: hotkey-01' in out
+    assert "push-to-talk clips lowest 100 ms" in out and "silent key clips highest 500 ms" in out
 
 
 def test_a_clip_the_gate_refuses_is_not_transcribed(tmp_path, monkeypatch):
