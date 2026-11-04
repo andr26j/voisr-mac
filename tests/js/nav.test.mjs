@@ -63,6 +63,22 @@ test("switching views moves the one highlight to the new item", () => {
   assert.ok(!n.items[0].classList.contains("active"));
 });
 
+test("a window resize keeps the highlight under an item that moved", () => {
+  const n = mountNav();
+  n.V.show("settings");
+  n.items[3].offsetTop = 500;  // Settings is bottom-anchored
+  n.window.dispatch("resize", {});
+  assert.equal(n.glide.style.transform, "translateY(500px)");
+  assert.ok(n.glide.classList.contains("is-live"), "the next switch still glides");
+  assert.equal(n.liveAt.at(-1), "translateY(500px)", "placed before the transition came back");
+});
+
+test("a resize before the first view is placed does nothing", () => {
+  const n = mountNav();
+  n.window.dispatch("resize", {});
+  assert.equal(n.glide.style.transform, undefined);
+});
+
 test("opening Home tells it so, so its stats show as they are", () => {
   const n = mountNav();
   n.V.show("home");
