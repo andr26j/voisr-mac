@@ -123,3 +123,12 @@ def test_start_hotkey_service_reports_nothing_on_success():
             pass
 
     assert start_hotkey_service(Fine()) is None
+
+
+def test_dismissed_banners_are_a_saved_list_of_names():
+    from voisr.app import config_errors
+    assert DEFAULT_CONFIG["dismissed_banners"] == []
+    assert config_errors({"dismissed_banners": ["dictionary", "snippets"]}) == []
+    assert config_errors({"dismissed_banners": []}) == []
+    for bad in ("dictionary", [1], None, {"dictionary": True}):
+        assert config_errors({"dismissed_banners": bad})
