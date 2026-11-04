@@ -18,6 +18,8 @@ DEFAULT_CONFIG = {"hotkey": "alt_r", "paste": True, "device": DEFAULT_DEVICE, "d
                   "event_tap": "active", "model_unload": "min5",
                   "use_screen_context": True, "learn_from_edits": True,
                   "dictionary_auto_add": True, "snippets": {}}
+# Every config used to be saved with this, so it doesn't mean anyone chose it.
+_OLD_DEFAULT_DEVICE = ":0"
 
 
 def _is_str(v):
@@ -137,6 +139,8 @@ def load_config(path, on_corrupt=None) -> dict:
             on_corrupt(saved)
         return cfg
     cfg.update(_salvage(data, p))
+    if cfg["device"] == _OLD_DEFAULT_DEVICE:
+        cfg["device"] = DEFAULT_DEVICE
     return cfg
 
 

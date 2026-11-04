@@ -88,10 +88,13 @@ def saved_device(tmp_path, device):
     return load_config(path)["device"]
 
 
-def test_a_config_saved_with_the_old_default_gets_the_system_input(
-        monkeypatch, tmp_path):
-    recorder = Recorder(saved_device(tmp_path, ":0"))
-    assert ffmpeg_input(recorder, monkeypatch, tmp_path) == ":default"
+def test_a_config_saved_with_the_old_default_loads_as_the_system_input(tmp_path):
+    assert saved_device(tmp_path, ":0") == DEFAULT_DEVICE
+
+
+def test_loading_the_old_default_leaves_the_file_alone(tmp_path):
+    saved_device(tmp_path, ":0")
+    assert json.loads((tmp_path / "config.json").read_text()) == {"device": ":0"}
 
 
 def test_a_config_without_a_device_gets_the_system_input(tmp_path):
@@ -102,3 +105,7 @@ def test_a_config_without_a_device_gets_the_system_input(tmp_path):
 def test_a_device_the_user_chose_is_kept(device, monkeypatch, tmp_path):
     recorder = Recorder(saved_device(tmp_path, device))
     assert ffmpeg_input(recorder, monkeypatch, tmp_path) == device
+
+
+def test_the_recorder_opens_exactly_the_device_it_is_given(monkeypatch, tmp_path):
+    assert ffmpeg_input(Recorder(":0"), monkeypatch, tmp_path) == ":0"
