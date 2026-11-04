@@ -1,5 +1,6 @@
 import json
 import re
+import threading
 
 import pytest
 
@@ -836,6 +837,62 @@ def test_panel_sits_on_the_screen_it_was_built_for():
     assert RecordingWidget._panel_origin(NSMakeRect(0, 0, 1440, 900)) == (596, 38)
     # a display arranged to the left of, and lower than, the primary one
     assert RecordingWidget._panel_origin(NSMakeRect(-1920, -200, 1920, 1080)) == (-1084, -162)
+
+
+class FakeWebview:
+    def __init__(self):
+        self.js = []
+
+    def evaluateJavaScript_completionHandler_(self, js, handler):
+        self.js.append(js)
+
+
+def test_set_look_sends_only_sanitized_values(monkeypatch):
+    from PyObjCTools import AppHelper
+
+    from voisr.ui import RecordingWidget
+    monkeypatch.setattr(AppHelper, "callAfter", lambda fn, *a: fn(*a))
+    widget = RecordingWidget()
+    widget._webview = FakeWebview()
+    widget.set_look("quiet", "#112233")
+    widget.set_look('x"); alert(1); ("', '#12345"); alert(1); ("')
+    assert widget._webview.js == [
+        'setTheme("quiet")', 'setColor("#112233")',
+        'setTheme("classic")', "setColor(null)"]
+
+
+class LookWidget(FakeWidget):
+    """Records the theme it was given and what was shown, in order."""
+
+    def __init__(self):
+        super().__init__()
+        self.shown = threading.Event()
+
+    def set_look(self, theme, color):
+        self.calls.append(("look", theme, color))
+
+    def show_notice(self, text):
+        self.calls.append("notice")
+        self.shown.set()
+
+
+def test_an_error_with_no_dictation_behind_it_wears_the_saved_theme(tmp_path):
+    widget = LookWidget()
+    api = make_api(tmp_path, config={"pill_theme": "quiet", "pill_color": "#112233"})
+    api.start_recording()  # the dashboard has the mic, so the press is refused
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.press()
+    assert widget.calls[:2] == [("look", "quiet", "#112233"), "error"]
+
+
+def test_a_notice_wears_the_saved_theme(tmp_path):
+    widget = LookWidget()
+    api = make_api(tmp_path, config={"pill_theme": "quiet"})
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.NOTICE_HOLD_S = 0
+    svc.show_notice("Suggested: Voisr")
+    assert widget.shown.wait(2)
+    assert widget.calls[:2] == [("look", "quiet", None), "notice"]
 
 
 def test_pill_color_sanitizer():

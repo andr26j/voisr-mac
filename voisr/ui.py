@@ -456,6 +456,29 @@ class RecordingWidget:
         except Exception as e:
             print(f"Voisr widget: build failed: {e}", flush=True)
 
+    def _apply_look(self, theme: str, color: str | None) -> None:
+        """Main thread. sanitize_* whitelist both values, so config.json
+        content can never be interpolated into JS verbatim."""
+        self._webview.evaluateJavaScript_completionHandler_(
+            f'setTheme("{sanitize_pill_theme(theme)}")', None)
+        safe = sanitize_pill_color(color)
+        self._webview.evaluateJavaScript_completionHandler_(
+            f'setColor("{safe}")' if safe else "setColor(null)", None)
+
+    def set_look(self, theme: str, color: str | None) -> None:
+        """Set the theme without showing anything, ahead of a state that has
+        no dictation behind it. Recording sets its own."""
+        try:
+            from PyObjCTools import AppHelper
+
+            def go():
+                if self._webview is not None:
+                    self._apply_look(theme, color)
+
+            AppHelper.callAfter(go)
+        except Exception:
+            pass  # never break the record path
+
     def _set(self, state: str, theme: str | None = None,
              color: str | None = None, is_current=None, if_current=None,
              label: str | None = None) -> None:
@@ -473,13 +496,7 @@ class RecordingWidget:
                     self._feed_gen += 1
                     self._vis_gen += 1
                     if theme is not None:
-                        # sanitize_* whitelist both values — config.json content
-                        # can never be interpolated into JS verbatim
-                        self._webview.evaluateJavaScript_completionHandler_(
-                            f'setTheme("{sanitize_pill_theme(theme)}")', None)
-                        safe = sanitize_pill_color(color)
-                        self._webview.evaluateJavaScript_completionHandler_(
-                            f'setColor("{safe}")' if safe else "setColor(null)", None)
+                        self._apply_look(theme, color)
                     if label is not None:
                         # json.dumps: a word from the user's text as a JS string
                         self._webview.evaluateJavaScript_completionHandler_(
@@ -1039,12 +1056,23 @@ class HotkeyService:
         self._pane_opened_at = now
         return key
 
+    def _dress_widget(self) -> None:
+        """Only a recording sets the pill's theme. A state with no dictation
+        behind it would otherwise wear the last dictation's, or Signature
+        straight after launch."""
+        set_look = getattr(self._widget, "set_look", None)
+        if set_look is None:
+            return
+        cfg = self._api.get_config()
+        set_look(cfg.get("pill_theme"), cfg.get("pill_color"))
+
     def _flash_error(self) -> None:
         """Error pill, then hide; caller holds _state_lock."""
         if not self._widget_enabled():
             return
         self._epoch += 1
         epoch = self._epoch
+        self._dress_widget()
         self._widget_action("show_error", epoch)
 
         def hide_later():
@@ -1147,6 +1175,7 @@ class HotkeyService:
                     if idle():
                         self._epoch += 1
                         epoch = self._epoch
+                        self._dress_widget()
                         self._widget_action("show_notice", epoch, text)
                         break
                 time.sleep(self.NOTICE_RETRY_S)
