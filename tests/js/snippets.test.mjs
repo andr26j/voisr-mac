@@ -69,7 +69,7 @@ test("a refused save keeps what was typed and says why", async (t) => {
 });
 
 test("a very short trigger saves and the warning stays on the page", async (t) => {
-  const warning = "Very short, so it may be misheard or said by accident.";
+  const warning = "Very short, so it may be misheard, said by accident, or paste as plain words.";
   const h = mount(t, { saveResult: { ok: true, trigger: "email", warning } });
   h["snippet-trigger"].value = "email";
   h["snippet-text"].value = "x";

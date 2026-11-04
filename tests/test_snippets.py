@@ -91,6 +91,15 @@ def test_short_or_noise_like_triggers_get_a_warning(trigger):
     assert trigger_warning(trigger)
 
 
+@pytest.mark.parametrize("trigger", ["email", "Thanks.", "okay"])
+def test_a_one_word_trigger_warns_it_may_paste_as_plain_words(trigger):
+    assert "plain words" in trigger_warning(trigger)
+
+
+def test_a_two_word_noise_phrase_does_not_warn_about_plain_words():
+    assert "plain words" not in trigger_warning("thank you")
+
+
 @pytest.mark.parametrize("trigger", ["my email", "review prompt", "my phone number"])
 def test_ordinary_triggers_get_none(trigger):
     assert trigger_warning(trigger) is None

@@ -20,6 +20,8 @@ HINT_CLIP_PER_CHAR_S = 0.1
 # Key thumps can pass the speech gate, and with triggers in the prompt Whisper
 # can answer them with one. See speech_gate._sustained_ms and the design doc for
 # what 240 ms was measured against. A clip held back pastes as plain dictation.
+# Real one-word clips read 160-360 ms, so many paste as words; the design doc says
+# why this isn't lower.
 MIN_SUSTAINED_SPEECH_MS = 240
 _SPACE_AFTER = ".,;!?)]}”’"
 # "To:" and "Email:" are labels; "mailto:" and "https:" run on. A lower-case word
@@ -170,7 +172,8 @@ def trigger_warning(trigger: str) -> str | None:
     """Allowed, but worth saying: these can fire when you didn't mean them to."""
     key = normalize_trigger(trigger)
     if key in _NOISE_PHRASES:
-        return "Whisper can hear this from a stray noise, so it may paste by accident."
+        also = "" if " " in key else " Said on its own, it may also paste as plain words."
+        return "Whisper can hear this from a stray noise, so it may paste by accident." + also
     if " " not in key or sum(c.isalnum() for c in key) < SHORT_TRIGGER_LETTERS:
-        return "Very short, so it may be misheard or said by accident."
+        return "Very short, so it may be misheard, said by accident, or paste as plain words."
     return None
