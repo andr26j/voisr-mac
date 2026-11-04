@@ -15,9 +15,10 @@ window.Voisr = window.Voisr || {};
       { id: "a3", ts: now - 90000, text: "Remember to book the trailer for Saturday morning.", words: 8, duration_s: 4 },
     ];
     let mockCfg = { hotkey: "alt_r", paste: true, show_widget: true, device: ":0", pill_theme: "classic", pill_color: null, dictionary: { trademake: "TradeMate", "trade mate": "TradeMate" }, model: "small.en", launch_at_login: false, model_unload: "min5", use_screen_context: true, learn_from_edits: true, dictionary_auto_add: true };
-    // mirrors voisr/snippets.py, enough to preview the page and its refusals
-    const mockSnippetKey = (t) => t.trim().replace(/\s+/g, " ").toLowerCase().replace(/^[\W_]+|[\W_]+$/g, "");
-    let mockSnippets = { "my email": "you@example.com", "review prompt": "Please review this:\n\n- the diff\n- the tests\n" };
+    // Preview only, to show the page's states. The rules for what may be saved
+    // and what gets a warning are in voisr/snippets.py and are not repeated here.
+    const SAMPLE_WARNING = "Sample warning: the real ones come from the app.";
+    let mockSnippets = { "my email": "you@example.com", "review prompt": "Please review this:\n\n- the diff\n- the tests\n", email: "you@example.com" };
     let mockSuggestions = [{ id: "s1", heard: "trade mate", written: "TradeMate", seen: 1 }];
     let recording = false;
     // mirrors voisr/ui.py's HOTKEY_OPTIONS, to resolve a human label for
@@ -52,17 +53,13 @@ window.Voisr = window.Voisr || {};
       get_config: async () => JSON.parse(JSON.stringify(mockCfg)),
       set_config: async (u) => Object.assign(mockCfg, u),
       get_snippets: async () => Object.entries(mockSnippets).map(([trigger, text]) => ({
-        trigger, text, warning: mockSnippetKey(trigger).length < 6 ? "Very short, so it may be misheard or said by accident." : null,
+        trigger, text, warning: trigger === "email" ? SAMPLE_WARNING : null,
       })),
       save_snippet: async (old, trigger, text) => {
-        const key = mockSnippetKey(trigger);
-        if (!key) return { error: "a snippet needs a phrase to say" };
-        if (!text.trim()) return { error: "a snippet needs text to paste" };
-        const other = Object.keys(mockSnippets).find((t) => t !== old && mockSnippetKey(t) === key);
-        if (other) return { error: `“${other}” already uses that phrase` };
+        if (trigger !== old && trigger in mockSnippets) return { error: `“${trigger}” already uses that phrase` };
         delete mockSnippets[old];
-        mockSnippets[trigger.trim()] = text;
-        return { ok: true, trigger: trigger.trim(), warning: key.length < 6 ? "Very short, so it may be misheard or said by accident." : null };
+        mockSnippets[trigger] = text;
+        return { ok: true, trigger, warning: trigger === "email" ? SAMPLE_WARNING : null };
       },
       delete_snippet: async (trigger) => { delete mockSnippets[trigger]; return { ok: true }; },
       // mirrors Api.get_suggestions() and friends in voisr/ui.py
