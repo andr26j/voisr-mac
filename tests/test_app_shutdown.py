@@ -1,5 +1,7 @@
+import array
 import builtins
 import sys
+import wave
 from types import SimpleNamespace
 
 import pytest
@@ -41,7 +43,7 @@ def test_toggle_ctrl_c_cancels_recorder_and_removes_temp_wav(monkeypatch):
     monkeypatch.setattr(builtins, "input", fake_input)
 
     with pytest.raises(KeyboardInterrupt):
-        app.toggle_mode({"device": ":0", "dictionary": {}, "paste": False})
+        app.toggle_mode({"device": ":default", "dictionary": {}, "paste": False})
 
     assert recorder.cancelled is True
     assert recorder.closed is True
@@ -59,11 +61,102 @@ def test_toggle_start_failure_cancels_recorder_and_removes_temp_wav(monkeypatch)
     monkeypatch.setattr(builtins, "input", lambda prompt: "")
 
     with pytest.raises(RuntimeError, match="microphone unavailable"):
-        app.toggle_mode({"device": ":0", "dictionary": {}, "paste": False})
+        app.toggle_mode({"device": ":default", "dictionary": {}, "paste": False})
 
     assert recorder.cancelled is True
     assert recorder.closed is True
     assert recorder.path.exists() is False
+
+
+FFMPEG_MISSING_DEVICE = (
+    "[AVFoundation indev @ 0x7516c14140] Audio device not found\n"
+    "[in#0 @ 0x7516c14000] Error opening input: Input/output error\n")
+
+
+def write_wav(path, samples):
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(array.array("h", samples).tobytes())
+
+
+def toggle_one_recording(monkeypatch, capsys, write_capture, stderr=""):
+    """One start and stop in toggle mode: write_capture makes the file ffmpeg
+    would have left. Returns what was printed and the files sent to Whisper."""
+
+    class CapturingRecorder(FakeRecorder):
+        def stop(self):
+            write_capture(self.path)
+            return stderr
+
+    sent = []
+    answers = iter(["", "", KeyboardInterrupt()])
+
+    def fake_input(_prompt):
+        answer = next(answers)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    def fake_process_audio(wav, _dictionary):
+        sent.append(wav)
+        return "heard"
+
+    monkeypatch.setattr(app, "Recorder", lambda device: CapturingRecorder())
+    monkeypatch.setattr(builtins, "input", fake_input)
+    monkeypatch.setattr(app, "process_audio", fake_process_audio)
+    monkeypatch.setattr(app, "deliver", lambda text, paste: None)
+
+    with pytest.raises(KeyboardInterrupt):
+        app.toggle_mode({"device": ":Studio Mic", "dictionary": {}, "paste": False})
+    return capsys.readouterr().out, sent
+
+
+def test_toggle_failed_capture_names_the_device_and_what_ffmpeg_said(monkeypatch, capsys):
+    out, sent = toggle_one_recording(
+        monkeypatch, capsys, lambda path: path.write_bytes(b""),
+        stderr=FFMPEG_MISSING_DEVICE)
+
+    assert sent == []
+    assert ":Studio Mic" in out
+    assert "Audio device not found" in out
+    assert "-list_devices" in out
+    assert "permission" not in out.lower()
+
+
+def test_toggle_failed_capture_says_when_ffmpeg_reported_nothing(monkeypatch, capsys):
+    out, sent = toggle_one_recording(
+        monkeypatch, capsys, lambda path: path.write_bytes(b""))
+
+    assert sent == []
+    assert "ffmpeg reported no error" in out
+
+
+def test_toggle_all_zero_capture_says_silence_and_skips_whisper(monkeypatch, capsys):
+    out, sent = toggle_one_recording(
+        monkeypatch, capsys, lambda path: write_wav(path, [0] * 16000))
+
+    assert sent == []
+    assert "only silence" in out
+    assert ":Studio Mic" in out
+    assert "-list_devices" in out
+
+
+def test_toggle_capture_with_any_sound_goes_to_whisper(monkeypatch, capsys):
+    out, sent = toggle_one_recording(
+        monkeypatch, capsys, lambda path: write_wav(path, [0] * 15999 + [1]))
+
+    assert len(sent) == 1
+    assert "only silence" not in out
+
+
+def test_toggle_capture_the_gate_cant_read_still_goes_to_whisper(monkeypatch, capsys):
+    out, sent = toggle_one_recording(
+        monkeypatch, capsys, lambda path: path.write_bytes(b"not a wav" * 200))
+
+    assert len(sent) == 1
+    assert "only silence" not in out
 
 
 def test_hotkey_ctrl_c_stops_listener_then_closes_api(monkeypatch):

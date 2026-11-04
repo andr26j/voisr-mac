@@ -5,7 +5,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from voisr import snippets
+from voisr import snippets, speech_gate
 from voisr.cleanup import clean
 from voisr.inject import paste_at_cursor, set_clipboard
 from voisr.pasteboard import PasteDeliveryError
@@ -18,6 +18,9 @@ DEFAULT_CONFIG = {"hotkey": "alt_r", "paste": True, "device": DEFAULT_DEVICE, "d
                   "event_tap": "active", "model_unload": "min5",
                   "use_screen_context": True, "learn_from_edits": True,
                   "dictionary_auto_add": True, "snippets": {}}
+# Every config used to be saved with this, so it doesn't mean anyone chose it.
+_OLD_DEFAULT_DEVICE = ":0"
+LIST_DEVICES_HINT = 'To see the inputs: ffmpeg -f avfoundation -list_devices true -i ""'
 
 
 def _is_str(v):
@@ -137,6 +140,8 @@ def load_config(path, on_corrupt=None) -> dict:
             on_corrupt(saved)
         return cfg
     cfg.update(_salvage(data, p))
+    if cfg["device"] == _OLD_DEFAULT_DEVICE:
+        cfg["device"] = DEFAULT_DEVICE
     return cfg
 
 
@@ -182,7 +187,17 @@ def toggle_mode(cfg) -> None:
                 input("  recording — [Enter] to STOP... ")
                 err = recorder.stop()
                 if not wav.exists() or wav.stat().st_size < 1000:
-                    print(f"  recording failed (mic permission?): {err.strip()[:200]}")
+                    report = err.strip()[:200] or "ffmpeg reported no error"
+                    print(f"  recording failed on {cfg['device']}: {report}")
+                    print(f"  {LIST_DEVICES_HINT}")
+                    continue
+                span = speech_gate.gate_wav(wav)  # None: unreadable, skip the check
+                if span is not None and span.verdict == "all_zeros":
+                    print(f"  the microphone sent only silence on {cfg['device']}, "
+                          "so nothing was transcribed.")
+                    print(f"  It may be the wrong input. {LIST_DEVICES_HINT}")
+                    print("  If it's the right input, check that this terminal is on "
+                          "under Microphone in Privacy & Security.")
                     continue
                 deliver(process_audio(wav, cfg["dictionary"]), cfg["paste"])
             finally:
