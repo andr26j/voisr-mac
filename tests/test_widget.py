@@ -801,6 +801,22 @@ def test_the_live_dot_shows_only_while_recording_and_keeps_its_colour():
     assert re.findall(r'\[data-state="(\w+)"\] \.dot\b', html) == ["recording"]
 
 
+def test_the_css_each_state_relies_on_is_there():
+    """The page's script is run in tests/js/widget.test.mjs, without CSS."""
+    from voisr.ui import WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    assert "animation: shimmer" in _css_rule(html, '.pill[data-state="processing"] .bar')
+    assert "animation: shimmer" in _css_rule(
+        html, '.pill[data-theme="quiet"][data-state="processing"] .qdot')
+    assert "width: var(--label-w" in _css_rule(
+        html, '.pill[data-theme="quiet"][data-state="label"]')
+    assert "animation: speak" in _css_rule(
+        html, '.pill[data-meter="loop"][data-state="recording"] .bar')
+    reduced = html[html.index("prefers-reduced-motion: reduce"):html.index("</style>")]
+    assert ".dot, .bar, .qdot { animation: none !important; }" in reduced
+    assert "transform: none !important" in reduced
+
+
 def test_custom_colour_reaches_signature_bars_and_quiet_dots():
     from voisr.ui import WEB_DIR
     html = (WEB_DIR / "widget.html").read_text()
