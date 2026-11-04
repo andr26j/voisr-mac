@@ -367,10 +367,13 @@ class RecordingWidget:
     so paste-at-cursor is undisturbed.
     """
 
-    # 6 px of headroom above and below the 44 px pill for its entrance rise;
-    # the margin keeps the pill's centre where it has always been
-    WIDTH, HEIGHT = 232, 56
-    BOTTOM_MARGIN = 70
+    # Holds the 196x44 pill's shadow (0 8px 24px in widget.html: 24 px beside
+    # it, 32 px below), and 6 px more below for the entrance rise, or the
+    # shadow would end in a hard edge. Transparent and click-through, so the
+    # extra room costs nothing. The page centres the pill, and the margin keeps
+    # its centre 98 px up the screen, where it has always been.
+    WIDTH, HEIGHT = 248, 120
+    BOTTOM_MARGIN = 38
     EXIT_S = 0.18  # the pill's 160 ms exit (widget.html), plus a frame
 
     # AppKit constants (stable ABI values)
@@ -391,6 +394,13 @@ class RecordingWidget:
         self._feed_gen = 0  # main thread only; bumping it ends the running feed
         self._vis_gen = 0   # main thread only; a show cancels a pending panel fade
 
+    @classmethod
+    def _panel_origin(cls, frame) -> tuple[float, float]:
+        """Centred along the bottom of a screen. Window positions are global,
+        and only the primary display's frame starts at (0, 0)."""
+        return (frame.origin.x + (frame.size.width - cls.WIDTH) / 2,
+                frame.origin.y + cls.BOTTOM_MARGIN)
+
     def create(self) -> None:
         """Build the panel + webview on the main thread and preload the HTML.
         Safe to call from a worker thread (dispatches onto the main thread)."""
@@ -407,9 +417,7 @@ class RecordingWidget:
             from WebKit import WKWebView, WKWebViewConfiguration
             from Foundation import NSMakeRect, NSURL
 
-            frame = NSScreen.mainScreen().frame()
-            x = (frame.size.width - self.WIDTH) / 2
-            y = self.BOTTOM_MARGIN
+            x, y = self._panel_origin(NSScreen.mainScreen().frame())
             rect = NSMakeRect(x, y, self.WIDTH, self.HEIGHT)
 
             panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
@@ -423,6 +431,7 @@ class RecordingWidget:
             panel.setHidesOnDeactivate_(False)
             panel.setOpaque_(False)
             panel.setBackgroundColor_(NSColor.clearColor())
+            panel.setHasShadow_(False)          # the pill draws its own (widget.html)
             panel.setTitle_("Voisr Recording")  # for identification, not shown
             panel.setIgnoresMouseEvents_(True)  # invisible resident overlay: click-through
             panel.setAlphaValue_(0.0)           # resident but faded out until a dictation

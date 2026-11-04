@@ -814,6 +814,30 @@ def test_a_hidden_pill_goes_idle_so_nothing_keeps_animating():
     assert settle > 160, "the exit plays out first"
 
 
+def test_panel_holds_the_pill_and_its_shadow_around_the_same_centre():
+    from voisr.ui import RecordingWidget, WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    pill = _css_rule(html, ".pill")
+    width = int(re.search(r"width: (\d+)px", pill).group(1))
+    height = int(re.search(r"height: (\d+)px", pill).group(1))
+    assert (width, height) == (196, 44)
+    y, blur = map(int, re.search(r"0 (\d+)px (\d+)px rgba", pill).groups())
+    rise = int(re.search(r"translateY\((\d+)px\)", pill).group(1))
+    # the page centres the pill in the panel, so each side has half the spare room
+    assert (RecordingWidget.WIDTH - width) / 2 >= blur
+    assert (RecordingWidget.HEIGHT - height) / 2 >= y + blur + rise
+    assert RecordingWidget.BOTTOM_MARGIN + RecordingWidget.HEIGHT / 2 == 98
+
+
+def test_panel_sits_on_the_screen_it_was_built_for():
+    from Foundation import NSMakeRect
+
+    from voisr.ui import RecordingWidget
+    assert RecordingWidget._panel_origin(NSMakeRect(0, 0, 1440, 900)) == (596, 38)
+    # a display arranged to the left of, and lower than, the primary one
+    assert RecordingWidget._panel_origin(NSMakeRect(-1920, -200, 1920, 1080)) == (-1084, -162)
+
+
 def test_pill_color_sanitizer():
     from voisr.ui import sanitize_pill_color
     assert sanitize_pill_color("#FF00AA") == "#FF00AA"
