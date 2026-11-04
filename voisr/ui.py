@@ -205,23 +205,22 @@ HOTKEY_OPTIONS = [
     {"value": "f19", "label": "F19"},
 ]
 
-# Adding a theme? Also update: widget.html (theme CSS + THEME_VALUES),
-# style.css (mini-pill rule + keyframes), and app.js's dev-mock
-# get_pill_themes. test_widget_html_covers_all_pill_themes guards widget.html.
+# Adding a theme? Also update: widget.html (theme CSS + THEME_VALUES), the
+# Settings picker's preview (.mini-pill in css/components.css), and the
+# get_pill_themes mock in js/api.js.
+# test_widget_html_covers_all_pill_themes guards widget.html.
 PILL_THEMES = [
-    {"value": "classic", "label": "Classic"},
-    {"value": "ember", "label": "Ember"},
-    {"value": "aurora", "label": "Aurora"},
-    {"value": "ocean", "label": "Ocean"},
-    {"value": "neon", "label": "Neon EQ"},
-    {"value": "breathe", "label": "Breathe"},
-    {"value": "scanner", "label": "Scanner"},
+    # Saved as "classic" in every existing config, so the value stays
+    {"value": "classic", "label": "Signature"},
+    {"value": "quiet", "label": "Quiet"},
 ]
 _PILL_THEME_VALUES = {t["value"] for t in PILL_THEMES}
 
 
 def sanitize_pill_theme(name) -> str:
-    """Whitelist a theme name from config before it reaches JS interpolation."""
+    """Whitelist a theme name from config before it reaches JS interpolation.
+    Anything else, including a theme this version no longer has (ember, aurora,
+    ocean, neon, breathe, scanner), lands on Signature."""
     return name if isinstance(name, str) and name in _PILL_THEME_VALUES else "classic"
 
 
@@ -2422,6 +2421,9 @@ class Api:
             else:
                 cfg = load_config(self._config_path,
                                   on_corrupt=self._note_corrupt_config)
+                # the theme the pill will really show, so the Settings picker
+                # has one to highlight after an old theme was saved
+                cfg["pill_theme"] = sanitize_pill_theme(cfg.get("pill_theme"))
                 self._config_cache = (key, copy.deepcopy(cfg))
         cfg["launch_at_login"] = launch_agent.is_enabled(path=launch_agent.PLIST_PATH)
         return cfg
