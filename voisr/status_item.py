@@ -84,10 +84,11 @@ def _glyph_image(recording: bool, dark_bar: bool = False):
     """The Ribbon wave at menu-bar size, in its small-size curve.
 
     Idle is a template image, so AppKit recolours it to suit any menu bar.
-    Live can't be one: a template takes no colour of ours, and setting
-    contentTintColor on a status button drew it black on macOS 27. So live is
-    painted directly in the colour for this bar. Idle and live are the same
-    shape, and colour is what tells them apart.
+    Live isn't one, because AppKit decides a template's colour. The obvious way
+    round that, contentTintColor, came out black on macOS 27 when the button
+    drew itself off screen with cacheDisplayInRect (never seen in the real
+    bar). So live is painted directly in the colour for this bar. Idle and live
+    are the same shape, and colour is what tells them apart.
 
     Drawn programmatically rather than shipped as an asset so there is no
     file to lose in the bundle.
