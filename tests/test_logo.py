@@ -57,6 +57,13 @@ def test_the_curve_changes_above_34_px():
     assert logo_wave.style_for(35) is logo_wave.LARGE
 
 
+def test_the_curve_changes_above_a_44_px_tile():
+    """The cutoff is on the rounded glyph, as the board drew it, so callers can
+    pass a tile's share as it comes out."""
+    assert logo_wave.style_for(44 * logo_wave.GLYPH_SCALE) is logo_wave.SMALL
+    assert logo_wave.style_for(45 * logo_wave.GLYPH_SCALE) is logo_wave.LARGE
+
+
 @pytest.mark.parametrize("style", [logo_wave.LARGE, logo_wave.SMALL])
 def test_the_points_follow_the_formula(style):
     points = logo_wave.wave_points(style, samples=40)

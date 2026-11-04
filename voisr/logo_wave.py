@@ -42,7 +42,9 @@ WAVE_COLOUR = "#B8BAFF"
 
 
 def style_for(glyph_px: float) -> WaveStyle:
-    return SMALL if glyph_px <= SMALL_MAX_PX else LARGE
+    # Rounded as the board rounds it. A 44 px tile's glyph is 34.32 px, and
+    # taking that literally would give it the large curve.
+    return SMALL if round(glyph_px) <= SMALL_MAX_PX else LARGE
 
 
 def wave_y(u: float, style: WaveStyle) -> float:
