@@ -119,7 +119,7 @@ def test_each_dictation_logs_its_reading_and_never_its_words(tmp_path, capsys):
     dictate(api)
     rows = audio_rows(capsys)
     assert len(rows) == 1
-    assert rows[0].startswith("Voisr audio: clip 2.50 s, speech, speech ")
+    assert rows[0].startswith("Voisr audio: clip 2.50 s, gate2, speech, speech ")
     assert "longest run" in rows[0] and "floor" in rows[0] and "threshold" in rows[0]
     assert "hello" not in rows[0].casefold()
 
@@ -127,7 +127,7 @@ def test_each_dictation_logs_its_reading_and_never_its_words(tmp_path, capsys):
 def test_a_rejected_clip_logs_its_reading_too(tmp_path, capsys):
     api, _ = make_api(tmp_path, noise(1.0, 10))
     dictate(api)
-    assert audio_rows(capsys)[0].startswith("Voisr audio: clip 1.00 s, no_speech, ")
+    assert audio_rows(capsys)[0].startswith("Voisr audio: clip 1.00 s, gate2, no_speech, ")
 
 
 def test_a_too_short_clip_logs_its_length(tmp_path, capsys):
