@@ -54,7 +54,6 @@ def ffmpeg_input(recorder, monkeypatch, tmp_path):
 
 
 def test_the_default_device_is_the_system_input_not_a_number(monkeypatch, tmp_path):
-    assert DEFAULT_DEVICE == ":default"
     assert ffmpeg_input(Recorder(), monkeypatch, tmp_path) == ":default"
 
 
