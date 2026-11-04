@@ -290,6 +290,18 @@ class EditWatcher:
                 self._thread.start()
             self._cond.notify_all()
 
+    def end_for_snippet(self, focus) -> None:
+        """A snippet is about to land. It must never read as an edit, and focus
+        can move before the paste, or the text be pasted by hand, so every
+        window ends now, on what it has seen. `focus`, the release capture, was
+        taken before the snippet: its field's window gets the usual closing read."""
+        with self._cond:
+            for other in list(self._windows):
+                if not other.done:
+                    closing = self._closing_read(other, focus) if focus is not None else None
+                    self._ended.append(self._finish_locked(other, "next_paste", closing=closing))
+            self._cond.notify_all()
+
     def _schedule_locked(self, window: _Window) -> None:
         due = window.started + READ_AT_S[window.next_read]
         heapq.heappush(self._heap, (due, next(self._order), window))

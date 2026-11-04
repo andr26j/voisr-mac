@@ -11,9 +11,14 @@ window.Voisr = window.Voisr || {};
     let mockHistory = [
       { id: "a1", ts: now - 300, text: "Hello team, please send the invoice to TradeMate by Friday.", words: 10, duration_s: 5 },
       { id: "a2", ts: now - 7200, text: "Draft a follow-up about the Brunswick site visit next week.", words: 10, duration_s: 6 },
+      { id: "a4", ts: now - 3600, text: "my email", words: 2, duration_s: 1, snippet: true },
       { id: "a3", ts: now - 90000, text: "Remember to book the trailer for Saturday morning.", words: 8, duration_s: 4 },
     ];
     let mockCfg = { hotkey: "alt_r", paste: true, show_widget: true, device: ":default", pill_theme: "classic", pill_color: null, dictionary: { trademake: "TradeMate", "trade mate": "TradeMate" }, model: "small.en", launch_at_login: false, model_unload: "min5", use_screen_context: true, learn_from_edits: true, dictionary_auto_add: true };
+    // Preview only, to show the page's states. The rules for what may be saved
+    // and what gets a warning are in voisr/snippets.py and are not repeated here.
+    const SAMPLE_WARNING = "Sample warning: the real ones come from the app.";
+    let mockSnippets = { "my email": "you@example.com", "review prompt": "Please review this:\n\n- the diff\n- the tests\n", email: "you@example.com" };
     let mockSuggestions = [{ id: "s1", heard: "trade mate", written: "TradeMate", seen: 1 }];
     let recording = false;
     // mirrors voisr/ui.py's HOTKEY_OPTIONS, to resolve a human label for
@@ -47,6 +52,16 @@ window.Voisr = window.Voisr || {};
       }),
       get_config: async () => JSON.parse(JSON.stringify(mockCfg)),
       set_config: async (u) => Object.assign(mockCfg, u),
+      get_snippets: async () => Object.entries(mockSnippets).map(([trigger, text]) => ({
+        trigger, text, warning: trigger === "email" ? SAMPLE_WARNING : null,
+      })),
+      save_snippet: async (old, trigger, text) => {
+        if (trigger !== old && trigger in mockSnippets) return { error: `“${trigger}” already uses that phrase` };
+        delete mockSnippets[old];
+        mockSnippets[trigger] = text;
+        return { ok: true, trigger, warning: trigger === "email" ? SAMPLE_WARNING : null };
+      },
+      delete_snippet: async (trigger) => { delete mockSnippets[trigger]; return { ok: true }; },
       // mirrors Api.get_suggestions() and friends in voisr/ui.py
       get_suggestions: async () => ({ pending: [...mockSuggestions],
         auto_added: { trademake: "TradeMate" }, used: { trademake: 3 } }),

@@ -141,3 +141,46 @@ def test_on_screen_terms_bias_both_transcribers(tmp_path, spoken_wav):
     print("cli:", cli_plain, "->", cli)
     assert "Kestrelwey" in warm or "Zorblaks" in warm
     assert "Kestrelwey" in cli or "Zorblaks" in cli
+
+
+def test_a_spoken_trigger_pastes_the_saved_text_through_the_real_path(tmp_path, spoken_wav):
+    """Real speech gate, trim, whisper-server and hints; only the mic and the
+    paste are stand-ins. `say`, so not any real person's voice."""
+    import shutil
+
+    from voisr.history import HistoryStore
+    from voisr.ui import Api
+
+    clip = spoken_wav("my phone number")
+    saved = "  +61 400 000 000\n(after 5pm)\n"
+    pasted = []
+
+    class Recorder:
+        def start(self, path):
+            self.path = path
+
+        def stop(self):
+            shutil.copy(clip, self.path)
+            return ""
+
+        def cancel(self):
+            pass
+
+        def close(self):
+            pass
+
+    api = Api(config_path=tmp_path / "config.json", history=HistoryStore(tmp_path / "h.jsonl"),
+              recorder_factory=Recorder, models_dir=MODEL.parent,
+              warm_server=WhisperServer(tmp_path / "state.json"),
+              clipboard_fn=lambda text: None, paste_fn=lambda text: pasted.append(text) or True)
+    try:
+        api.set_config({"model": "base.en", "snippets": {"my phone number": saved},
+                        "dictionary": {"phone": "PHONE"}})
+        api.start_recording(prewarm=False)
+        out = api.stop_recording(paste=True)
+    finally:
+        api.close()
+    assert "error" not in out, out
+    assert pasted == [saved]
+    row = (tmp_path / "h.jsonl").read_text()
+    assert '"text": "my phone number"' in row and '"mode": "warm"' in row and "+61" not in row
