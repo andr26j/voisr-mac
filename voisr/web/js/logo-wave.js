@@ -15,7 +15,9 @@ window.Voisr = window.Voisr || {};
   const CYCLES = 1.5, PHASE = -Math.PI / 2;
   const X_START = 10, X_END = 90, MID = 50, AMP = 30;
   const PERIOD = 5;  // seconds per turn
-  const FRAME_MS = 1000 / 30;
+  // Under half a pixel of movement a frame at this size, so more would cost
+  // work without looking any smoother.
+  const FRAME_MS = 1000 / 20;
 
   const ENVELOPE = Array.from({ length: POINTS + 1 }, (_, i) =>
     Math.pow(Math.sin(Math.PI * (i / POINTS)), POWER));
@@ -70,8 +72,8 @@ window.Voisr = window.Voisr || {};
     }
     frame = window.requestAnimationFrame(tick);
     if (!last) { last = now; return; }
-    // the allowance keeps a 60 Hz display on every second frame rather than
-    // slipping to every third when a frame lands a little early
+    // the allowance keeps a 60 Hz display on every third frame rather than
+    // slipping to every fourth when a frame lands a little early
     if (now - last < FRAME_MS - 2) return;
     // capped, so a stall resumes where it was instead of leaping ahead
     clock += Math.min(now - last, 100) / 1000;

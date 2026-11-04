@@ -106,13 +106,13 @@ test("one idle turn takes five seconds and comes back to the logo", () => {
 test("it drifts while Voisr is in front", () => {
   const h = load();
   h.run(1000);
-  assert.ok(Math.abs(h.clock() - 1) < .06, `clock ${h.clock()}`);
+  assert.ok(Math.abs(h.clock() - 1) < .08, `clock ${h.clock()}`);
 });
 
-test("it paints about 30 times a second, not on every frame of the display", () => {
+test("it paints 20 times a second, not on every frame of the display", () => {
   const h = load();
   h.run(1000);
-  assert.ok(h.brand.paints >= 26 && h.brand.paints <= 31, `${h.brand.paints} paints`);
+  assert.ok(h.brand.paints >= 18 && h.brand.paints <= 20, `${h.brand.paints} paints`);
 });
 
 test("hidden, it asks for no frames and resumes from where it was", () => {
@@ -121,12 +121,15 @@ test("hidden, it asks for no frames and resumes from where it was", () => {
   const held = h.brand.d;
   h.setVisibility("hidden");
   assert.equal(h.frames.size, 0);
-  h.run(60000);
+  // not a whole number of five-second turns, or a leap would land back on
+  // the same shape and look like no jump at all
+  h.run(61300);
   assert.equal(h.brand.d, held);
   h.setVisibility("visible");
   h.run(FRAME * 3);
   assert.equal(h.frames.size, 1);
-  assert.ok(distance(h.brand.d, held) < 2, "resumed with a jump");
+  // one frame's step is at most about 2.3 units
+  assert.ok(distance(h.brand.d, held) < 3, "resumed with a jump");
 });
 
 test("it stops without focus", () => {
