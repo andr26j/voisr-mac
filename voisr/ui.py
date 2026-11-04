@@ -1724,9 +1724,8 @@ class Api:
             print(f"Voisr: edit learning skipped ({error.__class__.__name__})", flush=True)
 
     def _end_learning_for_snippet(self, session) -> None:
-        """Before the text can reach a field, where a window still open on the
-        last dictation would read it as the user's edit. Copied rather than
-        pasted, it can be pasted there by hand, so this doesn't wait to find out."""
+        """Before the text can reach a field, where a window still open on an
+        earlier dictation would read it as the user's edit."""
         if self._edit_watcher is None:
             return
         try:
