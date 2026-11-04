@@ -184,7 +184,7 @@ Add a dictionary entry for **every variant the ASR produces** for a term: dictat
 
 ## Licence
 
-MIT (see `LICENSE`). Third-party software and models are listed in `THIRD_PARTY_NOTICES`.
+MIT (see `LICENSE`). Third-party software and models are listed in `THIRD_PARTY_NOTICES`, along with the two items that ship inside Voisr: the Instrument Serif font (SIL Open Font License 1.1, in `voisr/web/fonts/`) and the Lucide icons (ISC). The font loads from those files, never from the network.
 
 ## Development
 

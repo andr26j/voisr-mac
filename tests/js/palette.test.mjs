@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { loadVoisr } from "./load.mjs";
+import { makeNode } from "./dom.mjs";
 
 const PALETTE_SRC = readFileSync(path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -166,4 +167,17 @@ test("match preserves order of matched commands before adding pinned search", ()
      distinguishes appending the fallback from prepending it. */
   assert.equal(result[result.length - 1], "search",
     "the pinned search fallback must come after every naturally-matched command");
+});
+
+test("the sidebar's Commands row opens the palette", () => {
+  const env = loadVoisr(["js/ui.js", "js/palette.js"]);
+  const nodes = {};
+  for (const id of ["palette", "palette-input", "palette-list", "commands-open"]) {
+    nodes[id] = makeNode("div");
+    env.register(id, nodes[id]);
+  }
+  nodes.palette.hidden = true;
+  env.V.palette.init();
+  nodes["commands-open"].dispatch("click", {});
+  assert.equal(nodes.palette.hidden, false);
 });

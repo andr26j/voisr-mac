@@ -32,37 +32,16 @@ from voisr.snippets import (SnippetError, find_snippet, has_speech_evidence, nee
 from voisr.status_item import StatusItem
 from voisr.suggestions import (ACCEPTED, AUTO_ADDED, DISMISSED, PENDING, SuggestionStore,
                                dictionary_allows, ready_to_auto_add)
-from voisr.window_chrome import apply_chrome
+from voisr.window_chrome import apply_chrome, launch_background
 
 
-def _find_webview(native_window):
-    """The WKWebView pywebview put in the window, or None.
-
-    pywebview's Cocoa backend makes its WKWebView subclass
-    (BrowserView.WebKitHost) the window's contentView directly --
-    window.setContentView_(webview), fired from
-    webView_didFinishNavigation_ once the initial page load completes --
-    so the webview normally *is* native_window.contentView(), not a
-    subview inside it (confirmed on the running app: contentView().
-    subviews() holds only the webview's own internal WKFlippedView).
-    Subviews are still checked as a fallback for a differently-shaped
-    window. Either way, matching goes by class inheritance (isinstance
-    against the real WebKit.WKWebView), not by name: at runtime the class
-    is further KVO-swizzled to "NSKVONotifying_WebKitHost", so even a
-    corrected name check would be fragile. Wrapped so a missing/failed
-    WebKit import still returns None instead of raising -- chrome is
-    cosmetic and must never stop the app."""
+def _window_background(api):
+    """The window's colour before the page's first paint. Cosmetic, so a
+    config that can't be read must not stop startup."""
     try:
-        import WebKit
-        content = native_window.contentView()
-        if isinstance(content, WebKit.WKWebView):
-            return content
-        for view in content.subviews():
-            if isinstance(view, WebKit.WKWebView):
-                return view
+        return launch_background(api.get_config().get("appearance", "system"))
     except Exception:
-        pass
-    return None
+        return launch_background("system")
 
 
 def default_recorder():
@@ -96,8 +75,8 @@ def request_permissions(mode: str = "listen") -> None:
 
 
 def apply_app_appearance(mode: str) -> None:
-    """Point NSApp at a fixed appearance so the titlebar and vibrancy follow
-    the user's choice. 'system' clears the override. Never raises.
+    """Point NSApp at a fixed appearance so the titlebar follows the user's
+    choice. 'system' clears the override. Never raises.
 
     set_appearance() is a bridge call, and pywebview dispatches every
     bridge call on a fresh worker thread -- so without this, setAppearance_
@@ -2926,7 +2905,8 @@ def main():
         # No js_api: see bridge_functions
         window = webview.create_window("Voisr", str(WEB_DIR / "index.html"),
                                        width=1060, height=700,
-                                       min_size=(900, 620))
+                                       min_size=(900, 620),
+                                       background_color=_window_background(api))
         window.expose(*bridge_functions(api))
         api.attach_window(window)
         widget.create()
@@ -3014,52 +2994,22 @@ def main():
             def apply_native_chrome(native):
                 # Chrome is AppKit and must be on the main thread. Cosmetic:
                 # failures are logged, not fatal.
-                chrome = apply_chrome(native, webview=_find_webview(native))
+                chrome = apply_chrome(native)
                 if not chrome["titlebar"]:
                     print("Voisr chrome: titlebar setup failed", flush=True)
-                if not chrome["vibrancy"]:
-                    print("Voisr chrome: vibrancy unavailable, using flat "
-                          "fallback", flush=True)
-                    # No native vibrancy effect view -- tell base.css's
-                    # :root[data-vibrancy="off"] fallback to paint a
-                    # solid tint instead of leaving the sidebar assuming
-                    # a translucency that was never applied. Fire-and-
-                    # forget off-thread, same pattern as
-                    # Api._notify_dictation: a slow or dead webview must
-                    # never block startup.
-                    def set_vibrancy_off():
-                        try:
-                            window.evaluate_js(
-                                'document.documentElement.setAttribute('
-                                '"data-vibrancy", "off")')
-                        except Exception:
-                            pass
-                    threading.Thread(target=set_vibrancy_off,
-                                     daemon=True).start()
 
             def native_setup():
                 apply_app_appearance(api.get_config().get("appearance", "system"))
                 native = getattr(window, "native", None)
                 if native is not None:
-                    # pywebview's Cocoa backend only makes the WKWebView the
-                    # window's contentView once the initial page finishes
-                    # loading (webView_didFinishNavigation_ calls
-                    # window.setContentView_(webview)) -- calling
-                    # apply_chrome() any earlier finds a bare placeholder
-                    # NSView with no subviews, so _find_webview() always
-                    # returns None and vibrancy silently never engages, even
-                    # with a correct webview lookup. Defer to window.events
-                    # .loaded, falling back to an immediate call if the page
-                    # has (rarely) already finished by the time we get here.
+                    # At once, so the window doesn't change shape in view, and
+                    # again on load in case the window wasn't ready for it yet.
+                    apply_native_chrome(native)
                     try:
-                        loaded = window.events.loaded
-                        if loaded.is_set():
-                            apply_native_chrome(native)
-                        else:
-                            loaded += lambda *a: AppHelper.callAfter(
-                                apply_native_chrome, native)
+                        window.events.loaded += lambda *a: AppHelper.callAfter(
+                            apply_native_chrome, native)
                     except Exception:
-                        apply_native_chrome(native)
+                        pass
                 status.create()
 
             AppHelper.callAfter(native_setup)
