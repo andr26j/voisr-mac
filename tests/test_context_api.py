@@ -375,21 +375,21 @@ def test_a_missed_paste_asks_for_a_manual_one(tmp_path):
     api.close()
 
 
-class StallsOnCapture(FakeAX):
-    """An app that stops answering at one capture until it recovers: 1 is the
-    press capture, 2 the release capture."""
+PRESS_CAPTURE, RELEASE_CAPTURE = 1, 2
+
+
+class StallsOnCapture(HungAX):
+    """Hangs at one capture only, until `release` is set."""
 
     def __init__(self, box, stall_on):
         super().__init__(box)
         self.stall_on, self.captures = stall_on, 0
-        self.stalled, self.recovered = threading.Event(), threading.Event()
 
     def focused_element(self, timeout_s):
         self.captures += 1
         if self.captures == self.stall_on:
-            self.stalled.set()
-            self.recovered.wait(5)
-        return super().focused_element(timeout_s)
+            return super().focused_element(timeout_s)
+        return self.focused
 
 
 def release_capture(api):
@@ -411,11 +411,11 @@ def dictate_through_a_stall(tmp_path, stall_on, recovers_in_grace=True, lands_ag
     ax = StallsOnCapture(box, stall_on)
 
     def paste(text, on_sent=None, verifier=None):
-        assert ax.stalled.wait(5)
+        assert ax.entered.wait(5)
         box.attrs["AXValue"] += text
         on_sent()
         if recovers_in_grace:
-            ax.recovered.set()
+            ax.release.set()
             release_capture(api).result(timeout=5)
         if lands_again:
             box.attrs["AXValue"] += text
@@ -429,15 +429,15 @@ def dictate_through_a_stall(tmp_path, stall_on, recovers_in_grace=True, lands_ag
               ax_adapter=ax, transcribe_fn=lambda wav: "hello world", paste_fn=paste)
     api.start_recording(prewarm=False)
     api.prewarm_now()
-    if stall_on == 2:
+    if stall_on == RELEASE_CAPTURE:
         settle(api)
     out = api.stop_recording(paste=True)
-    ax.recovered.set()
+    ax.release.set()
     assert "start Hello world" in box.attrs["AXValue"]
     return api, paste, out
 
 
-@pytest.mark.parametrize("stall_on", [1, 2],
+@pytest.mark.parametrize("stall_on", [PRESS_CAPTURE, RELEASE_CAPTURE],
                          ids=["queued_behind_the_press_capture", "stalled_in_its_own_read"])
 def test_a_baseline_read_after_the_text_landed_is_not_a_miss(tmp_path, stall_on):
     api, paste, out = dictate_through_a_stall(tmp_path, stall_on)
@@ -454,7 +454,7 @@ def test_a_baseline_read_after_the_text_landed_is_not_a_miss(tmp_path, stall_on)
 def test_a_late_capture_holding_the_text_never_anchors_an_edit_window(tmp_path):
     """A second copy in the grace would read as verified against that capture,
     and its anchors would have the pasted text inside them."""
-    api, paste, out = dictate_through_a_stall(tmp_path, 2, lands_again=True)
+    api, paste, out = dictate_through_a_stall(tmp_path, RELEASE_CAPTURE, lands_again=True)
     item = api.get_history()[0]
     assert (item["delivery"], item["delivery_reason"]) == ("skipped", "late_baseline")
     assert api._edit_watcher._windows == []
@@ -462,7 +462,7 @@ def test_a_late_capture_holding_the_text_never_anchors_an_edit_window(tmp_path):
 
 
 def test_a_capture_still_running_at_the_check_is_no_baseline(tmp_path):
-    api, paste, out = dictate_through_a_stall(tmp_path, 2, recovers_in_grace=False)
+    api, paste, out = dictate_through_a_stall(tmp_path, RELEASE_CAPTURE, recovers_in_grace=False)
     assert paste.kept is False and out["pasted"] is True
     item = api.get_history()[0]
     assert (item["delivery"], item["delivery_reason"]) == ("skipped", "no_baseline")
