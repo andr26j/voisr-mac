@@ -60,14 +60,17 @@ def test_the_apps_fallback_recorder_uses_the_system_input(monkeypatch, tmp_path)
         raise RuntimeError("no input stream")
 
     commands = record_ffmpeg_commands(monkeypatch)
-    api = Api(config_path=tmp_path / "config.json",
-              history=HistoryStore(tmp_path / "h.jsonl"),
-              recorder_factory=broken, clock=lambda: 1.0)
+    history = HistoryStore(tmp_path / "h.jsonl")
     try:
-        assert api.start_recording().get("recording") is True
-        assert [input_of(command) for command in commands] == [":default"]
+        api = Api(config_path=tmp_path / "config.json", history=history,
+                  recorder_factory=broken, clock=lambda: 1.0)
+        try:
+            assert api.start_recording().get("recording") is True
+            assert [input_of(command) for command in commands] == [":default"]
+        finally:
+            api.close()
     finally:
-        api.close()
+        history.close()
 
 
 def test_default_recorder_falls_back_to_the_system_input(monkeypatch, tmp_path):
