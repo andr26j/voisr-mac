@@ -636,6 +636,87 @@ function clickToRecord(h) {
   button.dispatch("click", { target: button });
 }
 
+/* A recording's outcome under a blue banner: the dark banner holding
+   #record-error is hidden, so the blue one has to say it. */
+const blueError = (h) => byClass(banner(h), "banner-error")[0];
+
+const OUTCOMES = [
+  ["a failed start", { start_recording: async () => { throw new Error("no mic"); } }, 1, "Couldn't start."],
+  ["a failed transcription", { stop_recording: async () => { throw new Error("nope"); } }, 2, "Transcription failed."],
+  ["a failed copy", { stop_recording: async () => ({ text: "Hi", copied: false }) }, 2,
+   "Couldn't copy it. Copy it from the list below."],
+];
+
+for (const [what, extra, clicks, message] of OUTCOMES) {
+  test(`${what} stays on screen with a blue banner up`, async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+    const { api } = recordingApi(extra);
+    const h = mountHome({ ...api, ...DEAD_KEY });
+    await h.V.views.home.renderPermissions();
+    assert.equal(blueError(h).textContent, "");
+
+    for (let i = 0; i < clicks; i++) await h.V.views.home.toggleRecord();
+    await settle();
+
+    assert.equal(h["home-hero"].hidden, true, "the dark banner has gone back under the blue one");
+    assert.equal(h["perm-strip"].hidden, false);
+    assert.equal(blueError(h).textContent, message);
+  });
+}
+
+test("'not saved to History' outlasts the done state under a blue banner", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { api } = recordingApi({ stop_recording: async () => ({ text: "Hi", warning: "disk full" }) });
+  const h = mountHome({ ...api, ...DEAD_KEY });
+  await h.V.views.home.renderPermissions();
+  await h.V.views.home.toggleRecord();
+  await h.V.views.home.toggleRecord();
+  assert.equal(h["home-hero"].dataset.state, "done");
+  assert.equal(h["record-error"].textContent, "Copied, but not saved to History.");
+
+  t.mock.timers.tick(2600);
+  await settle();
+
+  assert.equal(h["home-hero"].hidden, true);
+  assert.equal(blueError(h).textContent, "Copied, but not saved to History.");
+});
+
+test("the message survives the blue banner being rebuilt, and clears when the next recording starts", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let current = DEAD_KEY.get_permissions;
+  const { api } = recordingApi({ stop_recording: async () => ({ text: "Hi", copied: false }),
+                                 get_permissions: () => current() });
+  const h = mountHome(api);
+  await h.V.views.home.renderPermissions();
+  await h.V.views.home.toggleRecord();
+  await h.V.views.home.toggleRecord();
+  await settle();
+  const before = banner(h);
+
+  // a different pane is now to blame, so apply() builds a new banner
+  current = panes(MIC_OK, pane("input_monitoring", "Input Monitoring", true, true),
+                  pane("accessibility", "Accessibility", true, false, false)).get_permissions;
+  await h.V.views.home.renderPermissions();
+  assert.notEqual(banner(h), before, "the banner really was rebuilt");
+  assert.match(blueError(h).textContent, /Couldn't copy/);
+
+  // a fixed grant takes the blue banner away: the dark one still says it
+  current = panes(MIC_OK, pane("input_monitoring", "Input Monitoring", true, true),
+                  pane("accessibility", "Accessibility", true)).get_permissions;
+  await h.V.views.home.renderPermissions();
+  assert.equal(h["perm-strip"].hidden, true);
+  assert.match(h["record-error"].textContent, /Couldn't copy/);
+
+  // and back to blue, then the next recording clears both
+  current = DEAD_KEY.get_permissions;
+  await h.V.views.home.renderPermissions();
+  assert.match(blueError(h).textContent, /Couldn't copy/);
+  await h.V.views.home.toggleRecord();
+  assert.equal(h["record-error"].textContent, "");
+  assert.equal(blueError(h).textContent, "");
+  await stopRecording(h);
+});
+
 test("'Click to record' under a blue banner brings the recording up in the dark one, then goes back", async (t) => {
   // M11: the button has to start something: focus alone looked like it did nothing
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
