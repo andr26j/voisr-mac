@@ -2711,6 +2711,7 @@ class Api:
         grant again first: that re-lists Voisr, switched off, in the pane."""
         result = permissions.reset_grant(key)
         if result.get("ok"):
+            self._held_grants.discard(key)  # asked here, so not again later
             try:
                 self._grant_requester(key)
             except Exception:

@@ -139,6 +139,30 @@ def test_the_mic_is_never_held(tmp_path, monkeypatch):
     assert asked == []
 
 
+def test_reset_counts_as_asking(tmp_path, monkeypatch):
+    # reset_permission asks macOS itself, so Open Settings mustn't ask again
+    _opens(monkeypatch)
+    monkeypatch.setattr("voisr.ui.permissions.reset_grant", lambda key: {"ok": True})
+    asked = []
+    api = _api(tmp_path, grant_requester=asked.append)
+    api.first_run_pending()
+    api.reset_permission("accessibility")
+    api.open_settings_pane("accessibility")
+    assert asked == ["accessibility"]
+
+
+def test_a_failed_reset_still_leaves_the_ask_to_come(tmp_path, monkeypatch):
+    _opens(monkeypatch)
+    monkeypatch.setattr("voisr.ui.permissions.reset_grant",
+                        lambda key: {"ok": False, "error": "no"})
+    asked = []
+    api = _api(tmp_path, grant_requester=asked.append)
+    api.first_run_pending()
+    api.reset_permission("accessibility")
+    api.open_settings_pane("accessibility")
+    assert asked == ["accessibility"]
+
+
 def test_a_failed_ask_still_opens_the_pane(tmp_path, monkeypatch):
     opened = _opens(monkeypatch)
 
