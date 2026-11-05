@@ -194,6 +194,23 @@ def test_capture_hotkey_stores_vk_and_restarts_service(tmp_path):
     assert svc.events == ["stop", "start"]
 
 
+def test_escape_cancels_the_capture_instead_of_becoming_the_key(tmp_path):
+    # Esc backs out of a pop-up, so nobody pressing it means "dictate on this"
+    class FakeSvc:
+        def __init__(self): self.events = []
+        def stop(self): self.events.append("stop")
+        def start(self, key_name=None): self.events.append("start")
+        status = "active"
+
+    svc = FakeSvc()
+    api = make_api(tmp_path, hotkey_service=svc,
+                   capture_fn=lambda timeout, mode="listen": (53, "Esc"))
+    before = api.get_config().get("hotkey_vk")
+    assert api.capture_hotkey() == {"cancelled": True}
+    assert api.get_config().get("hotkey_vk") == before
+    assert svc.events == ["stop", "start"], "the old key must come back"
+
+
 def test_capture_hotkey_timeout_restores_service(tmp_path):
     class FakeSvc:
         def __init__(self): self.events = []
