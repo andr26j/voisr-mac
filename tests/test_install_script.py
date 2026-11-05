@@ -100,3 +100,42 @@ def test_installer_reports_grants_from_the_real_cdhash_not_a_guess():
 def test_installer_warns_when_the_old_version_is_still_running():
     src = INSTALLER.read_text()
     assert "pgrep" in src
+
+
+# ---- Dock icon cache note ----
+
+def icon_replaced(old, new) -> bool:
+    proc = subprocess.run(
+        ["bash", "-c", 'set -euo pipefail; source "$1"; if icon_replaced "$2" "$3"; then echo yes; fi',
+         "_", str(LIB), str(old), str(new)],
+        capture_output=True, text=True, timeout=30)
+    # set -e must not abort on a missing old icon
+    assert proc.returncode == 0 and not proc.stderr, proc.stderr
+    return proc.stdout.strip() == "yes"
+
+
+def test_a_different_existing_icon_is_reported_as_replaced(tmp_path):
+    (tmp_path / "old").write_bytes(b"old")
+    (tmp_path / "new").write_bytes(b"new")
+    assert icon_replaced(tmp_path / "old", tmp_path / "new")
+
+
+def test_an_unchanged_icon_is_not_reported(tmp_path):
+    (tmp_path / "old").write_bytes(b"same")
+    (tmp_path / "new").write_bytes(b"same")
+    assert not icon_replaced(tmp_path / "old", tmp_path / "new")
+
+
+def test_a_fresh_install_is_not_reported_and_does_not_abort(tmp_path):
+    (tmp_path / "new").write_bytes(b"new")
+    assert not icon_replaced(tmp_path / "missing", tmp_path / "new")
+
+
+def test_installer_compares_before_copying_and_prints_the_dock_commands():
+    src = INSTALLER.read_text()
+    assert src.index("icon_replaced") < src.index('cp "$PROJECT/assets/Voisr.icns"')
+    proc = subprocess.run(["bash", "-c", 'source "$1"; dock_icon_note', "_", str(LIB)],
+                          capture_output=True, text=True, timeout=30)
+    assert "com.apple.dock.iconcache" in proc.stdout and "killall Dock" in proc.stdout
+    # the installer only prints it; it never clears the cache itself
+    assert "killall" not in src and "iconcache" not in src
