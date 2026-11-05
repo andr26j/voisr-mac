@@ -40,6 +40,10 @@
 .hero-error { position: relative; font-size: 14px; color: var(--hero-wave); }
 .hero-error:empty { display: none; }
 
+/* The same message when the blue banner has taken the dark one's place. */
+.banner-error { font-size: 14px; font-weight: 500; }
+.banner-error:empty { display: none; }
+
 .home-hero[data-state="recording"] .record-icon { display: none; }
 .home-hero[data-state] #change-key { visibility: hidden; }
 #record-btn[aria-disabled="true"] { opacity: .5; cursor: default; transform: none; }

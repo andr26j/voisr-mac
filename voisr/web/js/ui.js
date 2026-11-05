@@ -479,7 +479,52 @@ window.Voisr = window.Voisr || {};
     return (...args) => (chain = chain.then(() => fn(...args)).catch(() => {}));
   }
 
+  /* ---------- the push-to-talk key (Home, Settings, first run) ---------- */
+
+  const KEY_SYMBOLS = [["Option", "⌥"], ["Command", "⌘"], ["Shift", "⇧"], ["Control", "⌃"],
+                       ["Caps Lock", "⇪"], ["Fn", "fn"]];
+
+  /* hotkey_display()'s label as a name and a symbol. "Right Option (⌥)" names
+     its own symbol; "Caps Lock" gets it from the table; F13 and Space have none. */
+  function keyLabel(display) {
+    const text = String(display || "").trim() || "unset";
+    const named = /^(.*\S)\s*\(([^)]+)\)$/.exec(text);
+    if (named) return { name: named[1], symbol: named[2] };
+    const hit = KEY_SYMBOLS.find(([word]) => text.includes(word));
+    return { name: text, symbol: hit ? hit[1] : null };
+  }
+
+  /* The key press a capture took can reach the page just after Python has
+     answered, as a second event the capture never saw. Return mustn't then press
+     Change all over again, or Continue, and Esc mustn't close Settings. */
+  const AFTER_CAPTURE_MS = 300;
+
+  function captureGuard() {
+    let endedAt = -Infinity;
+    return {
+      ended: () => { endedAt = Date.now(); },
+      recent: () => Date.now() - endedAt < AFTER_CAPTURE_MS,
+    };
+  }
+
+  /* Tab is walked by hand, in document order, and wraps inside `root`. WebKit's
+     own Tab skips buttons unless the user has turned on Keyboard navigation in
+     System Settings, and nearly everything a keyboard needs here is a button. */
+  function walkTab(e, root) {
+    e.preventDefault();
+    const items = Array.from(root.querySelectorAll("button, input, select, summary"))
+      .filter((n) => !n.disabled && n.getAttribute("tabindex") !== "-1"
+                     && n.getClientRects().length > 0);
+    if (!items.length) return;
+    const at = items.indexOf(document.activeElement);
+    const step = e.shiftKey ? -1 : 1;
+    const next = at === -1 ? (e.shiftKey ? items.length - 1 : 0)
+                           : (at + step + items.length) % items.length;
+    items[next].focus();
+  }
+
   V.ui = { el, $, toast, tryApi, timeOf, dayOf, formatDuration, ICONS, itemRow, dayGroup,
            bannerDismissed, dismissBanner,
-           offerDictationUndo, offerEntryUndo, syncRadios, radioKeys, serial };
+           offerDictationUndo, offerEntryUndo, syncRadios, radioKeys, serial, walkTab,
+           keyLabel, captureGuard };
 })(window.Voisr);

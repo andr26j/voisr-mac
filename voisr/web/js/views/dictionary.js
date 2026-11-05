@@ -4,6 +4,8 @@ window.Voisr = window.Voisr || {};
   const BANNER = "dictionary";
   let filter = "", filterText = "", tab = "all", adding = false, dismissed = false;
   let closeEdit = null;  // closes the row being edited: one at a time
+  let editingKey = null;  // that row's word: a render never hides or rebuilds it
+  let kept = false;  // a render kept that row only because it is being edited
 
   const byId = (id) => document.getElementById(id);
   const arrow = () => V.ui.el("span", { class: "pair-arrow", "aria-hidden": "true", text: "→" });
@@ -37,8 +39,19 @@ window.Voisr = window.Voisr || {};
     function edit() {
       if (closeEdit) closeEdit();
       if (adding) closeForm();
-      const close = () => { if (closeEdit === close) closeEdit = null; show(); };
+      const close = () => {
+        const mine = closeEdit === close;
+        if (mine) { closeEdit = null; editingKey = null; }
+        show();
+        // a render that came while this was open left the row as it was
+        if (row.dataset.stale || (mine && kept)) {
+          delete row.dataset.stale;
+          kept = false;
+          render({ animate: false });
+        }
+      };
       closeEdit = close;
+      editingKey = spoken;
       const input = el("input", { class: "row-input", type: "text", autocomplete: "off",
                                   "aria-label": `Replacement for ${spoken}` });
       input.value = written;
@@ -47,13 +60,15 @@ window.Voisr = window.Voisr || {};
       async function save() {
         const next = input.value.trim();
         if (!next) { input.focus(); return; }
-        if (next === written) { close(); return; }
         // Read fresh rather than reuse a closed-over `cfg` -- another commit
         // (or a remove/undo) may have written to config.json since this row
         // was rendered, and a stale copy here would clobber it.
         const cfg = await V.ui.tryApi(V.api().get_config(), "Load dictionary");
         if (!cfg) return;
         cfg.dictionary = cfg.dictionary || {};
+        // unchanged means unchanged from what is stored now, not from what
+        // this row showed when it opened
+        if (next === (spoken in cfg.dictionary ? cfg.dictionary[spoken] : written)) { close(); return; }
         cfg.dictionary[spoken] = next;
         // A failed write keeps the edit open with what was typed, and tryApi's
         // toast says why: the row must not read as saved.
@@ -95,6 +110,8 @@ window.Voisr = window.Voisr || {};
     const cfg = await V.ui.tryApi(V.api().get_config(), "Load dictionary");
     if (!cfg) return;
     cfg.dictionary = cfg.dictionary || {};
+    // Undo restores what is stored now, not what the row showed when it was built
+    if (spoken in cfg.dictionary) written = cfg.dictionary[spoken];
     delete cfg.dictionary[spoken];
     // Same contract as history's delete: no "Entry removed", and no Undo
     // offer, until the write is confirmed.
@@ -202,6 +219,11 @@ window.Voisr = window.Voisr || {};
     const auto = (extra && extra.auto_added) || {};
     const used = (extra && extra.used) || {};
     const all = Object.entries(cfg.dictionary || {});
+    // the word being edited was removed elsewhere: its row goes, nothing points at it
+    if (editingKey !== null && !all.some(([s]) => s === editingKey)) {
+      closeEdit = null;
+      editingKey = null;
+    }
     const isAuto = (s, w) => auto[s.toLowerCase()] === w;
 
     // everything the All tab shows, so the number matches what's on the page
@@ -211,8 +233,10 @@ window.Voisr = window.Voisr || {};
 
     const matches = (a, b) => !filter || a.toLowerCase().includes(filter) || b.toLowerCase().includes(filter);
     const shownPending = tab === "auto" ? [] : pending.filter((p) => matches(p.heard, p.written));
+    const wanted = ([s, w]) => (tab === "all" || isAuto(s, w)) && matches(s, w);
     const shownWords = tab === "suggestions" ? []
-      : all.filter(([s, w]) => (tab === "all" || isAuto(s, w)) && matches(s, w));
+      : all.filter((e) => e[0] === editingKey || wanted(e));
+    if (editingKey !== null) kept = !shownWords.every((e) => e[0] !== editingKey || wanted(e));
 
     dismissed = V.ui.bannerDismissed(cfg, BANNER);
     syncBanner();
