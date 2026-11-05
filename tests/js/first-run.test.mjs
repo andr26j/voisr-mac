@@ -451,3 +451,10 @@ test("finishing leaves the progress bar alone while it fades", async () => {
   assert.equal(h["first-run-progress"].getAttribute("aria-label"), "Step 3 of 3");
   assert.ok(h["first-run-progress"].children.every((seg) => seg.classList.contains("is-on")));
 });
+
+test("the level isn't read while the window isn't focused", async () => {
+  const h = await atDictation({ focused: false, level: 0.4 });
+  await levelPoll().fn();
+  await flush();
+  assert.equal(h.calls.filter(([name]) => name === "level").length, 0);
+});

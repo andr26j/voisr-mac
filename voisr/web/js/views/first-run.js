@@ -264,9 +264,10 @@ window.Voisr = window.Voisr || {};
 
   /* A level means a recorder is metering, so the mic is open. The ffmpeg
      fallback has no meter: there the wave only drifts, and the pill still shows
-     what's happening. */
+     what's happening. Not read without focus, which is when wave.js stops: this
+     step can sit behind other apps for as long as the app stays resident. */
   async function tickLevel() {
-    if (levelInFlight || !waveEl || document.visibilityState === "hidden") return;
+    if (levelInFlight || !waveEl || !document.hasFocus()) return;
     levelInFlight = true;
     try {
       const level = await V.api().get_level();
