@@ -185,7 +185,7 @@ HOTKEY_OPTIONS = [
 ]
 
 # Adding a theme? Also update: widget.html (theme CSS + THEME_VALUES), the
-# Settings picker's preview (.mini-pill in css/components.css), and the
+# Settings picker's preview (.pill-preview in css/views.css), and the
 # get_pill_themes mock in js/api.js.
 # test_widget_html_covers_all_pill_themes guards widget.html.
 PILL_THEMES = [
@@ -251,6 +251,9 @@ VK_LABELS = {
     105: "F13", 107: "F14", 113: "F15", 106: "F16", 64: "F17",
     79: "F18", 80: "F19",
 }
+
+# In the Settings pop-up Esc means back out, so it can't become the dictation key.
+ESCAPE_VK = 53
 
 _LEGACY_NAME_TO_VK = {
     "alt_r": 61, "alt_l": 58, "alt": 58,
@@ -2113,7 +2116,8 @@ class Api:
     def capture_hotkey(self):
         """'Press any key' flow: suspend the live listener (so the pressed
         key doesn't trigger a dictation), capture the next key — any key,
-        including Fn/Globe — persist it, and restart the listener on it."""
+        including Fn/Globe, except Esc, which cancels — persist it, and
+        restart the listener on it."""
         svc = self._hotkey_service
         # capture with the same tap kind the hotkey uses: an active-tap user
         # may not have granted Input Monitoring at all
@@ -2130,6 +2134,8 @@ class Api:
             if not got:
                 return {"error": "no key detected — click Change and press a key"}
             vk, label = got
+            if vk == ESCAPE_VK:
+                return {"cancelled": True}
             self._update_config({"hotkey_vk": vk, "hotkey_label": label})
             return {"vk": vk, "label": label}
         finally:

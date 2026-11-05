@@ -96,31 +96,23 @@ def test_boot_script_sets_the_theme_before_stylesheets_paint():
 # tints unrelated to the pill. Adding a new literal colour anywhere in these
 # files requires adding it here explicitly — the test will otherwise fail.
 ALLOWED_LITERAL_COLOURS = {
-    # -- recording-pill per-theme brand colours (components.css, views.css) --
-    "rgb(255, 255, 255)": "pill theme: default/white waveform bars, and the colour-wheel thumb's white ring",
-    "rgb(232, 100, 60)": "pill theme: Ember (orange)",
-    "rgba(232, 100, 60, .8)": "pill theme: Ember glow (box-shadow)",
-    "rgb(74, 222, 222)": "pill theme: Aurora (cyan half of the gradient)",
-    "rgb(155, 93, 229)": "pill theme: Aurora (purple half of the gradient)",
-    "rgb(90, 169, 230)": "pill theme: Ocean (blue)",
-    "rgb(57, 255, 136)": "pill theme: Neon (green)",
-    "rgba(57, 255, 136, .75)": "pill theme: Neon glow (box-shadow)",
-    "rgb(168, 230, 207)": "pill theme: Breathe (mint)",
-    "rgb(237, 237, 237)": "pill theme: Scanner (grey)",
+    # -- the pill's own fixed colours, for its pictures in Settings (views.css) --
+    "rgb(255, 255, 255)": "the colour-wheel thumb's white ring",
+    "rgb(25, 25, 24)": "pill preview: the dark capsule",
+    "rgb(184, 186, 255)": "pill preview: Quiet's live dot",
     # -- pre-existing generic shadow/glow tints, not theme-bound --
     "rgba(31, 29, 26, .25)": "switch thumb drop shadow",
-    "rgba(28, 26, 23, .96)": "mini-pill's own fixed dark chrome background",
     "rgba(0, 0, 0, .35)": "colour-wheel thumb shadow ring",
     "rgba(0, 0, 0, .4)": "colour-wheel thumb shadow ring",
     # -- appearance thumbnails: fixed light/dark preview swatches (views.css).
     #    Like the pill colours these must NOT follow the active appearance --
     #    a Light thumbnail has to still look light while the app is in dark
     #    mode, which is the whole point of showing the choice as a picture.
-    "rgb(246, 243, 238)": "theme thumbnail: light --bg",
-    "rgb(232, 227, 218)": "theme thumbnail: light --border",
-    "rgb(35, 32, 25)": "theme thumbnail: dark --surface",
-    "rgb(26, 24, 21)": "theme thumbnail: dark --bg",
-    "rgb(51, 47, 39)": "theme thumbnail: dark --border",
+    "rgb(253, 253, 252)": "theme thumbnail: light panel; pill preview: bars and dots",
+    "rgb(245, 244, 241)": "theme thumbnail: light sidebar",
+    "rgb(27, 27, 25)": "theme thumbnail: dark panel",
+    "rgb(20, 20, 19)": "theme thumbnail: dark sidebar",
+    "rgb(143, 142, 136)": "theme thumbnail: Match system's sidebar",
     "rgba(255, 255, 255, .08)": "toast-action button: a fixed white-on-dark "
         "hover surface for the undo button. The toast chip itself uses "
         "var(--ink), which flips light/dark with the theme (light chip in "
@@ -426,25 +418,61 @@ def test_home_only_says_it_pastes_when_it_will():
     assert "It's copied to your clipboard, not pasted." in src, "click to record never pastes"
 
 
-def test_settings_is_split_into_four_sections():
+def test_settings_is_a_pop_up_with_five_sections():
     html = INDEX.read_text()
-    for section in ["Dictation", "Push-to-talk", "Appearance", "Privacy & data"]:
-        assert section in html, section
-    assert html.count('class="settings-section') >= 4
-    # four stacked cards read as four objects; this is one list of
-    # preferences, so the sections are headings over hairline rows
-    assert 'class="settings-section card"' not in html
+    # a dialog over the page, not a page of its own
+    assert 'id="view-settings"' not in html
+    assert 'id="settings-dialog"' in html and 'role="dialog"' in html
+    assert html.index("</main>") < html.index('id="settings-scrim"')
+    for key, title in [("dictation", "Dictation"), ("models", "Models"),
+                       ("key", "Push-to-talk"), ("appearance", "Appearance"),
+                       ("privacy", "Privacy &amp; data")]:
+        assert f'class="settings-nav-item" data-section="{key}"' in html, key
+        assert f'class="settings-section" data-section="{key}"' in html, key
+        assert f'<h1 class="heading-serif settings-title">{title}</h1>' in html, title
+
+
+def test_the_palette_stays_above_settings_and_toasts_above_both():
+    views = (WEB / "css" / "views.css").read_text()
+    components = (WEB / "css" / "components.css").read_text()
+    z_index = lambda css, rule: int(re.search(
+        r"z-index:\s*(\d+)", css[css.index(rule):]).group(1))
+    assert z_index(views, ".settings-scrim {") \
+        < z_index(components, ".palette-scrim {") \
+        < z_index(components, ".toast {")
+
+
+def test_the_settings_close_timer_matches_its_transition():
+    # a timer shorter than the fade cuts it off; a longer one holds up the page
+    css = (WEB / "css" / "views.css").read_text()
+    src = (WEB / "js" / "views" / "settings.js").read_text()
+    ms = re.search(r"LEAVE_MS = (\d+)", src).group(1)
+    assert f"transition: opacity {ms}ms ease-out;" in css
 
 
 def test_appearance_is_chosen_by_picture():
     """An appearance choice is the one control that should show its own
-    result — and it sits beside the pill-theme grid, which already did."""
+    result, and so is the pill's: both are pictures, and the pill's two must
+    look like the two real pills rather than like each other."""
     html = INDEX.read_text()
-    assert 'id="appearance-grid"' in html
+    assert 'id="appearance-grid"' in html and 'id="theme-grid"' in html
     assert 'id="appearance-select"' not in html
     src = (WEB / "js" / "views" / "settings.js").read_text()
     assert "renderAppearance" in src
     assert "thumb-art" in src
+    assert "pill-preview" in src
+    css = (WEB / "css" / "views.css").read_text()
+    assert '.pill-preview[data-theme="quiet"]' in css
+    assert ".pp-live" in css
+
+
+def test_pill_previews_stand_still():
+    """A Settings page left open must not keep animating on an 8 GB Mac."""
+    css = (WEB / "css" / "views.css").read_text()
+    for rule in (".pill-preview {", ".pp-bar {", ".pp-dot {"):
+        body = css[css.index(rule):]
+        assert "animation" not in body[:body.index("}")], rule
+    assert "mini-pill" not in (WEB / "css" / "components.css").read_text()
 
 
 def test_settings_has_the_new_controls():
@@ -636,11 +664,12 @@ def test_accent_text_meets_aa_on_every_background_in_both_themes():
             assert ratio >= 4.5, f"{selector}: accent-text on {bg} is {ratio:.2f}:1"
 
 
-def test_the_more_disclosure_uses_the_text_safe_accent():
+def test_the_more_disclosure_is_not_blue():
+    # blue means "needs you", and a closed disclosure doesn't
     css = (WEB / "css" / "views.css").read_text()
     rule = css[css.index(".more summary {"):]
     rule = rule[:rule.index("}")]
-    assert "var(--accent-text)" in rule
+    assert "var(--muted)" in rule
 
 
 # ---- L8 (2026-10-12 audit) ----

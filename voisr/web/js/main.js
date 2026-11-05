@@ -8,7 +8,8 @@ window.Voisr = window.Voisr || {};
   // stuck with a stale "entering" class or an orphaned listener
   let enteringTarget = null;
   let enteringController = null;
-  let currentView = null;
+  let currentView = null;   // the page, which stays behind the Settings pop-up
+  let litView = null;       // what the sidebar highlights: the page, or Settings
 
   /* One highlight glides behind the sidebar to the active item (180 ms,
      base.css) instead of each item painting its own. The first placement
@@ -31,22 +32,27 @@ window.Voisr = window.Voisr || {};
      window's height. Drop .is-live so the highlight tracks the resize instead of
      trailing it: glideTo switches the transition back on after placing it. */
   window.addEventListener("resize", () => {
-    if (!currentView) return;
+    if (!litView) return;
     const glide = document.getElementById("nav-glide");
     if (glide) glide.classList.remove("is-live");
-    glideTo(currentView);
+    glideTo(litView);
   });
+
+  function highlight(view) {
+    litView = view;
+    document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
+    glideTo(view);
+  }
 
   function show(view) {
     currentView = view;
     document.querySelectorAll(".view").forEach((v) => { v.hidden = v.id !== `view-${view}`; });
-    document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
-    glideTo(view);
+    highlight(view);
     const target = document.getElementById(`view-${view}`);
 
     // .main is the one scroll container for every view, so its offset
     // carries across a switch: leave Home scrolled to the bottom, open
-    // Settings, and it opens scrolled past its own content — a blank pane.
+    // History, and it opens scrolled past its own content — a blank pane.
     const main = document.querySelector(".main");
     if (main) main.scrollTop = 0;
 
@@ -81,8 +87,33 @@ window.Voisr = window.Voisr || {};
     if (view === "history") V.views.history.render();
     if (view === "dictionary") V.views.dictionary.render();
     if (view === "snippets") V.views.snippets.render();
-    if (view === "settings") V.views.settings.render();
   }
+
+  /* Settings is a pop-up over the page rather than a page of its own, so it
+     never goes through show(): the page behind stays exactly as it was.
+     opts.section opens it on one section (settings.js's SECTIONS). A page
+     switch, which only the palette can ask for while it's up, closes it. */
+  function go(view, opts) {
+    const settings = V.views.settings;
+    if (view === "settings") {
+      highlight("settings");
+      settings.open(opts);
+      return;
+    }
+    currentView = null;  // the page being left has nothing to refresh
+    settings.close();
+    show(view);
+  }
+
+  /* A setting can change what the page behind says. Home learns the key's name
+     and the auto-paste line only when it renders, and Dictionary's suggestions
+     depend on the learning switches. History has nothing that depends on them,
+     and rendering it would lose the row you had selected. */
+  window.addEventListener("voisr:settings-closed", () => {
+    if (currentView) highlight(currentView);
+    if (currentView === "home") V.views.home.render();
+    if (currentView === "dictionary") V.views.dictionary.render();
+  });
 
   /* ---------- appearance ---------- */
 
@@ -118,7 +149,7 @@ window.Voisr = window.Voisr || {};
   async function init() {
     const $ = V.ui.$;
     document.querySelectorAll("[data-view]").forEach((b) =>
-      b.addEventListener("click", () => show(b.dataset.view)));
+      b.addEventListener("click", () => go(b.dataset.view)));
     $("#record-btn").addEventListener("click", V.views.home.toggleRecord);
     $("#dict-form").addEventListener("submit", V.views.dictionary.addEntry);
     $("#paste-toggle").addEventListener("change", async (e) => {
@@ -165,25 +196,6 @@ window.Voisr = window.Voisr || {};
       }
       if (!$("#view-dictionary").hidden) V.views.dictionary.render();
     });
-    $("#hotkey-capture").addEventListener("click", async (e) => {
-      const btn = e.currentTarget;
-      if (btn.disabled) return;
-      btn.disabled = true;
-      btn.textContent = "Press any key…";
-      $("#hotkey-current").textContent = "…";
-      try {
-        const res = await V.api().capture_hotkey();
-        if (res.error) {
-          V.ui.toast(res.error);
-        } else {
-          V.ui.toast(`Push-to-talk key set to ${res.label}`);
-        }
-      } finally {
-        btn.disabled = false;
-        btn.textContent = "Change…";
-        V.views.settings.render();
-      }
-    });
     V.views.home.init();
     V.views.history.initKeys();
     V.views.dictionary.init();
@@ -207,5 +219,5 @@ window.Voisr = window.Voisr || {};
 
   window.addEventListener("pywebviewready", init);
 
-  V.show = show;
+  V.show = go;
 })(window.Voisr);

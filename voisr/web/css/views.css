@@ -280,155 +280,310 @@ mark { background: var(--active); color: inherit; border-radius: 3px; }
 .chip-said { font-style: italic; }
 .chip-arrow { font-size: 12px; color: var(--hero-muted); }
 
-/* ---------- Settings ---------- */
+/* ---------- Settings pop-up ---------- */
 
-/* Four stacked cards read as four objects; this is one list of preferences.
-   A plain heading over hairline rows is denser and closer to the platform. */
-.settings-section { margin-bottom: 30px; }
-.settings-section .section-title {
-  font-size: 12px; font-weight: 700; color: var(--muted);
-  text-transform: uppercase; letter-spacing: .05em;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
+/* Opacity and scale only, closing quicker than it opens. The closing time is
+   LEAVE_MS in settings.js. Transitions, so reopening mid-close carries on from
+   where it is. */
+.settings-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: center;
+  padding: 28px;
+  background: var(--scrim);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease-out;
 }
+.settings-scrim[hidden] { display: none; }
+.settings-scrim.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  transition: opacity var(--base) ease-out;
+}
+.settings-scrim:focus, .settings-dialog:focus { outline: none; }
+
+.settings-dialog {
+  display: flex;
+  width: 100%;
+  max-width: 880px;
+  overflow: hidden;
+  background: var(--panel);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  transform: scale(.98);
+  transition: transform 140ms ease-out;
+}
+.settings-scrim.is-open .settings-dialog {
+  transform: none;
+  transition: transform var(--base) var(--ease);
+}
+
+.settings-nav {
+  flex: 0 0 204px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 18px 10px 14px;
+  background: var(--surface-2);
+}
+.settings-nav-title { padding: 0 10px 8px; }
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 10px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  text-align: left;
+}
+.settings-nav-item svg { flex: none; width: 16px; height: 16px; }
+.settings-nav-item.active { background: var(--active); font-weight: 500; }
+
+@media (hover: hover) and (pointer: fine) {
+  .settings-nav-item:hover { background: color-mix(in srgb, var(--active) 55%, transparent); }
+  .settings-nav-item.active:hover { background: var(--active); }
+}
+
+.settings-foot {
+  margin-top: auto;
+  padding: 8px 10px 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.settings-body {
+  flex: 1;
+  min-width: 0;
+  padding: 28px 36px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.settings-title { margin-bottom: 18px; }
+.settings-lead { margin-bottom: 14px; font-size: 13.5px; color: var(--muted); }
+.settings-block { margin-bottom: 18px; }
+.settings-subhead { margin-bottom: 8px; font-size: 14px; font-weight: 500; }
 
 .setting-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 18px 2px;
-  border-bottom: 1px solid var(--border);
+  padding: 13px 0;
 }
-.setting-row h3 { font-size: 14px; font-weight: 600; }
+.setting-row + .setting-row, .pick-grid + .setting-row { border-top: 1px solid var(--border); }
 
-.settings-section > .setting-row:last-child { border-bottom: none; }
+.setting-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.setting-copy h3 { font-size: 14px; font-weight: 500; }
+.setting-desc { font-size: 13px; line-height: 1.45; color: var(--muted); }
 
-/* a row whose control is a full-width grid below its own copy */
-.setting-row-stack { border-bottom: none; padding-bottom: 6px; }
+/* Opening "More" grows the row, so its control sits at the top from the start
+   rather than sliding down when the text opens. */
+.setting-row.has-more { align-items: flex-start; }
+.has-more > .switch { margin-top: 3px; }
 
-.model-list { display: flex; flex-direction: column; }
-.model-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 24px;
-  padding: 14px 2px; border-bottom: 1px solid var(--border);
-}
-.model-row:last-child { border-bottom: none; }
-.model-row.active h3::after { content: " ✓"; color: var(--accent); }
-.model-meta { margin-top: 2px; }
-.model-warn { color: var(--destructive); font-size: 13px; margin-top: 3px; max-width: 62ch; }
-.model-actions { display: flex; gap: 8px; flex-shrink: 0; }
-.model-actions button { height: 36px; }
-.model-actions button:disabled { opacity: .5; cursor: not-allowed; }
-
-.setting-desc { color: var(--muted); font-size: 13px; margin-top: 3px; max-width: 62ch; }
-
-/* long caveats collapse instead of pushing every other row apart */
-.more { margin-top: 5px; }
 .more summary {
-  font-size: 12px; font-weight: 600; color: var(--accent-text);
-  cursor: pointer; list-style: none; width: fit-content;
+  width: fit-content;
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
 }
 .more summary::-webkit-details-marker { display: none; }
 .more summary::after { content: " \203A"; }
 .more[open] summary::after { content: " \2304"; }
+.more > .setting-desc { margin-top: 4px; }
 
-.setting-status { font-size: 12px; font-weight: 600; color: var(--success); margin-top: 6px; }
-.setting-status[data-state="busy"] { color: var(--muted); }
-.setting-status[data-state="off"],
-.setting-status[data-state="unknown"] { color: var(--warning); }
-
-/* ---------- Hotkey capture ---------- */
-
-.hotkey-control { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-
-/* ---------- Pill theme picker ---------- */
-
-.theme-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
-  gap: 10px;
-  margin: 4px 0 10px;
+@media (hover: hover) and (pointer: fine) {
+  .more summary:hover { color: var(--ink); }
 }
 
-.theme-opt {
+.switch:has(input:disabled) { opacity: .5; cursor: default; }
+.switch input:disabled { cursor: default; }
+
+/* quiet while it's fine: only a key that isn't listening needs you */
+.setting-status { font-size: 12.5px; line-height: 1.4; color: var(--muted); }
+.setting-status:empty { display: none; }
+.setting-status[data-state="off"],
+.setting-status[data-state="unknown"] { font-weight: 500; color: var(--accent-text); }
+
+/* ---------- Push-to-talk key ---------- */
+
+.key-control { display: flex; align-items: center; flex: none; gap: 8px; }
+.key-control .keycap[hidden] { display: none; }
+
+.keycap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 7px;
+  background: var(--panel);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.key-name { font-size: 13.5px; }
+
+/* the app is waiting on you, and this is what it's waiting for */
+.key-control.is-listening .key-name {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 7px;
+  background: var(--accent-soft);
+  font-weight: 500;
+  color: var(--accent-text);
+}
+
+/* ---------- Models ---------- */
+
+.model-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 0;
+}
+.model-row + .model-row { border-top: 1px solid var(--border); }
+.model-row .setting-copy { flex: 1; gap: 2px; }
+.model-row .setting-copy h3 { font-weight: 400; }
+.model-row.active .setting-copy h3 { font-weight: 500; }
+.model-row .setting-desc { font-size: 12.5px; }
+
+.model-check { flex: none; width: 15px; height: 15px; }
+.model-check svg { display: block; width: 15px; height: 15px; }
+
+.model-actions { display: flex; align-items: center; flex: none; gap: 8px; margin-left: 6px; }
+.model-percent { font-variant-numeric: tabular-nums; }
+
+/* along the row's own bottom edge, on top of the line under it */
+.model-bar {
+  position: absolute;
+  left: 25px;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: var(--border);
+}
+.model-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--ink);
+  transform-origin: left;
+  transition: transform 900ms linear;
+}
+
+/* ---------- Pictures to pick from: theme and pill ---------- */
+
+.pick-grid { display: flex; flex-wrap: wrap; gap: 12px; padding: 14px 0; }
+
+.thumb, .theme-opt {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.thumb-art, .theme-art {
+  display: flex;
+  box-sizing: border-box;
+  height: 70px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  transition: transform var(--fast) ease-out;
+}
+.thumb-art { width: 118px; }
+.theme-art { width: 168px; align-items: center; justify-content: center; }
+
+/* a ring outside the edge, so choosing doesn't nudge the picture inside it */
+.thumb.active .thumb-art, .theme-opt.active .theme-art {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .thumb:not(.active):hover .thumb-art,
+  .theme-opt:not(.active):hover .theme-art { border-color: var(--muted); }
+}
+
+.thumb:active .thumb-art, .theme-opt:active .theme-art { transform: scale(.97); }
+
+/* These colours are fixed: a Light thumbnail has to still look light while the
+   app is dark, and the pill's own dark capsule is the same in both themes.
+   They are listed in tests/test_web_assets.py's ALLOWED_LITERAL_COLOURS. */
+.thumb-art i { display: block; flex: none; width: 28px; }
+.thumb-art b { display: block; flex: 1; }
+.thumb-art[data-mode="system"] i { background: rgb(143, 142, 136); }
+.thumb-art[data-mode="system"] b { background: linear-gradient(135deg, rgb(253, 253, 252) 50%, rgb(27, 27, 25) 50%); }
+.thumb-art[data-mode="light"] i { background: rgb(245, 244, 241); }
+.thumb-art[data-mode="light"] b { background: rgb(253, 253, 252); }
+.thumb-art[data-mode="dark"] i { background: rgb(20, 20, 19); }
+.thumb-art[data-mode="dark"] b { background: rgb(27, 27, 25); }
+
+/* A still picture of the pill: settings.js draws what's inside. */
+.pill-preview {
+  display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 8px 10px;
+  justify-content: center;
+  flex: none;
+  gap: 2.5px;
+  width: 128px;
+  height: 32px;
+  border-radius: 16px;
+  background: rgb(25, 25, 24);
+}
+.pill-preview[data-theme="quiet"] { gap: 4px; width: 46px; height: 20px; border-radius: 10px; }
+
+.pp-bar {
+  display: block;
+  width: 1.75px;
+  border-radius: 2px;
+  background: var(--mb-color, rgb(253, 253, 252));
+}
+.pp-dot {
+  display: block;
+  width: 4px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--mb-color, rgb(253, 253, 252));
+}
+/* the mic is live: never recoloured */
+.pp-live { display: block; width: 7px; height: 7px; border-radius: 4px; background: rgb(184, 186, 255); }
+
+/* as wide as "Theme default", so a hex doesn't reflow the row under the popover */
+.swatch-btn { justify-content: flex-start; min-width: 140px; }
+
+.swatch {
+  flex: none;
+  width: 14px;
+  height: 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  transition: border-color .15s ease-out, background .15s ease-out;
+  border-radius: 7px;
+  background: rgb(253, 253, 252);
 }
 
-.theme-opt:hover { background: var(--bg); }
-
-.theme-opt.active { border-color: var(--accent); background: var(--accent-soft); }
-
-.theme-name { font-size: 12px; font-weight: 600; color: var(--muted); }
-
-.theme-opt.active .theme-name { color: var(--ink); }
-
-/* ---------- Appearance thumbnails ----------
-
-   The literal colours below are fixed light/dark preview swatches, listed in
-   tests/test_web_assets.py's ALLOWED_LITERAL_COLOURS: like the pill's brand
-   colours they must NOT follow the active appearance, since a Light
-   thumbnail has to still look light while the app is in dark mode. */
-
-.thumb-grid { display: flex; gap: 10px; margin: 4px 0 10px; }
-
-.thumb {
-  display: flex; flex-direction: column; gap: 8px; align-items: stretch;
-  padding: 8px 8px 6px; width: 132px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
-}
-.thumb:hover { background: var(--bg); }
-.thumb.active { border-color: var(--accent); background: var(--accent-soft); }
-
-.thumb-art {
-  position: relative; display: block; height: 64px;
-  border-radius: 8px; overflow: hidden;
-  border: 1px solid var(--border);
-}
-/* two shapes standing in for the app: sidebar (i) and a content block (b) */
-.thumb-art i { position: absolute; inset: 0 auto 0 0; width: 34%; display: block; }
-.thumb-art b {
-  position: absolute; left: 42%; right: 10%; top: 22%; height: 8px;
-  border-radius: 3px; display: block;
-}
-.thumb-art[data-mode="light"] { background: rgb(255, 255, 255); }
-.thumb-art[data-mode="light"] i { background: rgb(246, 243, 238); }
-.thumb-art[data-mode="light"] b { background: rgb(232, 227, 218); }
-.thumb-art[data-mode="dark"] { background: rgb(35, 32, 25); }
-.thumb-art[data-mode="dark"] i { background: rgb(26, 24, 21); }
-.thumb-art[data-mode="dark"] b { background: rgb(51, 47, 39); }
-.thumb-art[data-mode="system"] {
-  background: linear-gradient(105deg, rgb(255, 255, 255) 0 50%, rgb(35, 32, 25) 50% 100%);
-}
-.thumb-art[data-mode="system"] i { background: rgb(246, 243, 238); }
-.thumb-art[data-mode="system"] b {
-  background: linear-gradient(90deg, rgb(232, 227, 218) 0 45%, rgb(51, 47, 39) 45% 100%);
-}
-
-.thumb-name { font-size: 12px; font-weight: 600; color: var(--muted); text-align: center; }
-.thumb.active .thumb-name { color: var(--ink); }
-
-/* ---------- Custom color wheel + popover ---------- */
-
-.color-control { position: relative; }
-
-.swatch-btn {
-  display: inline-flex; align-items: center; gap: 8px;
-  height: 36px; padding: 0 12px;
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  background: var(--surface);
-}
-.swatch-btn:hover { background: var(--bg); }
+/* ---------- Popovers ---------- */
 
 .popover {
   position: absolute; right: 0; top: calc(100% + 8px); z-index: 50;
@@ -443,8 +598,24 @@ mark { background: var(--active); color: inherit; border-radius: 3px; }
    visible even while `hidden` is true without this override -- same fix as
    .palette-scrim[hidden] above in components.css. */
 .popover[hidden] { display: none; }
+
+/* placed by settings.js, and it grows out of the button it hangs from */
+#color-popover {
+  position: fixed;
+  top: 0; right: auto; left: 0;
+  transform-origin: top right;
+  animation: pop-in var(--base) var(--ease);
+}
+#color-popover[data-side="above"] { transform-origin: bottom right; }
+
+@keyframes pop-in { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
+
 @media (prefers-reduced-motion: reduce) {
-  .popover { animation: none; }
+  .popover, #color-popover { animation: none; }
+  .settings-dialog, .settings-scrim.is-open .settings-dialog { transform: none; transition: none; }
+  .thumb-art, .theme-art { transition: none; }
+  .thumb:active .thumb-art, .theme-opt:active .theme-art { transform: none; }
+  .model-bar-fill { transition: none; }
 }
 
 /* ---------- Export format popover ---------- */
@@ -483,25 +654,3 @@ mark { background: var(--active); color: inherit; border-radius: 3px; }
   pointer-events: none;
   transform: translate(-50%, -50%);
 }
-
-.swatch {
-  width: 18px; height: 18px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: transparent;
-  flex-shrink: 0;
-}
-
-.btn-danger {
-  height: 36px; padding: 0 16px; border-radius: var(--radius-sm);
-  border: 1px solid var(--destructive); color: var(--destructive);
-  background: transparent; font-weight: 600;
-}
-.btn-danger:hover { background: var(--destructive-soft); }
-/* armed (awaiting confirm click) state must be unmistakable, not just a
-   label swap -- filled with the destructive colour instead of outlined. */
-.btn-danger.armed {
-  background: var(--destructive); border-color: var(--destructive);
-  color: var(--on-accent);
-}
-.btn-danger.armed:hover { background: var(--destructive); }
