@@ -8,7 +8,9 @@ window.Voisr = window.Voisr || {};
 
      The app stays resident, so nothing runs unless someone can be watching: no
      rAF while the window is hidden or not focused, a banner is off-screen or
-     hidden, or under reduced motion. Each of those holds a still frame.
+     hidden, or under reduced motion. Each of those holds a still frame. After
+     V.idle's wait without input it eases to a stop too, unless it's showing the
+     mic is open, and eases off again on the next input.
 
      Put `data-wave` on an element to get a wave. Anything rendered after load
      calls mount(el). setSpeed(el, n) changes the pace without a jump: 1 is
@@ -23,6 +25,9 @@ window.Voisr = window.Voisr || {};
   /* how fast a speed change settles, in seconds: quick enough to answer the
      mic opening, slow enough not to lurch */
   const SPEED_SETTLE = .25;
+  const IDLE_SPEED = 1;
+  // slower than this is a stop: it takes a little over a second to get here
+  const STOPPED = .01;
 
   const ENVELOPE = Array.from({ length: POINTS + 1 }, (_, i) =>
     Math.pow(Math.sin(Math.PI * (i / POINTS)), POWER));
@@ -51,8 +56,14 @@ window.Voisr = window.Voisr || {};
   const canRun = () => !motionQuery.matches && document.visibilityState !== "hidden"
     && document.hasFocus();
 
-  function anyOnScreen() {
-    for (const wave of waves.values()) if (wave.onScreen) return true;
+  /* The speed this wave is heading for. Any other pace means the mic is doing
+     something, and that stays on show however long it takes. */
+  const goal = (wave) => (wave.target === IDLE_SPEED && V.idle.isIdle() ? 0 : wave.target);
+
+  function anyMoving() {
+    for (const wave of waves.values()) {
+      if (wave.onScreen && (goal(wave) || wave.speed > STOPPED)) return true;
+    }
     return false;
   }
 
@@ -62,7 +73,7 @@ window.Voisr = window.Voisr || {};
   }
 
   function sync() {
-    if (canRun() && anyOnScreen()) {
+    if (canRun() && anyMoving()) {
       if (!frame) {
         last = 0;
         frame = window.requestAnimationFrame(tick);
@@ -73,6 +84,13 @@ window.Voisr = window.Voisr || {};
   }
 
   function tick(now) {
+    // Checked here as well as on events: if WebKit missed a blur, the wave
+    // would otherwise keep painting behind other apps.
+    if (!canRun()) {
+      frame = 0;
+      sync();
+      return;
+    }
     frame = window.requestAnimationFrame(tick);
     if (!last) { last = now; return; }
     // the small allowance keeps a 60 Hz display on every second frame rather
@@ -84,10 +102,11 @@ window.Voisr = window.Voisr || {};
     for (const [el, wave] of waves) {
       if (!el.isConnected) { unmount(el); continue; }
       if (!wave.onScreen) continue;
-      wave.speed += (wave.target - wave.speed) * (1 - Math.exp(-dt / SPEED_SETTLE));
+      wave.speed += (goal(wave) - wave.speed) * (1 - Math.exp(-dt / SPEED_SETTLE));
       wave.clock += dt * wave.speed;
       draw(wave);
     }
+    if (!anyMoving()) stop();
   }
 
   const observer = typeof IntersectionObserver === "function"
@@ -115,7 +134,7 @@ window.Voisr = window.Voisr || {};
       return path;
     });
     el.replaceChildren(svg);
-    const wave = { paths, clock: 0, speed: 1, target: 1, onScreen: !observer };
+    const wave = { paths, clock: 0, speed: 1, target: IDLE_SPEED, onScreen: !observer };
     waves.set(el, wave);
     draw(wave);
     if (observer) observer.observe(el);
@@ -130,13 +149,17 @@ window.Voisr = window.Voisr || {};
 
   function setSpeed(el, speed) {
     const wave = waves.get(el);
-    if (wave) wave.target = speed;
+    if (!wave) return;
+    wave.target = speed;
+    V.idle.wake();  // the mic opening or closing is someone at work
+    sync();
   }
 
   document.addEventListener("visibilitychange", sync);
   window.addEventListener("focus", sync);
   window.addEventListener("blur", sync);
   motionQuery.addEventListener("change", sync);
+  V.idle.onChange(sync);
   document.querySelectorAll("[data-wave]").forEach(mount);
 
   V.wave = { mount, unmount, setSpeed, pathFor, LINES };
