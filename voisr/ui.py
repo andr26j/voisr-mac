@@ -26,7 +26,7 @@ from voisr.recording_queue import (
     RecordingSession,
     SessionResult,
 )
-from voisr.snippets import (SnippetError, find_snippet, has_speech_evidence, needs_leading_space,
+from voisr.snippets import (SnippetError, dictation_wants_space, find_snippet, has_speech_evidence, needs_leading_space,
                             snippet_warnings, tidy_trigger, trigger_hints, triggers_for_clip,
                             with_saved)
 from voisr.status_item import StatusItem
@@ -1623,6 +1623,7 @@ class Api:
         self._last_paste_ts = None
         self._typing_generation = 0
         self._last_paste_typing_generation = 0
+        self._last_paste_app = None
         self._paste_state_lock = threading.Lock()
         self._window = None
         self._status_item = None
@@ -1779,16 +1780,16 @@ class Api:
         except Exception as error:
             print(f"Voisr: edit learning skipped ({error.__class__.__name__})", flush=True)
 
-    def _snippet_wants_space(self, text) -> bool:
+    def _read_paste_target(self):
         """Read where the paste is about to go: the release capture may be of a
-        field the user has since left. Bounded, and not knowing means no space."""
+        field the user has since left. Bounded, and not knowing means None."""
         if self._focus is None or not self._screen_context_on():
-            return False
+            return None
         try:
-            return needs_leading_space(self._focus.read_now(VERIFY_BUDGET_S), text)
+            return self._focus.read_now(VERIFY_BUDGET_S)
         except Exception as error:
             print(f"Voisr: screen context skipped ({error.__class__.__name__})", flush=True)
-            return False
+            return None
 
     def _end_learning_for_snippet(self, session) -> None:
         """Before the text can reach a field, where a window still open on an
@@ -2054,7 +2055,7 @@ class Api:
         return self.current_level()
 
     def note_user_typing(self):
-        """Record manual typing without blocking the event-tap callback."""
+        """Record typing, or a click, without blocking the event-tap callback."""
         with self._paste_state_lock:
             self._typing_generation += 1
 
@@ -2267,15 +2268,17 @@ class Api:
             paste_started = self._clock()
             with self._paste_state_lock:
                 typing_generation = self._typing_generation
-                join = (
-                    snippet is None
-                    and self._last_paste_text
+                recent = (
+                    self._last_paste_text
                     and typing_generation == self._last_paste_typing_generation
                     and self._clock() - self._last_paste_ts <= self.SPACE_JOIN_WINDOW_S
                     and not self._last_paste_text[-1].isspace()
                 )
-            if snippet is not None:
-                join = self._snippet_wants_space(text)
+                last_app = self._last_paste_app
+            # outside the lock: this waits on the Accessibility worker
+            target = self._read_paste_target()
+            join = (needs_leading_space(target, text) if snippet is not None
+                    else dictation_wants_space(target, text, recent, last_app))
             try:
                 pasted = self._paste_fn(
                     (" " if join else "") + text,
@@ -2297,6 +2300,7 @@ class Api:
                     self._last_paste_text = text
                     self._last_paste_ts = self._clock()
                     self._last_paste_typing_generation = typing_generation
+                    self._last_paste_app = target.bundle_id if target is not None else None
 
         verdict = check.get("verdict")
         manual_paste = bool(pasted and verdict and verdict.missed)
@@ -2928,6 +2932,30 @@ def close_hides_window(event, ns_window, now) -> bool:
     return False
 
 
+def install_click_watch(on_click, appkit=None):
+    """Call on_click when the mouse goes down in another app. A global monitor
+    only watches, so unlike the push-to-talk tap it can't hold up a click, and
+    it needs no permission for mouse events. Clicks in Voisr's own window aren't
+    seen, and don't move focus in any other app. Main thread. Returns the monitor
+    to keep, or None: without it a click just doesn't stop the joining space."""
+    try:
+        if appkit is None:
+            import AppKit as appkit
+
+        def handler(_event):
+            try:
+                on_click()
+            except Exception:
+                pass  # nothing here may reach AppKit
+
+        return appkit.NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+            appkit.NSEventMaskLeftMouseDown | appkit.NSEventMaskRightMouseDown
+            | appkit.NSEventMaskOtherMouseDown, handler)
+    except Exception as e:
+        print(f"Voisr: click watch not installed ({e})", flush=True)
+        return None
+
+
 def install_dock_reopen(on_reopen, delegate_cls=None) -> bool:
     """Make a Dock click call on_reopen. The red button only hides the
     dashboard, and pywebview's AppDelegate lacks
@@ -3166,6 +3194,8 @@ def main():
                         # no second pass will come, so this one is the last
                         apply_native_chrome(native, True)
                 status.create()
+                # a click can move the cursor, so the next dictation may not follow on
+                api._click_watch = install_click_watch(api.note_user_typing)
 
             AppHelper.callAfter(native_setup)
 

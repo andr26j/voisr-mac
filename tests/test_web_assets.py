@@ -610,8 +610,8 @@ def test_primary_button_text_meets_aa_contrast_in_both_themes():
 
 
 def test_settings_explains_smart_join_spacing():
-    """L8: consecutive dictations are joined with a space unless a key was
-    pressed in between; a mouse click does not count. Say so."""
+    """Where the field can't be read, consecutive dictations are joined with a
+    space unless a key was pressed or the mouse clicked in between. Say so."""
     html = INDEX.read_text()
     assert "joined with a space" in html
     assert "mouse" in html
