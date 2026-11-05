@@ -443,3 +443,11 @@ test("a grant arriving on a poll doesn't replay the entrance either", async () =
   await flush();
   assert.equal(h.box.classList.contains("is-entering"), false);
 });
+
+test("finishing leaves the progress bar alone while it fades", async () => {
+  const h = await atDictation();
+  h.btn("Skip").click();
+  await flush();
+  assert.equal(h["first-run-progress"].getAttribute("aria-label"), "Step 3 of 3");
+  assert.ok(h["first-run-progress"].children.every((seg) => seg.classList.contains("is-on")));
+});

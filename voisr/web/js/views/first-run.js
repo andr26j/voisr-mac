@@ -96,7 +96,7 @@ window.Voisr = window.Voisr || {};
     setListening(false);
     if (waveEl && V.wave) V.wave.unmount(waveEl);
     waveEl = null;
-    setProgress();
+    if (next) setProgress();  // leaving: the bar stays as it was while it fades
     window.removeEventListener("voisr:new-dictation", onDictation);
     if (next === 3) window.addEventListener("voisr:new-dictation", onDictation);
     const live = next === 1 || next === 3;
