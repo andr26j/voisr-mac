@@ -8,11 +8,19 @@ import { makeNode } from "./dom.mjs";
    Polls and the level feed run on real setIntervals. Unref'd, a test that ends
    mid-step can't keep the process alive. */
 const realSetInterval = globalThis.setInterval;
-globalThis.setInterval = (...args) => {
-  const timer = realSetInterval(...args);
+const realClearInterval = globalThis.clearInterval;
+let intervals = [];  // what's running, so a test can fire one by hand
+globalThis.setInterval = (fn, ms) => {
+  const timer = realSetInterval(fn, ms);
   if (timer && typeof timer.unref === "function") timer.unref();
+  intervals.push({ timer, fn, ms });
   return timer;
 };
+globalThis.clearInterval = (timer) => {
+  intervals = intervals.filter((i) => i.timer !== timer);
+  realClearInterval(timer);
+};
+const levelPoll = () => intervals.find((i) => i.ms === 200);
 
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 
@@ -25,7 +33,11 @@ const MIC_LATER = { ...MIC_ON, granted: null };
 const MIC_OFF = { ...MIC_ON, granted: false };
 
 function mount(state = {}) {
+  // each mount has its own copy of the page: the last one's polls are over
+  intervals.forEach((i) => realClearInterval(i.timer));
+  intervals = [];
   const env = loadVoisr(["js/ui.js", "js/views/home.js", "js/views/first-run.js"]);
+  env.document.hasFocus = () => state.focused !== false;
   const ids = ["first-run", "first-run-step", "first-run-progress", "toast", "view-home"];
   const nodes = {};
   for (const id of ids) { nodes[id] = makeNode(); env.register(id, nodes[id]); }
@@ -46,7 +58,7 @@ function mount(state = {}) {
     relaunch_app: async () => { calls.push(["relaunch"]); return { ok: true }; },
     hotkey_display: async () => ({ display: s.display }),
     capture_hotkey: async () => { calls.push(["capture"]); return s.capture; },
-    get_level: async () => s.level,
+    get_level: async () => { calls.push(["level"]); return s.level; },
     get_history: async () => s.history,
     set_config: async (u) => { calls.push(["save", u]); return s.saveFails ? { error: "no" } : u; },
   });
@@ -385,4 +397,32 @@ test("finishing twice only enters once", async () => {
   skip.click();
   await flush();
   assert.deepEqual(h.entered, ["app"]);
+});
+
+function withWave(h) {
+  const speeds = [];
+  h.V.wave = { mount() {}, unmount() {}, setSpeed: (el, n) => speeds.push(n) };
+  return speeds;
+}
+
+test("the wave answers the mic, and settles when it closes", async () => {
+  const h = await atKey({ level: 0.4 });
+  const speeds = withWave(h);
+  h.btn("Continue").click();
+  await flush();
+  await levelPoll().fn();
+  await flush();
+  assert.deepEqual(speeds, [3.2]);
+  h.s.level = null;
+  await levelPoll().fn();
+  await flush();
+  assert.deepEqual(speeds, [3.2, 1]);
+});
+
+test("the level poll only runs on step 3", async () => {
+  const h = await atDictation();
+  assert.ok(levelPoll());
+  h.btn("Skip").click();
+  await flush();
+  assert.equal(levelPoll(), undefined);
 });
