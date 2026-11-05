@@ -42,6 +42,9 @@ class FakeWidget:
     def show_error(self):
         self.calls.append("error")
 
+    def show_notice(self, text):
+        self.calls.append("notice")
+
     def hide(self):
         self.calls.append("hide")
 
@@ -426,6 +429,231 @@ def test_widget_disabled_via_config(tmp_path):
     svc.press()
     svc.release()
     assert widget.calls == []
+
+
+@pytest.fixture
+def settle_widget():
+    """Waits out the dictations and notices finishing since the test began, so
+    nothing more can reach the widget."""
+    before = set(threading.enumerate())
+
+    def settle():
+        for thread in set(threading.enumerate()) - before:
+            if thread.name.startswith(("voisr-widget-", "voisr-notice")):
+                thread.join(5)
+
+    return settle
+
+
+# (hands-free?, how the dictation ends or is cancelled)
+DICTATION_ENDINGS = [
+    pytest.param(False, lambda svc: svc.release(at=100.1), id="held-key-let-go"),
+    pytest.param(True, lambda svc: svc.press(at=100.1), id="hands-free-second-press"),
+    pytest.param(True, lambda svc: svc._stop_hands_free(), id="toggle-or-menu"),
+    pytest.param(False, lambda svc: svc.cancel_chord(at=100.1), id="chord-drop"),
+    pytest.param(True, lambda svc: svc.cancel_escape(), id="esc"),
+]
+
+
+@pytest.mark.parametrize("latched, end", DICTATION_ENDINGS)
+def test_pill_comes_down_when_the_setting_went_off_during_the_dictation(
+        tmp_path, settle_widget, latched, end):
+    widget = FakeWidget()
+    api = make_api(tmp_path)
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.press(latched=latched, at=100.0)
+    assert widget.calls == ["recording"]
+
+    api.set_config({"show_widget": False})
+    end(svc)
+    settle_widget()
+
+    api.close()
+    assert widget.calls == ["recording", "hide"]
+
+
+@pytest.mark.parametrize("latched, end", DICTATION_ENDINGS)
+def test_pill_never_starts_when_the_setting_came_on_during_the_dictation(
+        tmp_path, settle_widget, latched, end):
+    widget = FakeWidget()
+    api = make_api(tmp_path, config={"show_widget": False})
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.press(latched=latched, at=100.0)
+
+    api.set_config({"show_widget": True})
+    end(svc)
+    settle_widget()
+
+    api.close()
+    assert [call for call in widget.calls if call != "hide"] == []
+
+
+class HeldTimer:
+    """Never fires by itself; the test runs the timer's function."""
+
+    def start(self):
+        pass
+
+    def cancel(self):
+        pass
+
+
+def _tap_expires(svc, run_tap_timer):
+    run_tap_timer()
+
+
+def _late_second_press_then_let_go(svc, run_tap_timer):
+    svc.press(at=101.0)   # past the gate: the tap is dropped, this starts afresh
+    svc.release(at=103.0)
+
+
+def _double_tap_then_stop(svc, run_tap_timer):
+    svc.press(at=100.2)   # within the gate: hands-free
+    svc.release(at=100.3)
+    svc.press(at=101.0)
+
+
+@pytest.mark.parametrize("end", [
+    _tap_expires, _late_second_press_then_let_go, _double_tap_then_stop,
+])
+def test_pill_comes_down_when_the_setting_went_off_after_a_quick_tap(
+        tmp_path, settle_widget, end):
+    timers = []
+
+    def timer_factory(delay, fn):
+        timers.append(fn)
+        return HeldTimer()
+
+    widget = FakeWidget()
+    api = make_api(tmp_path)
+    svc = HotkeyService(api, widget=widget, hide_delay=0, tap_gate_s=0.5,
+                        timer_factory=timer_factory)
+    svc.press(at=100.0)
+    svc.release(at=100.1)
+    assert widget.calls == ["recording"]
+
+    api.set_config({"show_widget": False})
+    end(svc, lambda: timers[-1]())
+    settle_widget()
+
+    api.close()
+    assert widget.calls == ["recording", "hide"]
+
+
+def test_a_waiting_notice_is_dropped_when_the_setting_went_off(
+        tmp_path, settle_widget):
+    widget = FakeWidget()
+    api = make_api(tmp_path)
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.NOTICE_RETRY_S = 0.01
+    svc.NOTICE_HOLD_S = 0
+    svc.press()
+    svc.show_notice("Suggested: Voisr")   # waits: a dictation has the pill
+
+    api.set_config({"show_widget": False})
+    svc.release()
+    settle_widget()
+
+    api.close()
+    assert widget.calls == ["recording", "hide"]
+
+
+def test_pill_finishes_and_comes_down_when_the_setting_went_off_during_processing(
+        tmp_path, settle_widget):
+    allow = threading.Event()
+    widget = FakeWidget()
+    api = make_api(tmp_path)
+    api._transcribe_fn = lambda wav: allow.wait(5) and "hello widget"
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    try:
+        svc.press()
+        svc.release()
+        assert widget.calls == ["recording", "processing"]
+
+        api.set_config({"show_widget": False})
+    finally:
+        allow.set()
+    settle_widget()
+
+    api.close()
+    assert widget.calls == ["recording", "processing", "done", "hide"]
+
+
+def test_new_dictation_takes_down_an_older_pill_when_the_setting_is_off(
+        tmp_path, settle_widget):
+    """The new epoch orphans the older pill's own hide, and with the setting
+    off nothing else would replace it."""
+    allow = threading.Event()
+    widget = FakeWidget()
+    api = make_api(tmp_path)
+    api._transcribe_fn = lambda wav: allow.wait(5) and "hello widget"
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    try:
+        svc.press()
+        svc.release()
+        assert widget.calls == ["recording", "processing"]
+
+        api.set_config({"show_widget": False})
+        svc.press()
+        assert widget.calls == ["recording", "processing", "hide"]
+
+        svc.release()
+    finally:
+        allow.set()
+    settle_widget()
+
+    api.close()
+    assert widget.calls == ["recording", "processing", "hide"]
+
+
+class QueuedWidget:
+    """Like the real pill: each call waits for the main thread, where a newer
+    dictation's epoch can still drop it."""
+    _supports_ownership_action = True
+
+    def __init__(self):
+        self.calls = []
+        self.pending = []
+
+    def show_recording(self, theme="classic", color=None, if_current=None):
+        self.pending.append(("recording", if_current))
+
+    def show_processing(self, if_current=None):
+        self.pending.append(("processing", if_current))
+
+    def show_done(self, if_current=None):
+        self.pending.append(("done", if_current))
+
+    def hide(self, if_current=None):
+        self.pending.append(("hide", if_current))
+
+    def flush(self):
+        pending, self.pending = self.pending, []
+        for state, if_current in pending:
+            if_current(lambda state=state: self.calls.append(state))
+
+
+def test_a_hide_dropped_by_a_newer_dictation_does_not_count_as_down(
+        tmp_path, settle_widget):
+    widget = QueuedWidget()
+    api = make_api(tmp_path)
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.press()
+    widget.flush()
+    assert widget.calls == ["recording"]
+
+    # the first dictation's hide is queued but hasn't run when the next press
+    # lands, so that press's new epoch drops it
+    svc.release()
+    settle_widget()
+    assert widget.pending[-1][0] == "hide"
+
+    api.set_config({"show_widget": False})
+    svc.press()
+    widget.flush()
+
+    api.close()
+    assert widget.calls == ["recording", "hide"]
 
 
 def test_release_without_press_is_noop(tmp_path):

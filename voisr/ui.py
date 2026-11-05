@@ -741,6 +741,7 @@ class HotkeyService:
         self._target_vk = None
         self._state_lock = threading.RLock()
         self._epoch = 0  # bumped per recording; stale _finish threads must not touch the widget
+        self._pill_up = False  # shown, with no hide run since; see _take_pill_down
         self._notice_after = 0.0  # the pill is showing a dictation's result until then
         # Key events are handed to this serial worker instead of being acted
         # on inside the Quartz tap callback: press() can wait on the previous
@@ -823,18 +824,29 @@ class HotkeyService:
     def _widget_enabled(self) -> bool:
         return self._widget is not None and bool(self._api.get_config().get("show_widget", True))
 
-    def _run_widget_action(self, epoch: int, action) -> None:
+    def _run_widget_action(self, epoch: int, action, name: str | None = None) -> None:
         with self._state_lock:
             if epoch == self._epoch:
                 action()
+                if name == "hide":
+                    self._pill_up = False  # only now: a newer epoch drops a queued hide
 
     def _widget_action(self, name: str, epoch: int, *args, **kwargs) -> None:
+        """Caller holds _state_lock."""
         method = getattr(self._widget, name)
+        if name != "hide":
+            self._pill_up = True
         if getattr(self._widget, "_supports_ownership_action", False):
             method(*args, **kwargs,
-                   if_current=lambda action: self._run_widget_action(epoch, action))
+                   if_current=lambda action: self._run_widget_action(epoch, action, name))
         else:
-            method(*args, **kwargs)
+            self._run_widget_action(epoch, lambda: method(*args, **kwargs), name)
+
+    def _take_pill_down(self, epoch: int) -> None:
+        """Hide the pill if one is up; caller holds _state_lock. This goes by
+        what was shown, not by the setting, which may have changed since."""
+        if self._pill_up:
+            self._widget_action("hide", epoch)
 
     def press(self, latched=False, at=None) -> None:
         at = self._clock() if at is None else at
@@ -906,6 +918,10 @@ class HotkeyService:
                             "show_recording", epoch,
                             theme=sanitize_pill_theme(cfg.get("pill_theme")),
                             color=sanitize_pill_color(cfg.get("pill_color")))
+                    else:
+                        # the setting went off under an older pill, and the
+                        # new epoch orphans that pill's own hide
+                        self._take_pill_down(epoch)
                     if released:
                         # a toggle ends at once; a held key goes through the gate
                         finish = (self._end_recording() if self._latched
@@ -1095,9 +1111,11 @@ class HotkeyService:
         passes the result to _spawn_finish after letting go of it."""
         self._pressed = False
         epoch = self._epoch
-        show = self._widget_enabled()
+        show = self._pill_up and self._widget_enabled()
         if show:
             self._widget_action("show_processing", epoch)
+        else:
+            self._take_pill_down(epoch)
         future = self._api._release_recording(paste=True)
         return future, show, epoch
 
@@ -1152,6 +1170,8 @@ class HotkeyService:
             for _ in range(self.NOTICE_TRIES):
                 with self._state_lock:
                     if idle():
+                        if not self._widget_enabled():
+                            return  # turned off while this waited
                         self._epoch += 1
                         epoch = self._epoch
                         self._dress_widget()
@@ -1350,7 +1370,8 @@ class HotkeyService:
         recording after letting go of it: closing a mic can block, and the
         pill's main-thread callbacks take the lock."""
         self._pressed = False
-        if self._widget_enabled():
+        # a pill that's up comes down even if the setting went off since
+        if self._pill_up or self._widget_enabled():
             self._widget_action("hide", epoch)
 
     def _spawn_listener(self, mode=None) -> None:
@@ -1900,27 +1921,30 @@ class Api:
         """What the paste calls after its grace, with the old clipboard's text;
         True leaves the dictation on the clipboard. Fills `check` for later:
         the verdict, the two captures, and the read's time. Only reads, for at
-        most VERIFY_BUDGET_S. Skipped entirely when off or with no baseline."""
+        most VERIFY_BUDGET_S. Skipped entirely when off or with no baseline.
+        Called before the paste, which is when the baseline is fixed: a capture
+        ending later may have read the text landing, and that would look like a
+        field the paste never changed."""
         focus = self._focus
         state = focus.session(session.sequence)
+        before = state.release_now() if state is not None else None
 
         def verify(old_clipboard):
             started = self._clock()
-            before = after = None
+            after = None
             if not self._screen_context_on():
                 verdict = skipped("context_off")
+            elif before is None:
+                late = state is not None and state.release_now() is not None
+                verdict = skipped("late_baseline" if late else "no_baseline")
             else:
-                before = state.release_now() if state is not None else None
-                if before is None:
-                    verdict = skipped("no_baseline")
-                else:
-                    try:
-                        after = focus.read_now(VERIFY_BUDGET_S)
-                        verdict = check_delivery(before, after, text, old_clipboard)
-                    except Exception as error:
-                        print(f"Voisr: paste check skipped ({error.__class__.__name__})",
-                              flush=True)
-                        verdict = skipped("error")
+                try:
+                    after = focus.read_now(VERIFY_BUDGET_S)
+                    verdict = check_delivery(before, after, text, old_clipboard)
+                except Exception as error:
+                    print(f"Voisr: paste check skipped ({error.__class__.__name__})",
+                          flush=True)
+                    verdict = skipped("error")
             check.update(verdict=verdict, before=before, after=after,
                          ms=(self._clock() - started) * 1000)
             return verdict.missed

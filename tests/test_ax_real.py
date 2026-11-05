@@ -88,6 +88,19 @@ def wait_focused(adapter, bundle_id="com.apple.TextEdit", timeout=5.0):
     pytest.skip(f"{bundle_id} never took focus")
 
 
+def transcribes_after_the_capture(api):
+    """Real transcription outlasts the release capture. This one is instant, and
+    the paste check only trusts a capture that ended before the paste began."""
+    from tests.test_context_api import release_capture
+    transcribe = api._transcribe_fn
+
+    def held(wav):
+        release_capture(api).result(timeout=5)
+        return transcribe(wav)
+
+    api._transcribe_fn = held
+
+
 def test_capture_paste_verify_edit_suggestion(tmp_path, textedit, monkeypatch):
     from voisr.ax_context import MacAXAdapter, capture_focus
     from voisr.history import HistoryStore
@@ -113,6 +126,7 @@ def test_capture_paste_verify_edit_suggestion(tmp_path, textedit, monkeypatch):
               recorder_factory=FakeRecorder, ax_adapter=adapter,
               transcribe_fn=lambda wav: "voiser is great",
               paste_fn=paste_at_cursor)
+    transcribes_after_the_capture(api)
     try:
         for _ in range(2):
             api.start_recording(prewarm=False)
@@ -172,6 +186,7 @@ def snippet_api(tmp_path, adapter, saved):
               recorder_factory=type("R", (ClipRecorder,), {"samples": spoken()}),
               ax_adapter=adapter,
               transcribe_fn=lambda wav: "My email.", paste_fn=paste_at_cursor)
+    transcribes_after_the_capture(api)
     assert "error" not in api.set_config({"snippets": {"my email": saved}})
     return api
 
