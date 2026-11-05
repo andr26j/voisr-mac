@@ -115,6 +115,24 @@ window.Voisr = window.Voisr || {};
     if (currentView === "dictionary") V.views.dictionary.render();
   });
 
+  /* ---------- the keyboard ----------
+
+     The pages have no walker of their own, so this one covers the whole window,
+     Undo in the toast included. On the document, because focus can be on the
+     body: first run leaves it there, and so does a redrawn list. While Settings
+     is up its own handlers stop Tab before it gets here, except when the palette
+     is over it; first run hides the shell and walks its own steps. Once Settings
+     is closing its handlers have stopped, but its buttons are there until the
+     fade ends, so that moment walks the page alone. */
+  function onTab(e) {
+    if (e.key !== "Tab" || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+    const $ = V.ui.$;
+    const scrim = $("#settings-scrim");
+    if ($(".shell").hidden || !$("#palette").hidden || scrim.classList.contains("is-open")) return;
+    V.ui.walkTab(e, scrim.hidden ? document.body : $(".shell"));
+  }
+  document.addEventListener("keydown", onTab);
+
   /* ---------- appearance ---------- */
 
   const DARK_QUERY = window.matchMedia("(prefers-color-scheme: dark)");

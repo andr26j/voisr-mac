@@ -512,15 +512,20 @@ window.Voisr = window.Voisr || {};
      System Settings, and nearly everything a keyboard needs here is a button. */
   function walkTab(e, root) {
     e.preventDefault();
-    const items = Array.from(root.querySelectorAll("button, input, select, summary"))
+    // visibility: hidden still has a box, and focus() on it fails silently, so
+    // Tab would stop there for good (Home's Change key while recording).
+    const items = Array.from(root.querySelectorAll("button, input, select, textarea, summary"))
       .filter((n) => !n.disabled && n.getAttribute("tabindex") !== "-1"
-                     && n.getClientRects().length > 0);
+                     && n.getClientRects().length > 0
+                     && getComputedStyle(n).visibility !== "hidden");
     if (!items.length) return;
     const at = items.indexOf(document.activeElement);
     const step = e.shiftKey ? -1 : 1;
     const next = at === -1 ? (e.shiftKey ? items.length - 1 : 0)
                            : (at + step + items.length) % items.length;
     items[next].focus();
+    // as WebKit's own Tab does, so typing replaces what's in a field
+    if (items[next].select) items[next].select();
   }
 
   V.ui = { el, $, toast, tryApi, timeOf, dayOf, formatDuration, ICONS, itemRow, dayGroup,

@@ -151,3 +151,140 @@ test("the palette going to a page closes Settings on the way", () => {
   assert.equal(n.pages.history.hidden, false);
   assert.equal(n.pages.home.hidden, true);
 });
+
+/* ---------- Tab on the main views ---------- */
+
+function mountTab() {
+  const env = loadVoisr(["js/ui.js", "js/main.js"]);
+  const parts = {};
+  for (const [name, sel] of [["shell", "shell"], ["palette", "palette-scrim"], ["scrim", "settings-scrim"]]) {
+    const n = makeNode("div");
+    n.className = sel;
+    parts[name] = n;
+    env.document.body.append(n);
+  }
+  env.register("palette", parts.palette);
+  env.register("settings-scrim", parts.scrim);
+  parts.palette.hidden = true;
+  parts.scrim.hidden = true;
+
+  const control = (tag = "button", over = {}) => {
+    const n = makeNode(tag);
+    n.focus = () => { env.document.activeElement = n; };
+    n.getClientRects = () => [{}];
+    return Object.assign(n, over);
+  };
+  const tab = (over = {}) => {
+    const ev = { key: "Tab", target: env.document.body, preventDefault() { ev.prevented = true; }, ...over };
+    env.document.dispatch("keydown", ev);
+    return ev;
+  };
+  return { ...env, ...parts, control, tab };
+}
+
+/* Fakes the document-order query the fake DOM's selector subset can't parse. */
+const inOrder = (t, nodes) => { t.document.body.querySelectorAll = () => nodes; };
+
+test("from the body, Tab starts at the first control and Shift-Tab at the last", () => {
+  const t = mountTab();
+  const first = t.control(), last = t.control();
+  inOrder(t, [first, last]);
+
+  t.document.activeElement = t.document.body;   // where first run leaves it
+  assert.equal(t.tab().prevented, true);
+  assert.equal(t.document.activeElement, first);
+
+  t.document.activeElement = t.document.body;
+  t.tab({ shiftKey: true });
+  assert.equal(t.document.activeElement, last);
+});
+
+test("Tab and Shift-Tab step through in order and wrap", () => {
+  const t = mountTab();
+  const nav = t.control(), search = t.control("input"), text = t.control("textarea"), row = t.control();
+  inOrder(t, [nav, search, text, row]);
+  t.document.activeElement = null;
+
+  const seen = [];
+  for (let i = 0; i < 5; i++) { t.tab(); seen.push(t.document.activeElement); }
+  assert.deepEqual(seen, [nav, search, text, row, nav]);
+  t.tab({ shiftKey: true });
+  assert.equal(t.document.activeElement, row, "back round the other way");
+});
+
+test("the walker asks for textareas, which the Snippets form has", () => {
+  const t = mountTab();
+  let asked = "";
+  t.document.body.querySelectorAll = (sel) => { asked = sel; return []; };
+  t.tab();
+  assert.ok(asked.split(",").map((s) => s.trim()).includes("textarea"), asked);
+});
+
+test("Tab goes past a control that is visibility: hidden, where focus() would fail", () => {
+  const t = mountTab();
+  const record = t.control();
+  const changeKey = t.control();
+  changeKey.style.visibility = "hidden";   // Home's Change key while recording
+  changeKey.focus = () => assert.fail("focus() on it does nothing, and Tab would be stuck");
+  const viewAll = t.control();
+  inOrder(t, [record, changeKey, viewAll]);
+
+  t.document.activeElement = record;
+  t.tab();
+  assert.equal(t.document.activeElement, viewAll);
+  t.tab({ shiftKey: true });
+  assert.equal(t.document.activeElement, record);
+});
+
+test("the walker leaves Tab alone while first run, the palette or Settings is up", () => {
+  for (const up of ["shell", "palette", "scrim"]) {
+    const t = mountTab();
+    inOrder(t, [t.control()]);
+    if (up === "shell") t.shell.hidden = true;   // first run
+    else if (up === "palette") t.palette.hidden = false;
+    else { t.scrim.hidden = false; t.scrim.classList.add("is-open"); }
+    t.document.activeElement = null;
+    const ev = t.tab();
+    assert.equal(ev.prevented, undefined, up);
+    assert.equal(t.document.activeElement, null, up);
+  }
+});
+
+test("the walker leaves other keys, ⌃Tab and a Tab already handled alone", () => {
+  const t = mountTab();
+  inOrder(t, [t.control()]);
+  t.document.activeElement = null;
+  for (const over of [{ key: "Enter" }, { ctrlKey: true }, { metaKey: true }, { altKey: true },
+                      { defaultPrevented: true }]) {
+    assert.equal(t.tab(over).prevented, undefined, JSON.stringify(over));
+  }
+  assert.equal(t.document.activeElement, null);
+});
+
+test("while Settings fades out, Tab walks the page and not its leaving buttons", () => {
+  const t = mountTab();
+  const pageButton = t.control(), leaving = t.control();
+  t.scrim.hidden = false;                      // closing: no is-open, not hidden yet
+  t.shell.querySelectorAll = () => [pageButton];
+  inOrder(t, [pageButton, leaving]);
+  t.document.activeElement = pageButton;
+  const ev = t.tab();
+  assert.equal(ev.prevented, true, "WebKit's own Tab would leave the web view");
+  assert.equal(t.document.activeElement, pageButton, "the only control on the page, so it wraps to itself");
+  t.tab({ shiftKey: true });
+  assert.equal(t.document.activeElement, pageButton);
+});
+
+test("Tab selects what's in a field it lands on, as WebKit's own does", () => {
+  const t = mountTab();
+  let selected = 0;
+  const field = t.control("input", { select: () => { selected += 1; } });
+  const button = t.control();
+  inOrder(t, [button, field]);
+  t.document.activeElement = button;
+  t.tab();
+  assert.equal(t.document.activeElement, field);
+  assert.equal(selected, 1);
+  t.tab();                                     // a button has no select(), and that's fine
+  assert.equal(t.document.activeElement, button);
+});

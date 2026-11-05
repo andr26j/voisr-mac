@@ -486,7 +486,7 @@ function mountKeys(state) {
   };
   h["first-run"].append(h.box);
   h["first-run"].querySelectorAll = (sel) => {
-    assert.equal(sel, "button, input, select, summary");
+    assert.equal(sel, "button, input, select, textarea, summary");
     return h.all(h.box).filter((n) => n.tagName === "BUTTON");
   };
   const press = (over = {}) => {
