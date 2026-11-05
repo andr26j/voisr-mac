@@ -5,9 +5,9 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { installDom } from "./dom.mjs";
 
-const SRC = readFileSync(path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..", "..", "voisr", "web", "js", "wave.js"), "utf8");
+const JS = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "voisr", "web", "js");
+const SRC = readFileSync(path.join(JS, "wave.js"), "utf8");
+const IDLE_SRC = readFileSync(path.join(JS, "idle.js"), "utf8");
 
 /* wave.js with a hand-cranked clock. The app must do no work unless a banner
    is on screen in a visible window, so these count animation frames rather
@@ -21,6 +21,12 @@ function loadWave({ reduced = false } = {}) {
   const frames = new Map();
   win.requestAnimationFrame = (fn) => { const id = nextId++; frames.set(id, fn); return id; };
   win.cancelAnimationFrame = (id) => frames.delete(id);
+
+  // idle.js's wait, fired by hand
+  let clockMs = 0;
+  let idleWait = null;
+  win.performance = { now: () => clockMs };
+  win.setTimeout = (fn, ms) => { idleWait = { fn, at: clockMs + ms }; return 1; };
 
   doc.visibilityState = "visible";
   let focused = true;
@@ -40,6 +46,7 @@ function loadWave({ reduced = false } = {}) {
     unobserve(el) { this.watched.delete(el); }
   };
 
+  (0, eval)(IDLE_SRC);
   (0, eval)(SRC);
 
   const banner = () => ({
@@ -51,6 +58,12 @@ function loadWave({ reduced = false } = {}) {
     wave: win.Voisr.wave,
     banner,
     frames,
+    /* No input for as long as idle.js waits. */
+    goIdle() {
+      clockMs = idleWait.at;
+      idleWait.fn();
+    },
+    input() { win.dispatch("pointerdown", {}); },
     /* Runs the pending frame, as the display would at `now` ms. */
     runFrame(now) {
       const [[id, fn]] = frames;
@@ -207,4 +220,102 @@ test("mounting the same element twice doesn't stack waves", () => {
   const svg = el.svg;
   wave.mount(el);
   assert.equal(el.svg, svg);
+});
+
+/* Frames at 30 fps until the loop stops, returning how many ran. */
+function settle(runFrame, frames, from = 2000) {
+  let now = from, count = 0;
+  while (frames.size && count < 300) {
+    now += 34;
+    runFrame(now);
+    count += 1;
+  }
+  return count;
+}
+
+test("left alone, the wave eases to a stop and asks for no more frames", () => {
+  const { wave, banner, frames, runFrame, setOnScreen, goIdle } = loadWave();
+  const el = banner();
+  wave.mount(el);
+  setOnScreen(el, true);
+  runFrame(1000);
+  runFrame(1034);
+  goIdle();
+  const before = el.paths[2].attrs.d;
+  assert.equal(frames.size, 1, "it eases rather than freezing");
+  runFrame(1068);
+  assert.notEqual(el.paths[2].attrs.d, before);
+  const count = settle(runFrame, frames, 1068);
+  assert.equal(frames.size, 0);
+  // a little over a second at 30 fps
+  assert.ok(count > 20 && count < 60, `${count} frames`);
+});
+
+test("input after a stop starts it again from the same shape", () => {
+  const { wave, banner, frames, runFrame, setOnScreen, goIdle, input } = loadWave();
+  const el = banner();
+  wave.mount(el);
+  setOnScreen(el, true);
+  runFrame(1000);
+  goIdle();
+  settle(runFrame, frames);
+  const held = el.paths[2].attrs.d;
+  input();
+  assert.equal(frames.size, 1);
+  assert.equal(el.paths[2].attrs.d, held);
+  runFrame(9000);
+  runFrame(9034);
+  assert.notEqual(el.paths[2].attrs.d, held);
+});
+
+test("a wave showing the mic is open keeps going however long nobody touches anything", () => {
+  const { wave, banner, frames, runFrame, setOnScreen, goIdle } = loadWave();
+  const el = banner();
+  wave.mount(el);
+  setOnScreen(el, true);
+  runFrame(1000);
+  wave.setSpeed(el, 3.2);
+  goIdle();
+  assert.equal(settle(runFrame, frames), 300, "still running after 300 frames");
+  assert.equal(frames.size, 1);
+});
+
+test("the mic closing counts as input, so the wave doesn't stop at that moment", () => {
+  const { wave, banner, frames, runFrame, setOnScreen, goIdle } = loadWave();
+  const el = banner();
+  wave.mount(el);
+  setOnScreen(el, true);
+  runFrame(1000);
+  wave.setSpeed(el, 3.2);
+  goIdle();
+  wave.setSpeed(el, 1);
+  settle(runFrame, frames);
+  assert.equal(frames.size, 1, "not idle again until the wait has passed");
+});
+
+test("showing the window again wakes a stopped wave", () => {
+  const { wave, banner, frames, runFrame, setOnScreen, goIdle, setVisibility } = loadWave();
+  const el = banner();
+  wave.mount(el);
+  setOnScreen(el, true);
+  runFrame(1000);
+  goIdle();
+  settle(runFrame, frames);
+  setVisibility("hidden");
+  assert.equal(frames.size, 0);
+  setVisibility("visible");
+  assert.equal(frames.size, 1);
+});
+
+test("coming back to the window wakes a stopped wave", () => {
+  const { wave, banner, frames, runFrame, setOnScreen, goIdle, setFocus } = loadWave();
+  const el = banner();
+  wave.mount(el);
+  setOnScreen(el, true);
+  runFrame(1000);
+  goIdle();
+  settle(runFrame, frames);
+  setFocus(false);
+  setFocus(true);
+  assert.equal(frames.size, 1);
 });

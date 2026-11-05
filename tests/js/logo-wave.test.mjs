@@ -7,6 +7,7 @@ import { installDom } from "./dom.mjs";
 
 const WEB = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "voisr", "web");
 const SRC = readFileSync(path.join(WEB, "js", "logo-wave.js"), "utf8");
+const IDLE_SRC = readFileSync(path.join(WEB, "js", "idle.js"), "utf8");
 const HTML = readFileSync(path.join(WEB, "index.html"), "utf8");
 const MARKUP = HTML.match(/id="brand-wave" d="([^"]+)"/)[1];
 const FRAME = 1000 / 20;
@@ -18,7 +19,7 @@ function load({ reduced = false, focused = true, visible = "visible", mark = tru
   const motion = { matches: reduced, listeners: [], addEventListener(_, fn) { this.listeners.push(fn); } };
   win.matchMedia = () => motion;
 
-  let nextId = 1, now = 1000;
+  let nextId = 1, now = 1000, idleWait = null;
   const frames = new Map();
   win.setInterval = (fn, ms) => {
     assert.equal(ms, FRAME);
@@ -29,6 +30,7 @@ function load({ reduced = false, focused = true, visible = "visible", mark = tru
   win.clearInterval = (id) => frames.delete(id);
   win.requestAnimationFrame = () => assert.fail("a frame callback wakes the page on every display frame");
   win.performance = { now: () => now };
+  win.setTimeout = (fn, ms) => { idleWait = { fn, at: now + ms }; return 1; };
 
   doc.visibilityState = visible;
   let hasFocus = focused;
@@ -36,6 +38,7 @@ function load({ reduced = false, focused = true, visible = "visible", mark = tru
   const brand = { d: MARKUP, setAttribute(k, v) { assert.equal(k, "d"); this.d = v; this.paints += 1; }, paints: 0 };
   doc.getElementById = (id) => (mark && id === "brand-wave" ? brand : null);
 
+  (0, eval)(IDLE_SRC);
   (0, eval)(SRC);
 
   const h = {
@@ -53,6 +56,12 @@ function load({ reduced = false, focused = true, visible = "visible", mark = tru
       now += ms;
       for (const fn of [...frames.values()]) fn();
     },
+    /* No input for as long as idle.js waits. */
+    goIdle() {
+      now = idleWait.at;
+      idleWait.fn();
+    },
+    input() { win.dispatch("keydown", {}); },
     setVisibility(state) { doc.visibilityState = state; doc.dispatch("visibilitychange", {}); },
     setFocus(value) { hasFocus = value; win.dispatch(value ? "focus" : "blur", {}); },
     setReduced(value) { motion.matches = value; motion.listeners.forEach((fn) => fn()); },
@@ -218,4 +227,38 @@ test("a page without the mark loads quietly", () => {
   const h = load({ mark: false });
   assert.equal(h.frames.size, 0);
   assert.equal(typeof h.V.logoWave.pathFor, "function");
+});
+
+test("left alone, it eases to a stop within a couple of seconds and leaves no timer", () => {
+  const h = load();
+  h.run(1000);
+  h.goIdle();
+  assert.equal(h.frames.size, 1, "it eases rather than freezing");
+  const held = h.brand.d;
+  h.run(FRAME);
+  assert.notEqual(h.brand.d, held);
+  h.run(2000);
+  assert.equal(h.frames.size, 0);
+  const paints = h.brand.paints;
+  h.run(60000);
+  assert.equal(h.brand.paints, paints);
+});
+
+test("input after a stop starts it again without a jump", () => {
+  const h = load();
+  h.run(1000);
+  h.goIdle();
+  h.run(2000);
+  const held = h.brand.d;
+  h.input();
+  assert.equal(h.frames.size, 1);
+  h.run(FRAME);
+  assert.ok(distance(h.brand.d, held) < 1, "a stopped wave picks up slowly");
+});
+
+test("a page without the mark doesn't mind going idle", () => {
+  const h = load({ mark: false });
+  h.goIdle();
+  h.input();
+  assert.equal(h.frames.size, 0);
 });

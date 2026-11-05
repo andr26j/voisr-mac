@@ -8,9 +8,9 @@ window.Voisr = window.Voisr || {};
      logo itself and what reduced motion keeps showing.
 
      The app stays resident, so it stops whenever the window is hidden or not
-     focused, and holds its frame until it can resume. wave.js runs the banner
-     under the same rules, but its loop is built around the banner's three
-     lines.
+     focused, and holds its frame until it can resume. After V.idle's wait
+     without input it eases to a stop as well. wave.js runs the banner under the
+     same rules, but its loop is built around the banner's three lines.
 
      This runs on a timer because a frame callback wakes the page on every frame
      of the display, drawn or not: for the same 20 drawings a second that cost
@@ -22,6 +22,9 @@ window.Voisr = window.Voisr || {};
   // Under half a pixel of movement a frame at this size, so more would cost
   // work without looking any smoother.
   const FRAME_MS = 1000 / 20;
+  const SPEED_SETTLE = .25;  // seconds, the same as the banner's wave
+  // slower than this is a stop: it takes a little over a second to get here
+  const STOPPED = .01;
 
   const ENVELOPE = Array.from({ length: POINTS + 1 }, (_, i) =>
     Math.pow(Math.sin(Math.PI * (i / POINTS)), POWER));
@@ -45,10 +48,12 @@ window.Voisr = window.Voisr || {};
   if (!path) return;
 
   const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
-  let timer = 0, last = 0, clock = 0;
+  let timer = 0, last = 0, clock = 0, speed = 1;
 
   const canRun = () => !motionQuery.matches && document.visibilityState !== "hidden"
     && document.hasFocus();
+
+  const goal = () => (V.idle.isIdle() ? 0 : 1);
 
   function stop() {
     if (timer) window.clearInterval(timer);
@@ -56,7 +61,7 @@ window.Voisr = window.Voisr || {};
   }
 
   function sync() {
-    if (canRun()) {
+    if (canRun() && (goal() || speed > STOPPED)) {
       if (!timer) {
         last = window.performance.now();
         timer = window.setInterval(tick, FRAME_MS);
@@ -79,14 +84,18 @@ window.Voisr = window.Voisr || {};
     }
     const now = window.performance.now();
     // capped, so a stall resumes where it was instead of leaping ahead
-    clock += Math.min(now - last, 100) / 1000;
+    const dt = Math.min(now - last, 100) / 1000;
     last = now;
+    speed += (goal() - speed) * (1 - Math.exp(-dt / SPEED_SETTLE));
+    clock += dt * speed;
     path.setAttribute("d", pathFor(clock));
+    if (!goal() && speed <= STOPPED) stop();
   }
 
   document.addEventListener("visibilitychange", sync);
   window.addEventListener("focus", sync);
   window.addEventListener("blur", sync);
   motionQuery.addEventListener("change", sync);
+  V.idle.onChange(sync);
   sync();
 })(window.Voisr);
