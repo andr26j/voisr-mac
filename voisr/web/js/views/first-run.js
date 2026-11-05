@@ -328,6 +328,14 @@ window.Voisr = window.Voisr || {};
     if (open && open.focus) open.focus();
   }
 
+  /* ---------- the keyboard ----------
+
+     First run hides the whole app, so a button Tab can't reach is a dead end.
+     On the document, because a redrawn step can leave focus on the body. */
+  function onKey(e) {
+    if (e.key === "Tab" && step) V.ui.walkTab(e, $("#first-run"));
+  }
+
   /* ---------- in and out ---------- */
 
   async function finish() {
@@ -373,6 +381,7 @@ window.Voisr = window.Voisr || {};
     window.addEventListener("focus", () => {
       if (step === 1 || step === 3) tick();
     });
+    document.addEventListener("keydown", onKey);
     return true;
   }
 

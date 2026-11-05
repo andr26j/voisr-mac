@@ -749,6 +749,39 @@ function mountPopup(t, api = {}) {
   return { ...h, ...rest, sections, navItems, popup: h.V.views.settings };
 }
 
+test("Tab is walked by hand inside the pop-up, past what can't take focus, and wraps", async (t) => {
+  const h = mountPopup(t);
+  const scrim = h["settings-scrim"];
+  const button = (over) => {
+    const n = makeNode("button");
+    n.focus = () => { h.document.activeElement = n; };
+    n.getClientRects = () => [{}];
+    return Object.assign(n, over);
+  };
+  const first = button();
+  const disabled = button({ disabled: true });
+  const hidden = button({ getClientRects: () => [] });
+  const roving = button();
+  roving.setAttribute("tabindex", "-1");
+  const last = button();
+  scrim.querySelectorAll = () => [first, disabled, hidden, roving, last];
+  const tab = (over = {}) => {
+    const ev = { key: "Tab", target: scrim, stopPropagation() {}, preventDefault() { ev.prevented = true; }, ...over };
+    scrim.dispatch("keydown", ev);
+    return ev;
+  };
+
+  h.document.activeElement = null;
+  assert.equal(tab().prevented, true);
+  assert.equal(h.document.activeElement, first);
+  tab();
+  assert.equal(h.document.activeElement, last);
+  tab();
+  assert.equal(h.document.activeElement, first, "wraps");
+  tab({ shiftKey: true });
+  assert.equal(h.document.activeElement, last, "and backwards");
+});
+
 const pressEscape = (target) => {
   const ev = { key: "Escape", target, stopPropagation() { ev.stopped = true; } };
   return ev;

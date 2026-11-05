@@ -711,23 +711,6 @@ window.Voisr = window.Voisr || {};
     close();
   }
 
-  /* Tab is walked by hand, in document order. WebKit's own Tab skips buttons
-     unless the user has turned on Keyboard navigation in System Settings, and
-     nearly everything in here is a button. */
-  function moveFocus(e) {
-    const scrim = byId("settings-scrim");
-    const items = Array.from(scrim.querySelectorAll("button, input, select, summary"))
-      .filter((n) => !n.disabled && n.getAttribute("tabindex") !== "-1"
-                     && n.getClientRects().length > 0);
-    if (!items.length) return;
-    e.preventDefault();
-    const at = items.indexOf(document.activeElement);
-    const step = e.shiftKey ? -1 : 1;
-    const next = at === -1 ? (e.shiftKey ? items.length - 1 : 0)
-                           : (at + step + items.length) % items.length;
-    items[next].focus();
-  }
-
   const isPaletteKey = (e) =>
     (e.metaKey || e.ctrlKey) && String(e.key).toLowerCase() === "k";
 
@@ -736,7 +719,7 @@ window.Voisr = window.Voisr || {};
      delete a dictation nobody can see, so keys stop here. ⌘K alone goes on,
      because the palette works from anywhere. */
   function onScrimKey(e) {
-    if (e.key === "Tab") moveFocus(e);
+    if (e.key === "Tab") V.ui.walkTab(e, byId("settings-scrim"));
     else if (e.key === "Escape") onEscape(e);
     if (!isPaletteKey(e)) e.stopPropagation();
   }
@@ -747,7 +730,7 @@ window.Voisr = window.Voisr || {};
     if (!isOpen || isPaletteKey(e) || paletteOpen()) return;
     if (byId("settings-scrim").contains(e.target)) return;
     e.stopPropagation();
-    if (e.key === "Tab") moveFocus(e);
+    if (e.key === "Tab") V.ui.walkTab(e, byId("settings-scrim"));
     else if (e.key === "Escape") onEscape(e);
   }
 
