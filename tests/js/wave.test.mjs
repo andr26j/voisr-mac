@@ -81,6 +81,7 @@ function loadWave({ reduced = false } = {}) {
       focused = value;
       win.dispatch(value ? "focus" : "blur", {});
     },
+    loseFocusQuietly() { focused = false; },
     setReduced(value) {
       motion.matches = value;
       motion.listeners.forEach((fn) => fn());
@@ -305,6 +306,19 @@ test("showing the window again wakes a stopped wave", () => {
   assert.equal(frames.size, 0);
   setVisibility("visible");
   assert.equal(frames.size, 1);
+});
+
+test("a blur WebKit never reported still stops the loop on the next frame", () => {
+  const { wave, banner, frames, runFrame, setOnScreen, loseFocusQuietly } = loadWave();
+  const el = banner();
+  wave.mount(el);
+  setOnScreen(el, true);
+  runFrame(1000);
+  const held = el.paths[2].attrs.d;
+  loseFocusQuietly();
+  runFrame(1034);
+  assert.equal(frames.size, 0);
+  assert.equal(el.paths[2].attrs.d, held);
 });
 
 test("coming back to the window wakes a stopped wave", () => {
