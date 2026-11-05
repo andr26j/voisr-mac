@@ -1,8 +1,8 @@
 # Voisr
 
-Hold a key, speak, and clean text appears at your cursor, in any app. Voisr is a local-only macOS push-to-talk dictation app in the spirit of [Wispr Flow](https://wisprflow.ai): speech-to-text runs on your Mac with [whisper.cpp](https://github.com/ggml-org/whisper.cpp), and no audio or text is sent anywhere.
+Hold a key, speak, and clean text appears at your cursor, in any app. Voisr is a macOS push-to-talk dictation app in the spirit of [Wispr Flow](https://wisprflow.ai). Speech-to-text runs with [whisper.cpp](https://github.com/ggml-org/whisper.cpp).
 
-English only. macOS only. Free for personal use under the MIT licence. There is no prebuilt download: the installer builds the app on your Mac.
+English only. macOS only. Free under the MIT licence. There is no prebuilt download: the installer builds the app on your Mac.
 
 ## Requirements
 
@@ -42,13 +42,13 @@ Without ffmpeg, those three stop working; normal dictation from the app keeps wo
 
 ## Permissions
 
-Open the app and follow the strip on the Home screen. Each chip opens the right pane of System Settings → Privacy & Security.
+Open the app and first run asks for each permission in turn. If one goes missing later, Home says which and opens the right pane of System Settings → Privacy & Security.
 
 | Permission | Needed for | When it is asked |
 |---|---|---|
-| Microphone | recording | on your first recording |
-| Accessibility | the push-to-talk key (the default `event_tap` mode), pasting with Cmd-V, and reading the text around your cursor (see **Screen context**) | from the strip on Home |
-| Input Monitoring | the push-to-talk key, only if you set `"event_tap": "listen"` | from the strip on Home |
+| Microphone | recording | in first run, or on your first recording |
+| Accessibility | the push-to-talk key (the default `event_tap` mode), pasting with Cmd-V, and reading the text around your cursor (see **Screen context**) | in first run, or from Home |
+| Input Monitoring | the push-to-talk key, only if you set `"event_tap": "listen"` | in first run, or from Home |
 
 Pasting works by asking System Events to press Cmd-V (`osascript`); if macOS asks whether Voisr may control System Events, allow it.
 
@@ -58,9 +58,9 @@ Pasting works by asking System Events to press Cmd-V (`osascript`); if macOS ask
 
 The dashboard follows your macOS appearance setting automatically, with an option to pin to Light or Dark mode in Settings.
 
-**Home** leads with your push-to-talk key rendered as a keycap (`Hold <key> to dictate`) and a headline stat showing **Time saved** (measured against typing at 40 wpm) with a 14-day sparkline.
+**Home** leads with your push-to-talk key (`Hold <key> and talk`) and a click-to-record button, above your recent dictations, with your **time saved** (against typing at 40 words per minute), word count and day streak alongside.
 
-A **permission health strip** shows a chip for Microphone and Accessibility (plus Input Monitoring if `event_tap` is `"listen"`). Any missing grant turns amber; clicking it opens the exact System Settings pane. When everything is granted, it collapses to a single quiet line.
+When Microphone or Accessibility (or Input Monitoring if `event_tap` is `"listen"`) is missing, a **permission strip** on Home takes the place of the key hint and opens the exact System Settings pane. When everything is granted, the stats panel just says Ready.
 
 **⌘K command palette** lets you start dictation, jump between views, change the push-to-talk key, toggle appearance, and copy the last dictation.
 
@@ -68,13 +68,15 @@ A **permission health strip** shows a chip for Microphone and Accessibility (plu
 
 **Dictionary** entries can be edited in place instead of deleted and retyped. Corrections Voisr learned appear at the top with Accept and Dismiss; entries it added by itself carry an **Auto-added** badge. See **Screen context**.
 
+**Snippets** turn a short phrase into saved text. Say the phrase on its own and Voisr pastes your text exactly as you wrote it; in a sentence, the phrase stays as spoken. History shows only the phrase.
+
 A **menu-bar item** keeps Voisr reachable without opening its window and shows when a dictation is in flight.
 
-**Settings** are grouped into Dictation, Push-to-talk, Appearance, and Privacy & Data sections. You can set launch-at-login and choose a transcription model.
+**Settings** opens as a pop-up, grouped into Dictation, Models, Push-to-talk, Appearance, and Privacy & data. You can set launch-at-login and choose a transcription model.
 
 **Keep model loaded.** Starting `whisper-cli` for every dictation reloads the model each time. By default Voisr instead starts one `whisper-server` (from the same `whisper-cpp` package) once a press outlasts the quick-tap window (about half a second) or a double-tap starts hands-free, so an accidental tap loads nothing and the model loads while you speak. It keeps the model for the next dictation. **Settings → Keep model loaded** chooses when it is freed, with the same choices as [Handy](https://github.com/cjpais/Handy): Never, Immediately, 2, 5 (default), 10 or 15 minutes, 1 hour. The timer never runs out during a recording or transcription. While loaded, the server holds about 0.7 GB of memory for `small.en` (measured), and that memory is released when it unloads. **Immediately** keeps no memory and reloads for every dictation, as before. If the server is missing, crashes, times out or answers badly, that dictation is transcribed with `whisper-cli` instead and nothing is lost; the server is then left alone for a minute. Switching or deleting a model unloads the old one. The server runs under a small guard (`voisr/whisper_guard.py`) that stops it when Voisr quits, relaunches, crashes or is force quit, and a leftover one from an earlier run is stopped at the next start; a `whisper-server` you started yourself is never touched. History records which way each dictation was transcribed (`warm`, `cli` or `cli-fallback`).
 
-**Models.** Voisr runs everything on your Mac. `setup.sh` installs `small.en` (default) and `base.en`. In **Settings → Transcription model** you can download two larger optional models, `medium.en-q5_0` (~540 MB) and `large-v3-turbo-q5_0` (~575 MB), and delete any model you aren't using. Downloads are checked against a pinned SHA-256 and need free disk space for the model plus 512 MB. Settings warns when a model asks for more memory than your Mac has. You can also drop your own `ggml-*.bin` file into `models/` and it appears as a Custom model. Voisr is English only; every model is run with `-l en`. All listed model weights are OpenAI Whisper's (MIT licence).
+**Models.** Voisr runs everything on your Mac. `setup.sh` installs `small.en` (default) and `base.en`. In **Settings → Models** you can download two larger optional models, `medium.en-q5_0` (~540 MB) and `large-v3-turbo-q5_0` (~575 MB), and delete any model you aren't using. Downloads are checked against a pinned SHA-256 and need free disk space for the model plus 512 MB. Settings warns when a model asks for more memory than your Mac has. You can also drop your own `ggml-*.bin` file into `models/` and it appears as a Custom model. Voisr is English only; every model is run with `-l en`. All listed model weights are OpenAI Whisper's (MIT licence).
 
 **Screen context.** On by default: **Settings → Read the text around your cursor**. Once a press is a real dictation (an accidental tap reads nothing), Voisr reads the field you are typing in, the window title and nearby labels through the Accessibility API, and it does three things with them:
 
@@ -155,7 +157,7 @@ All of this is editable in Settings; hand-editing is optional. A file that canno
   "device": ":default",        // CLI toggle mode only: the macOS default input, or a mic by name, like ":MacBook Air Microphone" (ffmpeg -f avfoundation -list_devices true -i ""). Numbers can change, and ":0" counts as ":default". The app always uses the macOS default input
   "model": "small.en",         // a model id from Settings (e.g. base.en, medium.en-q5_0) or a custom ggml-<name>.bin
   "show_widget": true,         // floating recording pill
-  "pill_theme": "classic",     // classic | ember | aurora | ocean | neon | breathe | scanner
+  "pill_theme": "classic",     // classic (shown as Signature) | quiet
   "pill_color": null,          // "#RRGGBB" to recolour the bars, null = theme default
   "appearance": "system",      // system | light | dark
   "launch_at_login": false,    // mirrors ~/Library/LaunchAgents/com.local.voisr.plist
