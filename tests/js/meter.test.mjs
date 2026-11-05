@@ -58,6 +58,11 @@ test("weights: the pill's 17 bars take the design's 6.6-26 px silhouette; create
   assert.ok(M.weights(17)[0] > w[0], "17 bars elsewhere don't turn into the pill");
 });
 
+test("the envelope's constants are the ones the sidebar wave shares", () => {
+  assert.equal(M.ATTACK_MS, 50);
+  assert.equal(M.RELEASE_MS, 220);
+});
+
 test("a voice moves each pill bar on its own rhythm, inside its share of the silhouette", () => {
   const meter = M.createPill();
   meter.setLevel(1);

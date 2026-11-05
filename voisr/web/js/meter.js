@@ -106,5 +106,5 @@ window.Voisr.meter = (function () {
     return build(pillWeights(), seeds, PILL_BASE, PILL_VARIANCE);
   }
 
-  return { gate, step, hump, weights, pillWeights, create, createPill, paintBar, PILL_SPEAK };
+  return { gate, step, hump, weights, pillWeights, create, createPill, paintBar, ATTACK_MS, RELEASE_MS, PILL_SPEAK };
 })();
