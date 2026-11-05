@@ -286,6 +286,8 @@ class StreamRecorder:
             # only slow. Timing only, never audio or text.
             elapsed = (time.monotonic() - began) * 1000
             how = "" if stopped_itself else ", from outside"
+            if errors:
+                how += f", failed: {type(errors[0]).__name__}"
             print(f"Voisr audio: mic stop {elapsed:.0f} ms{how}", flush=True)
 
         closer = threading.Thread(target=stop_and_close,

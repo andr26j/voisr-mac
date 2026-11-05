@@ -15,6 +15,7 @@ from voisr.stream_recorder import StreamRecorder
 
 ZEROS = bytes(1280)          # 40 ms of exact zeros
 VOICE = b"\x10\x02" * 640    # 40 ms of a non-zero sample
+SLOW_MAC_S = 30.0            # above any stall seen on a busy Mac
 
 
 class FakeStream:
@@ -274,7 +275,8 @@ def test_no_reopen_after_the_stop_deadlocks(tmp_path, wedge):
     assert len(made) == 1
 
 
-def test_a_healthy_stop_is_not_abandoned(tmp_path, wedge):
+def test_a_healthy_stop_is_not_abandoned(tmp_path, monkeypatch, wedge):
+    monkeypatch.setattr(StreamRecorder, "STOP_TIMEOUT_S", SLOW_MAC_S)
     rec, streams, _ = make()
     rec.start(tmp_path / "a.wav")
     rec.stop()
@@ -282,11 +284,12 @@ def test_a_healthy_stop_is_not_abandoned(tmp_path, wedge):
     assert not stream_recorder._mic_wedged.is_set()
 
 
-def test_a_stop_error_still_reaches_the_caller(tmp_path, wedge):
+def test_a_stop_error_still_reaches_the_caller(tmp_path, monkeypatch, wedge):
     class Broken(FakeStream):
         def stop(self):
             raise OSError("device gone")
 
+    monkeypatch.setattr(StreamRecorder, "STOP_TIMEOUT_S", SLOW_MAC_S)
     rec = StreamRecorder(stream_factory=lambda _r, cb, done: Broken(cb, done),
                          timer_factory=Timers())
     rec.start(tmp_path / "a.wav")
@@ -304,6 +307,7 @@ class IOThreadStream(FakeStream):
 
     def __init__(self, callback, finished):
         super().__init__(callback, finished)
+        self.delivered = threading.Event()
         self.ended = threading.Event()
         self.stop_before_end = False
         self.outcome = None
@@ -316,9 +320,10 @@ class IOThreadStream(FakeStream):
         while True:
             try:
                 self.callback(VOICE, 640, None, None)
-            except sd.CallbackAbort as stop:
+            except (sd.CallbackAbort, sd.CallbackStop) as stop:
                 self.outcome = stop
                 break
+            self.delivered.set()
             time.sleep(0.002)
         self.ended.set()
         self.finished()
@@ -328,7 +333,12 @@ class IOThreadStream(FakeStream):
         super().stop()
 
 
-def io_thread_recorder():
+@pytest.fixture
+def io_recorder(wedge, monkeypatch):
+    """Limits far above any stall on a busy Mac. They cost nothing: a stop ends
+    as soon as the fake's IO thread does, whatever the limit."""
+    monkeypatch.setattr(StreamRecorder, "SELF_STOP_WAIT_S", SLOW_MAC_S)
+    monkeypatch.setattr(StreamRecorder, "STOP_TIMEOUT_S", SLOW_MAC_S)
     made = []
 
     def factory(_rate, callback, finished):
@@ -338,11 +348,15 @@ def io_thread_recorder():
     return StreamRecorder(stream_factory=factory, timer_factory=Timers()), made
 
 
-def test_the_io_thread_stops_itself_before_anyone_touches_the_stream(tmp_path, wedge):
-    rec, made = io_thread_recorder()
+def stop_rows(capsys):
+    return [r for r in capsys.readouterr().out.splitlines() if "mic stop" in r]
+
+
+def test_the_io_thread_stops_itself_before_anyone_touches_the_stream(tmp_path, io_recorder):
+    rec, made = io_recorder
     wav = tmp_path / "a.wav"
     rec.start(wav)
-    time.sleep(0.02)
+    assert made[0].delivered.wait(SLOW_MAC_S)
     rec.stop()
     assert isinstance(made[0].outcome, sd.CallbackAbort)
     assert not made[0].stop_before_end
@@ -351,56 +365,110 @@ def test_the_io_thread_stops_itself_before_anyone_touches_the_stream(tmp_path, w
     assert not stream_recorder._mic_wedged.is_set()
 
 
-def test_cancel_also_lets_the_io_thread_stop_itself(tmp_path, wedge):
-    rec, made = io_thread_recorder()
+def test_cancel_also_lets_the_io_thread_stop_itself(tmp_path, io_recorder):
+    rec, made = io_recorder
     rec.start(tmp_path / "a.wav")
-    time.sleep(0.02)
+    assert made[0].delivered.wait(SLOW_MAC_S)
     rec.cancel()
     assert isinstance(made[0].outcome, sd.CallbackAbort)
     assert not made[0].stop_before_end and made[0].closed
 
 
-def test_a_self_stop_does_not_wait_out_the_limit(tmp_path, monkeypatch, wedge):
-    monkeypatch.setattr(StreamRecorder, "SELF_STOP_WAIT_S", 5.0)
-    rec, made = io_thread_recorder()
+def test_a_stop_before_any_audio_still_lets_the_io_thread_stop_itself(tmp_path, io_recorder):
+    rec, made = io_recorder
+    rec.start(tmp_path / "a.wav")
+    rec.stop()  # however early: the first block is what stops it
+    assert isinstance(made[0].outcome, sd.CallbackAbort)
+    assert not made[0].stop_before_end and made[0].closed
+
+
+def test_a_self_stop_does_not_wait_out_the_limit(tmp_path, io_recorder):
+    rec, made = io_recorder
     rec.start(tmp_path / "a.wav")
     started = time.monotonic()
     rec.stop()
-    assert time.monotonic() - started < 1.0
+    assert time.monotonic() - started < SLOW_MAC_S / 2
 
 
 def test_a_stream_sending_nothing_is_stopped_from_outside(tmp_path, monkeypatch, wedge, capsys):
     monkeypatch.setattr(StreamRecorder, "SELF_STOP_WAIT_S", 0.05)
+    monkeypatch.setattr(StreamRecorder, "STOP_TIMEOUT_S", SLOW_MAC_S)
     rec, streams, _ = make()
     rec.start(tmp_path / "a.wav")
     started = time.monotonic()
     rec.stop()
     assert time.monotonic() - started >= 0.05
     assert streams.made[0].stopped and streams.made[0].closed
-    assert "from outside" in capsys.readouterr().out
+    assert "from outside" in stop_rows(capsys)[0]
 
 
-def test_a_reopened_stream_keeps_delivering(tmp_path, wedge):
-    rec, made = io_thread_recorder()
+def test_a_reopened_stream_keeps_delivering(tmp_path, io_recorder):
+    rec, made = io_recorder
     rec.start(tmp_path / "a.wav")
     with rec._stream_lock:
         rec._close_stream()
         rec._stream = rec._open_stream()
     assert isinstance(made[0].outcome, sd.CallbackAbort)
-    time.sleep(0.02)
-    assert made[1].outcome is None  # the new stream wasn't told to stop
+    assert made[1].delivered.wait(SLOW_MAC_S)  # the new stream wasn't told to stop
     rec.stop()
     assert isinstance(made[1].outcome, sd.CallbackAbort)
 
 
-def test_each_stop_logs_its_time_and_nothing_else(tmp_path, wedge, capsys):
-    rec, made = io_thread_recorder()
-    rec.start(tmp_path / "a.wav")
-    time.sleep(0.02)
+def test_a_stream_stopped_at_the_cap_is_still_closed_without_waiting(tmp_path, io_recorder, capsys):
+    rec, made = io_recorder
+    rec._max_bytes = 3 * len(VOICE)
+    wav = tmp_path / "a.wav"
+    rec.start(wav)
+    assert made[0].ended.wait(SLOW_MAC_S)  # it stopped itself, before any release
+    assert isinstance(made[0].outcome, sd.CallbackStop)
+    started = time.monotonic()
     rec.stop()
-    rows = [r for r in capsys.readouterr().out.splitlines() if "mic stop" in r]
+    assert time.monotonic() - started < SLOW_MAC_S / 2
+    assert not made[0].stop_before_end
+    assert made[0].stopped and made[0].closed
+    assert frames(wav) == 3 * 640
+    assert not stream_recorder._mic_wedged.is_set()
+    assert "from outside" not in stop_rows(capsys)[0]
+
+
+def test_each_stop_logs_its_time_and_nothing_else(tmp_path, io_recorder, capsys):
+    rec, made = io_recorder
+    rec.start(tmp_path / "a.wav")
+    assert made[0].delivered.wait(SLOW_MAC_S)
+    rec.stop()
+    rows = stop_rows(capsys)
     assert len(rows) == 1
     assert re.fullmatch(r"Voisr audio: mic stop \d+ ms", rows[0])
+
+
+def test_a_failed_stop_says_so_in_its_row(tmp_path, monkeypatch, wedge, capsys):
+    class Broken(FakeStream):
+        def stop(self):
+            raise OSError("device gone")
+
+    monkeypatch.setattr(StreamRecorder, "STOP_TIMEOUT_S", SLOW_MAC_S)
+    rec = StreamRecorder(stream_factory=lambda _r, cb, done: Broken(cb, done),
+                         timer_factory=Timers())
+    rec.start(tmp_path / "a.wav")
+    with pytest.raises(OSError):
+        rec.stop()
+    rows = stop_rows(capsys)
+    assert len(rows) == 1
+    assert re.fullmatch(
+        r"Voisr audio: mic stop \d+ ms, from outside, failed: OSError", rows[0])
+
+
+def test_a_failed_stop_shows_even_when_cancel_swallows_it(tmp_path, monkeypatch, wedge, capsys):
+    class Broken(FakeStream):
+        def stop(self):
+            raise OSError("device gone")
+
+    monkeypatch.setattr(StreamRecorder, "STOP_TIMEOUT_S", SLOW_MAC_S)
+    rec = StreamRecorder(stream_factory=lambda _r, cb, done: Broken(cb, done),
+                         timer_factory=Timers())
+    rec.start(tmp_path / "a.wav")
+    rec.cancel()  # must not raise
+    assert "failed: OSError" in stop_rows(capsys)[0]
 
 
 def test_a_stuck_stop_that_later_finishes_says_so(tmp_path, wedge, capsys):
@@ -409,7 +477,7 @@ def test_a_stuck_stop_that_later_finishes_says_so(tmp_path, wedge, capsys):
     rec.stop()
     assert "mic stop" not in capsys.readouterr().out  # still stuck
     made[0].release.set()
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + SLOW_MAC_S
     out = ""
     while "mic stop" not in out and time.monotonic() < deadline:
         out += capsys.readouterr().out
