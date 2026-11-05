@@ -104,13 +104,14 @@ window.Voisr = window.Voisr || {};
     if (!live && poll) { clearInterval(poll); poll = 0; }
     if (next === 3 && !levelPoll) levelPoll = setInterval(tickLevel, LEVEL_MS);
     if (next !== 3 && levelPoll) { clearInterval(levelPoll); levelPoll = 0; }
-    draw(true);
+    return draw(true);
   }
 
   function draw(entering) {
-    if (step === 1) drawPermissions(entering);
-    else if (step === 2) drawKey(entering);
-    else if (step === 3) drawDictation(entering);
+    if (step === 1) return drawPermissions(entering);
+    if (step === 2) return drawKey(entering);
+    if (step === 3) return drawDictation(entering);
+    return undefined;
   }
 
   /* Granting happens in System Settings, outside the app, so steps that wait on
@@ -335,14 +336,14 @@ window.Voisr = window.Voisr || {};
     goTo(null);
     // a failed save only means it shows again next launch
     await V.ui.tryApi(V.api().set_config({ first_run_done: true }), "Save setup");
-    const root = $("#first-run");
+    const root = $("#first-run"), box = $("#first-run-step");
     $(".shell").hidden = false;
     enterApp();
     root.classList.add("is-leaving");
     setTimeout(() => {
       root.hidden = true;
       root.classList.remove("is-leaving");
-      $("#first-run-step").replaceChildren();
+      box.replaceChildren();
       leaving = false;
     }, LEAVE_MS);
   }
@@ -358,9 +359,17 @@ window.Voisr = window.Voisr || {};
     document.querySelectorAll(".view").forEach((v) => { v.hidden = true; });
     $(".shell").hidden = true;
     $("#first-run").hidden = false;
-    await readPanes(false);
-    for (const p of panes || []) if (p.granted === true) granted.add(p.key);
-    goTo(keyWorks() ? 2 : 1);
+    try {
+      await readPanes(false);
+      for (const p of panes || []) if (p.granted === true) granted.add(p.key);
+      await goTo(keyWorks() ? 2 : 1);
+    } catch (e) {
+      // the app has to start anyway, and first run gets another go next launch
+      goTo(null);
+      $("#first-run").hidden = true;
+      $(".shell").hidden = false;
+      return false;
+    }
     window.addEventListener("focus", () => {
       if (step === 1 || step === 3) tick();
     });

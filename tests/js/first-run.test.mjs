@@ -399,34 +399,6 @@ test("finishing twice only enters once", async () => {
   assert.deepEqual(h.entered, ["app"]);
 });
 
-function withWave(h) {
-  const speeds = [];
-  h.V.wave = { mount() {}, unmount() {}, setSpeed: (el, n) => speeds.push(n) };
-  return speeds;
-}
-
-test("the wave answers the mic, and settles when it closes", async () => {
-  const h = await atKey({ level: 0.4 });
-  const speeds = withWave(h);
-  h.btn("Continue").click();
-  await flush();
-  await levelPoll().fn();
-  await flush();
-  assert.deepEqual(speeds, [3.2]);
-  h.s.level = null;
-  await levelPoll().fn();
-  await flush();
-  assert.deepEqual(speeds, [3.2, 1]);
-});
-
-test("the level poll only runs on step 3", async () => {
-  const h = await atDictation();
-  assert.ok(levelPoll());
-  h.btn("Skip").click();
-  await flush();
-  assert.equal(levelPoll(), undefined);
-});
-
 test("a repaint in place doesn't replay the step's entrance", async () => {
   const h = await atKey();
   assert.ok(h.box.classList.contains("is-entering"), "a new step does animate in");
@@ -452,9 +424,53 @@ test("finishing leaves the progress bar alone while it fades", async () => {
   assert.ok(h["first-run-progress"].children.every((seg) => seg.classList.contains("is-on")));
 });
 
+function withWave(h) {
+  const speeds = [];
+  h.V.wave = { mount() {}, unmount() {}, setSpeed: (el, n) => speeds.push(n) };
+  return speeds;
+}
+
+test("the wave answers the mic, and settles when it closes", async () => {
+  const h = await atKey({ level: 0.4 });
+  const speeds = withWave(h);
+  h.btn("Continue").click();
+  await flush();
+  await levelPoll().fn();
+  await flush();
+  assert.deepEqual(speeds, [3.2]);
+  h.s.level = null;
+  await levelPoll().fn();
+  await flush();
+  assert.deepEqual(speeds, [3.2, 1]);
+});
+
 test("the level isn't read while the window isn't focused", async () => {
   const h = await atDictation({ focused: false, level: 0.4 });
   await levelPoll().fn();
   await flush();
   assert.equal(h.calls.filter(([name]) => name === "level").length, 0);
+});
+
+test("the level poll only runs on step 3", async () => {
+  const h = await atDictation();
+  assert.ok(levelPoll());
+  h.btn("Skip").click();
+  await flush();
+  assert.equal(levelPoll(), undefined);
+});
+
+test("an error while opening still lets the app start", async () => {
+  const h = mount();
+  h.register("first-run-progress", null);
+  assert.equal(await h.start(), false);
+  assert.equal(h.shell.hidden, false);
+  assert.equal(h["first-run"].hidden, true);
+});
+
+test("an error drawing step 2 still lets the app start", async () => {
+  const h = mount({ panes: [ACC_ON, MIC_LATER] });
+  h.register("first-run-step", null);
+  assert.equal(await h.start(), false);
+  assert.equal(h.shell.hidden, false);
+  assert.equal(h["first-run"].hidden, true);
 });
