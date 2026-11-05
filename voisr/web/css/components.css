@@ -323,7 +323,7 @@
 
 /* ---------- Tag + switch (settings) ---------- */
 
-/* a read-only value at the end of a row: "Automatic", "Local only" */
+/* a read-only value at the end of a row: "Automatic" */
 .pill { flex-shrink: 0; font-size: 13px; color: var(--muted); }
 
 .switch { position: relative; display: inline-block; width: 40px; height: 24px; flex-shrink: 0; cursor: pointer; }

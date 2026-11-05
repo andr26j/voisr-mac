@@ -354,14 +354,6 @@ mark { background: var(--active); color: inherit; border-radius: 3px; }
   .settings-nav-item.active:hover { background: var(--active); }
 }
 
-.settings-foot {
-  margin-top: auto;
-  padding: 8px 10px 0;
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--muted);
-}
-
 .settings-body {
   flex: 1;
   min-width: 0;
