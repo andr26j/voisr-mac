@@ -2,8 +2,7 @@
 """Benchmark the installed speech models on your own labelled clips.
 
 Reports, per model: word error rate (WER), median and p95 latency, and peak
-memory of whisper-cli. Phase 0 of docs/superpowers/plans/
-2026-11-03-models-languages-llm-cleanup.md: later phases report against this.
+memory of whisper-cli.
 
 CORPUS (about 30 clips, recorded by you, in the room you really dictate in)
   Synthesized `say` audio is too clean to choose a model with. Record real

@@ -16,9 +16,15 @@ data/.suggestions.json.*
 config.json
 config.json.*
 
-# brainstorming session artifacts
+# AI tool files, notes and plans: none of this ships
+.claude/
+.cursor/
 .superpowers/
 .worktrees/
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+docs/
 
 # local benchmark corpus and results (your voice and words)
 bench_corpus/
