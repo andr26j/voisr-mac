@@ -408,8 +408,8 @@ window.Voisr = window.Voisr || {};
   async function renderPtt() {
     const res = await V.ui.tryApi(V.api().hotkey_display(), "Load shortcut");
     if (!res) return;
-    const shown = (res.display || "").replace(/\s*\([^)]*\)\s*$/, "");
-    V.ui.$("#ptt-key-name").textContent = shown && shown !== "unset" ? shown : "your key";
+    const shown = V.ui.keyLabel(res.display).name;
+    V.ui.$("#ptt-key-name").textContent = shown !== "unset" ? shown : "your key";
   }
 
   /* ---------- stats count up ----------

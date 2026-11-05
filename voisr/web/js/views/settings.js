@@ -471,16 +471,16 @@ window.Voisr = window.Voisr || {};
 
   /* ----- push-to-talk key ----- */
 
-  /* "Right Option (⌥)" is a keycap and a name. A key with no symbol is just
-     its name, because a blank keycap would say nothing. */
+  /* A keycap and a name. A key with no symbol is just its name, because a blank
+     keycap would say nothing. */
   function showKey(display) {
     const $ = V.ui.$;
     const name = $("#hotkey-current"), cap = $("#hotkey-cap");
-    const parts = /^(.*?)\s*\(([^)]+)\)$/.exec(display || "");
-    if (name) name.textContent = parts ? parts[1] : (display || "unset");
+    const key = V.ui.keyLabel(display);
+    if (name) name.textContent = key.name;
     if (cap) {
-      cap.textContent = parts ? parts[2] : "";
-      cap.hidden = !parts;
+      cap.textContent = key.symbol || "";
+      cap.hidden = !key.symbol;
     }
   }
 
@@ -510,13 +510,7 @@ window.Voisr = window.Voisr || {};
      anywhere, so while it waits nothing else here may change: Esc belongs to
      the capture (Python treats it as cancel), and the pop-up stays put. */
   let capturing = false;
-  let captureEndedAt = -Infinity;
-
-  /* The same key press can reach the page just after Python has answered, as a
-     second event the capture never saw. Esc must not then close the pop-up,
-     and Return must not press Change all over again. */
-  const AFTER_CAPTURE_MS = 300;
-  const justCaptured = () => Date.now() - captureEndedAt < AFTER_CAPTURE_MS;
+  const capture = V.ui.captureGuard();
 
   function setListening(on) {
     const control = byId("key-control");
@@ -528,7 +522,7 @@ window.Voisr = window.Voisr || {};
   }
 
   async function captureKey() {
-    if (capturing || justCaptured()) return;
+    if (capturing || capture.recent()) return;
     capturing = true;
     const btn = byId("hotkey-capture"), dialog = byId("settings-dialog");
     btn.disabled = true;
@@ -542,7 +536,7 @@ window.Voisr = window.Voisr || {};
       V.ui.toast(`Change key failed: ${err.message}`);
     } finally {
       capturing = false;
-      captureEndedAt = Date.now();
+      capture.ended();
       setListening(false);
       btn.disabled = false;
       if (isOpen) btn.focus();
@@ -707,7 +701,7 @@ window.Voisr = window.Voisr || {};
       if (opener && isOpen) opener.focus();
       return;
     }
-    if (!isOpen || justCaptured() || paletteOpen()) return;
+    if (!isOpen || capture.recent() || paletteOpen()) return;
     close();
   }
 

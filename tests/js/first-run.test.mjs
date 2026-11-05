@@ -228,17 +228,6 @@ test("a failed save still lets them in: it just shows again next launch", async 
   assert.deepEqual(h.entered, ["app"]);
 });
 
-test("keyParts: the raw label becomes a symbol and a name", () => {
-  const { V } = mount();
-  const { keyParts } = V.views.firstRun;
-  assert.deepEqual(keyParts("Right Option (⌥)"), { cap: "⌥", name: "Right Option" });
-  assert.deepEqual(keyParts("Fn / Globe"), { cap: "fn", name: "Fn / Globe" });
-  assert.deepEqual(keyParts("Caps Lock"), { cap: "⇪", name: "Caps Lock" });
-  assert.deepEqual(keyParts("F13"), { cap: "F13", name: "F13", word: false });
-  assert.deepEqual(keyParts("Space"), { cap: "Space", name: "Space", word: true });
-  assert.deepEqual(keyParts("unset"), { cap: "unset", name: "unset", word: true });
-});
-
 const toastText = (h) => h.all(h.toast).map((n) => n.textContent).filter(Boolean)
   .concat((h.toast.children || []).filter((c) => typeof c === "string"));
 
@@ -507,6 +496,23 @@ function mountKeys(state) {
   };
   const focused = () => h.document.activeElement && h.document.activeElement.textContent;
   return { ...h, press, focused };
+}
+
+for (const [display, cap, name, isWord] of [
+  ["Right Option (⌥)", "⌥", "Right Option", false],
+  ["Fn / Globe", "fn", "Fn / Globe", false],
+  ["Caps Lock", "⇪", "Caps Lock", false],
+  ["F13", "F13", "F13", false],
+  ["Space", "Space", "Space", true],
+]) {
+  test(`the key step always has a keycap: ${display}`, async () => {
+    const h = mount({ panes: [ACC_ON, MIC_ON], display });
+    await h.start();
+    const keycap = h.box.querySelector(".first-run-keycap");
+    assert.equal(keycap.textContent, cap);
+    assert.equal(keycap.className.includes("is-word"), isWord);
+    assert.equal(h.box.querySelector(".first-run-key-name").textContent, name);
+  });
 }
 
 test("each step opens with focus on its headline, for a screen reader", async () => {

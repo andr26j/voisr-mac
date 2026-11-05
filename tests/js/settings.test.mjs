@@ -1034,6 +1034,11 @@ test("a key without a symbol is just its name, with no blank keycap", (t) => {
   assert.equal(h["hotkey-cap"].hidden, true);
   h.popup.showKey("Fn / Globe");
   assert.equal(h["hotkey-current"].textContent, "Fn / Globe");
+  assert.equal(h["hotkey-cap"].textContent, "fn", "the same symbol first run shows");
+  assert.equal(h["hotkey-cap"].hidden, false);
+  h.popup.showKey("Caps Lock");
+  assert.equal(h["hotkey-cap"].textContent, "⇪");
+  h.popup.showKey("Space");
   assert.equal(h["hotkey-cap"].hidden, true);
   h.popup.showKey("Left Command (⌘)");
   assert.equal(h["hotkey-current"].textContent, "Left Command");
