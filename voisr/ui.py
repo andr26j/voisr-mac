@@ -896,8 +896,9 @@ class HotkeyService:
             if "error" in result:
                 self._pressed = False
                 self._latched = False
-                # e.g. the dock owns the mic, or the queue is full. Say so
-                # once per press; a held key's auto-repeat lands here too.
+                # e.g. a click-to-record dictation owns the mic, or the queue
+                # is full. Say so once per press; a held key's auto-repeat
+                # lands here too.
                 if not self._rejected:
                     self._flash_error()
                 # a key already let go needs no guard against its repeats
@@ -2047,8 +2048,9 @@ class Api:
         return self._recordings.active_level()
 
     def get_level(self):
-        """The dock's 30 Hz poll while it records: the live mic level
-        (0..1), or None when nothing is metered. Bridge method."""
+        """The page's 30 Hz poll while a dictation runs (first run's mic check
+        and Home's banner wave): the live mic level (0..1), or None when
+        nothing is metered. Bridge method."""
         return self.current_level()
 
     def note_user_typing(self):
