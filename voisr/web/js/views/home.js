@@ -712,6 +712,9 @@ window.Voisr = window.Voisr || {};
     V.ui.$("#change-key").addEventListener("click", () => V.show("settings", { section: "key" }));
   }
 
+  /* First run asks for the same grants, and must read them the same way. */
+  V.permissions = { stale, micPending, openPane, resetButton, relaunchButton };
+
   V.views = V.views || {};
   V.views.home = { render, init, toggleRecord, dictateFromAnywhere, renderPermissions,
                    renderListener, compactCount };

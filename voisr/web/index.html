@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="css/base.css">
 <link rel="stylesheet" href="css/components.css">
 <link rel="stylesheet" href="css/views.css">
+<link rel="stylesheet" href="css/first-run.css">
 <script>
   /* Resolve the stored preference before paint. main.js re-applies this once
      the config has loaded; until then, follow the system. */
@@ -259,6 +260,15 @@
   </main>
 </div>
 
+<!-- FIRST RUN -->
+<!-- Covers the whole window until it's finished; js/views/first-run.js fills it. -->
+<div id="first-run" class="first-run" hidden>
+  <div id="first-run-progress" class="first-run-progress" role="img">
+    <span></span><span></span><span></span>
+  </div>
+  <div id="first-run-step" class="first-run-step"></div>
+</div>
+
 <!-- SETTINGS -->
 <!-- A pop-up over whichever page is open, not a page of its own. -->
 <div id="settings-scrim" class="settings-scrim" tabindex="-1" hidden>
@@ -507,6 +517,7 @@
 <script src="js/views/dictionary.js"></script>
 <script src="js/views/snippets.js"></script>
 <script src="js/views/settings.js"></script>
+<script src="js/views/first-run.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>

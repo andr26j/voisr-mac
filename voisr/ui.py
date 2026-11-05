@@ -1224,12 +1224,25 @@ class HotkeyService:
         mode = self._api.get_config().get("event_tap", "active")
         # a hand-edited config must not leave the service with no listener
         self.tap_mode = mode if mode in TAP_MODES else "active"
-        request_permissions(self.tap_mode)
+        # First run asks when someone clicks Open Settings, not over a window
+        # nobody has read yet. A tap can bring up the prompt too, so it waits
+        # for the grant, which _watch below notices.
+        hold = self._first_run_holds_prompts()
+        if not hold:
+            request_permissions(self.tap_mode)
         self._start_worker()
-        self._spawn_listener()
+        if not hold or self._permissions_check():
+            self._spawn_listener()
         self._refresh_status()
         self._watch()
         self._start_ticker()
+
+    def _first_run_holds_prompts(self) -> bool:
+        check = getattr(self._api, "first_run_pending", None)
+        try:
+            return check is not None and check() is True
+        except Exception:
+            return False  # a failed check must not stop push-to-talk asking
 
     def _toggle(self) -> None:
         """flagsChanged-only keys (Fn) report both edges identically."""
@@ -1602,6 +1615,9 @@ class Api:
         self._mic_heard = False  # a clip this launch held real audio
         # asks macOS for one pane's grant again after a reset (a TCC prompt)
         self._grant_requester = grant_requester or permissions.request_grant
+        # panes first run hasn't asked macOS for yet (see open_settings_pane)
+        self._held_grants = set()
+        self._first_run_seen = False
         self._last_paste_text = None
         self._last_paste_ts = None
         self._typing_generation = 0
@@ -2644,7 +2660,49 @@ class Api:
         return panes
 
     def open_settings_pane(self, key):
+        """While first run holds the launch prompt, Voisr isn't listed in the
+        pane yet, so the first trip there asks macOS first. That also covers
+        someone who chose Set up later and comes back through Home."""
+        if key in self._held_grants:
+            self._held_grants.discard(key)
+            try:
+                self._grant_requester(key)
+            except Exception:
+                pass  # the pane still opens; the user can add Voisr with +
         return {"ok": permissions.open_pane(key)}
+
+    def first_run_pending(self) -> bool:
+        """Does first run still need showing? A saved first_run_done answers.
+        With none, an existing config.json or history means an install from
+        before first run, which skips it and stays unwritten. Otherwise this is
+        a fresh install: save False now, so a change made during first run can't
+        make it look like an existing install if they quit midway."""
+        with self._config_lock:
+            done = self.get_config().get("first_run_done")
+            if done is None:
+                if self._config_path.exists() or self._has_history():
+                    return False
+                try:
+                    self._update_config({"first_run_done": False})
+                except OSError as error:
+                    print(f"Voisr: first run not saved ({error})", flush=True)
+            elif done:
+                return False
+        if not self._first_run_seen:  # this is asked again on every key change
+            self._first_run_seen = True
+            self._held_grants = {"accessibility", "input_monitoring"}
+        return True
+
+    def _has_history(self) -> bool:
+        path = Path(getattr(self._history, "path", ROOT / "data" / "history.jsonl"))
+        try:
+            return path.stat().st_size > 0
+        except OSError:
+            return False
+
+    def get_first_run(self):
+        """Bridge: whether the page opens on first run rather than Home."""
+        return {"pending": self.first_run_pending()}
 
     def reset_permission(self, key):
         """Bridge: reset Voisr's own grant, then open the pane to re-grant.
@@ -2653,6 +2711,7 @@ class Api:
         grant again first: that re-lists Voisr, switched off, in the pane."""
         result = permissions.reset_grant(key)
         if result.get("ok"):
+            self._held_grants.discard(key)  # asked here, so not again later
             try:
                 self._grant_requester(key)
             except Exception:
@@ -2903,7 +2962,7 @@ BRIDGE_METHODS = (
     "accept_suggestion", "capture_hotkey", "clear_history", "copy_text",
     "delete_history_item", "delete_snippet", "dismiss_suggestion", "get_snippets",
     "get_suggestions", "save_snippet",
-    "delete_model", "download_model", "export_history", "get_download_progress", "get_config", "get_history", "get_hotkey_status",
+    "delete_model", "download_model", "export_history", "get_download_progress", "get_config", "get_first_run", "get_history", "get_hotkey_status",
     "get_level", "get_models", "get_permissions", "get_pill_themes", "get_stats",
     "hotkey_display", "open_settings_pane", "relaunch_app",
     "reset_permission", "restore_history_item", "save_text_file",
@@ -2979,6 +3038,12 @@ def main():
         api = Api(mic_check=permissions.microphone_granted,
                   warm_server=make_warm_server(),
                   ax_adapter=make_ax_adapter())
+        # settled before anything can write config.json, which would make a
+        # fresh install look like an existing one
+        try:
+            api.first_run_pending()
+        except Exception as e:  # startup must not die over this
+            print(f"Voisr: first run not checked ({e})", flush=True)
         widget = RecordingWidget(level_source=api.current_level)
         service = HotkeyService(api, widget=widget, fallback_check=listen_tap_granted,
                                 key_state=hotkey_key_down)

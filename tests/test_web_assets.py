@@ -6,9 +6,9 @@ INDEX = WEB / "index.html"
 
 JS_FILES = ["js/api.js", "js/ui.js", "js/lists.js", "js/idle.js", "js/wave.js", "js/logo-wave.js", "js/palette.js",
             "js/wave-meter.js", "js/views/home.js", "js/views/history.js",
-            "js/views/dictionary.js", "js/views/snippets.js", "js/views/settings.js", "js/main.js"]
+            "js/views/dictionary.js", "js/views/snippets.js", "js/views/settings.js", "js/views/first-run.js", "js/main.js"]
 CSS_FILES = ["css/tokens.css", "css/base.css",
-             "css/components.css", "css/views.css"]
+             "css/components.css", "css/views.css", "css/first-run.css"]
 
 
 def test_all_web_files_exist():

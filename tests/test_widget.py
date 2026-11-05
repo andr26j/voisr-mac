@@ -821,12 +821,15 @@ def _counting_factory():
 def test_start_attempts_listener_even_unpermitted_then_activates(tmp_path):
     # Registering the app in Input Monitoring REQUIRES creating the tap, so
     # the listener must be spawned even while unpermitted; status then flips
-    # to active once the grant lands, without a relaunch.
+    # to active once the grant lands, without a relaunch. Past first run only:
+    # first run holds the tap (tests/test_first_run.py).
     import time
 
     granted = {"ok": False}
     factory = _counting_factory()
-    svc = HotkeyService(make_api(tmp_path), widget=FakeWidget(), hide_delay=0,
+    api = make_api(tmp_path)
+    api.set_config({"first_run_done": True})
+    svc = HotkeyService(api, widget=FakeWidget(), hide_delay=0,
                         permissions_check=lambda: granted["ok"],
                         poll_interval=0.05, listener_factory=factory)
     svc.start("alt_r")
@@ -843,7 +846,9 @@ def test_start_attempts_listener_even_unpermitted_then_activates(tmp_path):
 
 def test_restart_while_unpermitted_does_not_crash(tmp_path):
     factory = _counting_factory()
-    svc = HotkeyService(make_api(tmp_path), widget=FakeWidget(), hide_delay=0,
+    api = make_api(tmp_path)
+    api.set_config({"first_run_done": True})  # first run holds the tap
+    svc = HotkeyService(api, widget=FakeWidget(), hide_delay=0,
                         permissions_check=lambda: False, poll_interval=999,
                         listener_factory=factory)
     svc.start("alt_r")
