@@ -72,18 +72,55 @@
   .home-stats { flex-basis: 200px; }
 }
 
-.stats-body { display: flex; flex-direction: column; gap: 10px; padding: 18px 18px 16px; }
+.stats-body { padding: 18px 18px 16px; }
 
-.stat { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px; }
-.stat-num { font-family: var(--font-serif); font-size: 32px; line-height: 1.1; letter-spacing: -.005em; }
-.stat-unit { font-size: 13.5px; }
+.stat-lead { font-size: 13px; font-weight: 500; }
+/* data-size steps down so a long total stays on one line in the narrow panel */
+.stat-hero {
+  margin-top: 2px;
+  font-family: var(--font-serif);
+  font-size: 60px;
+  line-height: 1.05;
+  letter-spacing: -.01em;
+  white-space: nowrap;
+}
+.stat-hero[data-size="m"] { font-size: 46px; line-height: 1.37; }
+.stat-hero[data-size="s"] { font-size: 36px; line-height: 1.75; }
 .stat-note { margin-top: 2px; font-size: 12px; line-height: 1.4; color: var(--muted); }
+
+.stat-wave-block { margin-top: 16px; }
+.stat-wave { display: flex; align-items: center; justify-content: space-between; height: 48px; }
+.stat-bar {
+  flex: none;
+  width: 6px;
+  border-radius: 3px;
+  background: var(--muted);
+  opacity: .55;
+  transition: height .3s ease;
+  animation: stat-bar-rise .7s cubic-bezier(.2, .8, .2, 1) both;
+}
+.stat-bar.is-silent { opacity: .3; }
+.stat-bar.is-today { background: var(--ink); opacity: 1; }
+@keyframes stat-bar-rise { from { transform: scaleY(.15); opacity: 0; } }
+
+.stat-wave-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.stat-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+/* sans, not the serif: Instrument Serif's 1 reads as an l in "2.1K" */
+.stat-num { font-size: 17px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.stat-unit { margin-top: 1px; font-size: 12px; color: var(--muted); }
 
 .home-status {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 14px 18px 16px;
+  padding: 12px 18px 13px;
   border-top: 1px solid var(--border);
 }
 .home-status:empty { display: none; }
@@ -612,6 +649,7 @@ mark { background: var(--active); color: inherit; border-radius: 3px; }
   .thumb-art, .theme-art { transition: none; }
   .thumb:active .thumb-art, .theme-opt:active .theme-art { transform: none; }
   .model-bar-fill { transition: none; }
+  .stat-bar { animation: none; transition: none; }
 }
 
 /* ---------- Export format popover ---------- */

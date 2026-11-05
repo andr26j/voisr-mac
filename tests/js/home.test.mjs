@@ -12,7 +12,7 @@ import { makeNode } from "./dom.mjs";
    render() ("a failure in one degrades that panel only") be executed at all. */
 
 const HOME_IDS = ["greeting", "perm-strip", "home-hero", "home-hint", "home-status", "ptt-key-name",
-                  "stat-saved", "stat-words", "stat-streak",
+                  "stat-saved", "stat-words", "stat-streak", "stat-wave", "stat-wave-block",
                   "recent-groups", "recent-empty", "home-view-all", "toast", "view-home",
                   "record-btn", "record-label", "record-title", "record-status", "record-error",
                   "record-time", "home-wave", "change-key", "nav-home"];
@@ -214,11 +214,14 @@ test("Change key opens Settings at the key's section", () => {
 test("Ready lists the panes this mode really needs", async () => {
   const active = mountHome(panes(MIC_OK, pane("accessibility", "Accessibility", true, true)));
   await active.V.views.home.render();
-  assert.equal(statusDetail(active), "Microphone and Accessibility granted.");
+  assert.equal(byClass(active["home-status"], "status-label")[0].getAttribute("title"),
+               "Microphone and Accessibility granted.", "the panes stay on hover");
+  assert.equal(byClass(active["home-status"], "status-detail").length, 0, "Ready is one line");
 
   const listen = mountHome({});
   await listen.V.views.home.render();
-  assert.equal(statusDetail(listen), "Microphone, Input Monitoring and Accessibility granted.");
+  assert.equal(byClass(listen["home-status"], "status-label")[0].getAttribute("title"),
+               "Microphone, Input Monitoring and Accessibility granted.");
 });
 
 test("a mic macOS hasn't asked about yet is Almost ready, and nothing is blue", async () => {
@@ -1133,4 +1136,59 @@ test("without the fallback flag, the stale banner has no fallback sentence", asy
   assert.doesNotMatch(allText(banner(h)), /Input Monitoring meanwhile/);
   assert.match(allText(recoverOf(h)), /Still blocked\?/);
   assert.doesNotMatch(statusDetail(h), /does nothing/, "a non-hotkey pane doesn't kill the key");
+});
+
+/* ---------- the stats panel's wave and big number ---------- */
+
+const dailyOf = (...words) => words.map((n, i) => ({ date: `2026-11-${i + 1}`, words: n, saved_seconds: 0 }));
+
+test("the wave draws words per day: the peak is tallest, a silent day is a dot, today stands out", async () => {
+  const h = mountHome({ get_stats: statsWith({ daily: dailyOf(0, 100, 500, 1, 250) }) });
+  await h.V.views.home.render();
+  const bars = h["stat-wave"].children;
+  assert.equal(h["stat-wave-block"].hidden, false);
+  assert.deepEqual([...bars].map((b) => b.style.height), ["4px", "9px", "46px", "8px", "23px"]);
+  assert.ok(bars[0].className.includes("is-silent"));
+  assert.ok(bars[4].className.includes("is-today"));
+  assert.ok(!bars[3].className.includes("is-today"));
+  assert.equal(h["stat-wave"].getAttribute("aria-label"), "Words per day: dictated on 4 of the last 5 days.");
+});
+
+test("a new dictation keeps the wave's bars, so it grows today's without replaying the rise", async () => {
+  const api = { get_stats: statsWith({ daily: dailyOf(100, 50) }) };
+  const h = mountHome(api);
+  await h.V.views.home.render();
+  const today = h["stat-wave"].children[1];
+  api.get_stats = statsWith({ daily: dailyOf(100, 100) });
+  await h.V.views.home.render();
+  assert.equal(h["stat-wave"].children[1], today);
+  assert.equal(today.style.height, "46px");
+});
+
+test("a new install's wave is all dots and today isn't marked", async () => {
+  const h = mountHome({ get_stats: statsWith({ daily: dailyOf(0, 0, 0) }) });
+  await h.V.views.home.render();
+  const bars = [...h["stat-wave"].children];
+  assert.ok(bars.every((b) => b.style.height === "4px" && b.className.includes("is-silent")));
+  assert.ok(!bars[2].className.includes("is-today"));
+  assert.equal(h["stat-wave"].getAttribute("aria-label"), "No dictations in the last 3 days.");
+});
+
+test("no daily series hides the wave and leaves the numbers", async () => {
+  const h = mountHome({});
+  h["stat-wave-block"].hidden = false;
+  await h.V.views.home.render();
+  assert.equal(h["stat-wave-block"].hidden, true);
+  assert.equal(h["stat-words"].textContent, "12.5K");
+});
+
+test("the big number steps down so a long total stays on one line", async () => {
+  const sizeFor = async (seconds) => {
+    const h = mountHome({ get_stats: statsWith({ time_saved_seconds: seconds }) });
+    await h.V.views.home.render();
+    return [h["stat-saved"].textContent, h["stat-saved"].dataset.size];
+  };
+  assert.deepEqual(await sizeFor(13320), ["3h 42m", ""]);
+  assert.deepEqual(await sizeFor(45240), ["12h 34m", "m"]);
+  assert.deepEqual(await sizeFor(444300), ["123h 25m", "s"]);
 });

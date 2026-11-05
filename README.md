@@ -58,7 +58,7 @@ Pasting works by asking System Events to press Cmd-V (`osascript`); if macOS ask
 
 The dashboard follows your macOS appearance setting automatically, with an option to pin to Light or Dark mode in Settings.
 
-**Home** leads with your push-to-talk key (`Hold <key> and talk`) and a click-to-record button, above your recent dictations, with your **time saved** (against typing at 40 words per minute), word count and day streak alongside.
+**Home** leads with your push-to-talk key (`Hold <key> and talk`) and a click-to-record button, above your recent dictations, with your **time saved** (against typing at 40 words per minute), a 14-day wave of your words per day, your word count and day streak alongside.
 
 When Microphone or Accessibility (or Input Monitoring if `event_tap` is `"listen"`) is missing, a **permission strip** on Home takes the place of the key hint and opens the exact System Settings pane. When everything is granted, the stats panel just says Ready.
 

@@ -106,10 +106,17 @@
 
         <aside class="home-stats" aria-label="Your stats">
           <div class="stats-body">
-            <div class="stat"><span class="stat-num" id="stat-saved">0m</span><span class="stat-unit">saved</span></div>
-            <div class="stat"><span class="stat-num" id="stat-words">0</span><span class="stat-unit">words</span></div>
-            <div class="stat"><span class="stat-num" id="stat-streak">0</span><span class="stat-unit">day streak</span></div>
-            <p class="stat-note">All time, against typing at 40 words per minute.</p>
+            <div class="stat-lead">Time saved</div>
+            <div class="stat-hero" id="stat-saved">0m</div>
+            <p class="stat-note">All time, vs typing at 40 wpm</p>
+            <div class="stat-wave-block" id="stat-wave-block" hidden>
+              <div class="stat-wave" id="stat-wave" role="img"></div>
+              <div class="stat-wave-axis" aria-hidden="true"><span>Last 14 days</span><span>Today</span></div>
+            </div>
+            <div class="stat-pair">
+              <div><div class="stat-num" id="stat-words">0</div><div class="stat-unit">words, all time</div></div>
+              <div><div class="stat-num" id="stat-streak">0</div><div class="stat-unit">day streak</div></div>
+            </div>
           </div>
           <div class="home-status" id="home-status" aria-live="polite"></div>
         </aside>

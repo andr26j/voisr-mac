@@ -106,7 +106,7 @@ window.Voisr = window.Voisr || {};
 
   function statusFor(r, listener) {
     switch (r.kind) {
-      case "ready": return { label: "Ready", detail: `${listLabels(r.panes)} granted.` };
+      case "ready": return { label: "Ready", title: `${listLabels(r.panes)} granted.` };
       case "pending": return { label: "Almost ready",
         detail: "macOS will ask for the microphone the first time you dictate." };
       case "starting": return { label: "Starting…", detail: "The key will work in a moment." };
@@ -295,16 +295,16 @@ window.Voisr = window.Voisr || {};
     const box = V.ui.$("#home-status");
     const status = statusFor(r, listener);
     const checks = r.checks ? r.checks.map((p) => [p.key, p.granted, p.effective, p.hotkey]) : null;
-    const sig = JSON.stringify([status.label, status.detail, status.action && status.action.key, checks]);
+    const sig = JSON.stringify([status.label, status.detail, status.title, status.action && status.action.key, checks]);
     if (box.dataset.sig === sig) return;
     box.dataset.sig = sig;
     box.dataset.state = r.kind;
     const parts = [
-      el("span", { class: "status-label" },
+      el("span", { class: "status-label", title: status.title },
         status.dot ? el("span", { class: "status-dot", "aria-hidden": "true" }) : null,
         el("span", { text: status.label })),
-      el("span", { class: "status-detail", text: status.detail }),
-    ];
+      status.detail ? el("span", { class: "status-detail", text: status.detail }) : null,
+    ].filter(Boolean);
     if (status.action) {
       parts.push(el("button", { type: "button", class: "btn-secondary status-action",
                                 text: `Open ${status.action.label}`,
@@ -475,6 +475,44 @@ window.Voisr = window.Voisr || {};
 
   const savedText = (s) => (s >= 1 ? V.ui.formatDuration(s) : "0m");
 
+  // "12h 34m" no longer fits the panel at the full size; "123h 45m" needs less again
+  const heroSize = (text) => (text.length >= 8 ? "s" : text.length >= 7 ? "m" : "");
+
+  const WAVE_PEAK_PX = 46, WAVE_MIN_PX = 8, WAVE_SILENT_PX = 4;
+
+  /* Words per day as a sound wave, with a silent day as a dot. The bars are kept
+     and only their heights change, so a new dictation grows today's bar instead
+     of replaying the rise that plays when Home opens. No daily series (an older
+     or failed answer) hides the wave and leaves the numbers. */
+  function renderWave(daily) {
+    const block = V.ui.$("#stat-wave-block");
+    const wave = V.ui.$("#stat-wave");
+    if (!Array.isArray(daily) || !daily.length) {
+      block.hidden = true;
+      return;
+    }
+    block.hidden = false;
+    if (wave.children.length !== daily.length) {
+      wave.replaceChildren(...daily.map((_, i) => {
+        const bar = V.ui.el("span", { class: "stat-bar" });
+        bar.style.animationDelay = `${i * 35}ms`;
+        return bar;
+      }));
+    }
+    const words = daily.map((d) => d.words || 0);
+    const peak = Math.max(1, ...words);
+    words.forEach((n, i) => {
+      const bar = wave.children[i];
+      bar.style.height = `${n ? Math.max(WAVE_MIN_PX, Math.round((n / peak) * WAVE_PEAK_PX)) : WAVE_SILENT_PX}px`;
+      const today = i === words.length - 1;
+      bar.className = `stat-bar${n ? (today ? " is-today" : "") : " is-silent"}`;
+    });
+    const active = words.filter(Boolean).length;
+    wave.setAttribute("aria-label", active
+      ? `Words per day: dictated on ${active} of the last ${words.length} days.`
+      : `No dictations in the last ${words.length} days.`);
+  }
+
   /* Home is independent panels (greeting, banner, stats, status, feed), so a
      failure in one degrades that panel only and the rest still render:
      `stats.total_words` on a failed get_stats used to throw and take the whole
@@ -507,11 +545,14 @@ window.Voisr = window.Voisr || {};
 
       if (stats) {
         const animate = !opts.entering;
-        countTo($("#stat-saved"), stats.time_saved_seconds || 0, savedText, animate);
+        const saved = stats.time_saved_seconds || 0;
+        $("#stat-saved").dataset.size = heroSize(savedText(saved));
+        countTo($("#stat-saved"), saved, savedText, animate);
         const words = stats.total_words || 0;
         countTo($("#stat-words"), words, compactCount, animate);
         $("#stat-words").title = `${words.toLocaleString()} words`;
         $("#stat-streak").textContent = (stats.streak_days || 0).toLocaleString();
+        renderWave(stats.daily);
       }
 
       if (history) renderFeed(history);

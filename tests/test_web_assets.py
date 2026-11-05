@@ -284,10 +284,11 @@ def test_a_hidden_element_with_its_own_display_still_hides():
                 assert f".{name}[hidden]" in css, f"#{el_id} .{name}"
 
 
-def test_home_uses_time_saved_and_no_trends():
+def test_home_uses_time_saved_and_the_wave_not_the_old_trends():
     src = (WEB / "js" / "views" / "home.js").read_text()
     assert "time_saved_seconds" in src
-    for gone in ("daily", "trendBars", "weekDelta"):
+    assert "renderWave(stats.daily)" in src
+    for gone in ("trendBars", "weekDelta"):
         assert gone not in src, gone
 
 
@@ -626,7 +627,8 @@ def test_boot_toasts_a_moved_aside_config_and_the_mock_answers_it():
 def test_the_stats_note_says_its_numbers_are_all_time():
     # M9: the numbers are totals, so they say so
     src = INDEX.read_text()
-    assert "All time, against typing at 40 words per minute." in src
+    assert "All time, vs typing at 40 wpm" in src
+    assert "words, all time" in src, "it sits under a 14-day wave, so it has to say it isn't one"
 
 
 def test_palette_dictation_goes_through_home():
