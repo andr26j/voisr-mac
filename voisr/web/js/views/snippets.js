@@ -56,7 +56,12 @@ window.Voisr = window.Voisr || {};
     function edit() {
       if (closeEdit) closeEdit();
       if (adding) closeForm();
-      const close = () => { if (closeEdit === close) closeEdit = null; show(); };
+      const close = () => {
+        if (closeEdit === close) closeEdit = null;
+        show();
+        // a render that came while this was open left the row as it was
+        if (node.dataset.stale) { delete node.dataset.stale; render({ animate: false }); }
+      };
       closeEdit = close;
       const trigger = el("input", { id: "snippet-edit-trigger", type: "text", autocomplete: "off" });
       trigger.value = snippet.trigger;
@@ -134,6 +139,9 @@ window.Voisr = window.Voisr || {};
       syncBanner();
     }
     if (!snippets) return;
+    // the snippet being edited was removed elsewhere: its row goes with it
+    if (closeEdit && !byId("snippet-list").children.some((n) => n.classList.contains("is-editing")
+        && snippets.some((s) => s.trigger === n.dataset.key))) closeEdit = null;
     const empty = byId("snippet-empty");
     empty.hidden = snippets.length > 0;
     // with the banner gone, this is all that says what the page is for
