@@ -423,6 +423,73 @@ test("Remove in the edit removes the word and offers Undo", async (t) => {
   assert.match(toastText(h), /removed/i);
 });
 
+/* ---------- an edit survives background renders ---------- */
+
+const filterTo = async (h, text) => {
+  h["dict-search"].value = text;
+  h["dict-search"].dispatch("input", { target: h["dict-search"] });
+  await settle();
+};
+
+test("a learned correction changing `used` mid-edit keeps the typed text and the open row", async (t) => {
+  const state = { pending: [], auto_added: {}, used: {} };
+  const { h, row, input } = await editing(t, { dictionary: { voiser: "Voisr" }, state });
+  input.value = "Voisr typed halfway";
+  state.used = { voiser: 3 };
+  await h.V.views.dictionary.render();
+  assert.equal(h["dict-list"].children[0], row, "same row node");
+  assert.equal(byClass(row, "row-input")[0].value, "Voisr typed halfway");
+  // Cancel then shows the fresh facts, not the ones from before
+  button(row, "Cancel").dispatch("click");
+  await settle();
+  assert.ok(textsOf(h["dict-list"]).includes("used 3×"), textsOf(h["dict-list"]).join("|"));
+});
+
+test("filtering the edited word out of view keeps its row, text intact", async (t) => {
+  const { h, row, input } = await editing(t, { dictionary: { voiser: "Voisr", brunswik: "Brunswick" } });
+  input.value = "half typed";
+  await filterTo(h, "brun");
+  assert.ok(h["dict-list"].children.includes(row), "edited row stays");
+  assert.equal(byClass(row, "row-input")[0].value, "half typed");
+  assert.equal(h["dict-list"].children.length, 2);
+  // Cancel works, and the next render drops it as the filter says
+  button(row, "Cancel").dispatch("click");
+  await settle();
+  assert.equal(h["dict-list"].children.length, 1);
+});
+
+test("Save after a background render still writes, and a newer stored value is what Save compares against", async (t) => {
+  const { h, row, input } = await editing(t, { dictionary: { voiser: "Voisr" } });
+  h.live.dictionary.voiser = "Voisr 2";  // changed elsewhere
+  await h.V.views.dictionary.render();
+  input.value = "Voisr";  // equals the stale value, differs from the stored one
+  button(row, "Save").dispatch("click");
+  await settle();
+  assert.equal(h.live.dictionary.voiser, "Voisr", "an explicit edit is written, not dropped as unchanged");
+});
+
+test("Remove after the stored value changed elsewhere offers Undo for the newer value", async (t) => {
+  const { h, row } = await editing(t, { dictionary: { voiser: "Voisr" } });
+  h.live.dictionary.voiser = "Voisr 2";
+  button(row, "Remove").dispatch("click");
+  await settle();
+  assert.deepEqual(h.live.dictionary, {});
+  const undo = flatten(h.toast).find((n) => n.tagName === "BUTTON");
+  undo.dispatch("click");
+  await settle();
+  assert.equal(h.live.dictionary.voiser, "Voisr 2");
+});
+
+test("a word removed elsewhere while edited goes, and nothing points at it", async (t) => {
+  const { h, row } = await editing(t, { dictionary: { voiser: "Voisr", brunswik: "Brunswick" } });
+  delete h.live.dictionary.voiser;
+  await h.V.views.dictionary.render();
+  assert.ok(!h["dict-list"].children.includes(row));
+  const other = h["dict-list"].children[0];
+  button(other, "Edit").dispatch("click");  // would throw or misbehave if closeEdit were dead
+  assert.equal(byClass(other, "row-input").length, 1);
+});
+
 /* ---------- suggestions ---------- */
 
 test("pending suggestions show with Accept and Dismiss, and the section hides without any", async (t) => {

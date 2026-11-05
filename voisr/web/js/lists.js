@@ -47,7 +47,8 @@ window.Voisr.lists = (function () {
   }
 
   /* Keyed in-place update, no motion. entries: [{ key, sig, build }] in the
-     wanted order; a survivor whose sig changed is rebuilt. Rows that are no
+     wanted order; a survivor whose sig changed is rebuilt, unless it is open
+     for editing (class is-editing): that one is kept and marked data-stale. Rows that are no
      longer wanted are removed, unless opts.stillExists(key) says they only
      fell out of view: those are returned as `pushed`, still in the DOM. */
   function apply(list, entries, opts = {}) {
@@ -64,9 +65,15 @@ window.Voisr.lists = (function () {
       let node = current.get(e.key);
       let kind = null;
       if (node && node.dataset.sig !== String(e.sig)) {
-        node.remove();
-        node = null;
-        kind = "landed";  // changed in place: wash it so the edit is visible
+        if (node.classList.contains("is-editing")) {
+          // a row open for editing holds typed text: never rebuild it under
+          // the user. The view re-renders once the edit closes (data-stale).
+          node.dataset.stale = "1";
+        } else {
+          node.remove();
+          node = null;
+          kind = "landed";  // changed in place: wash it so the edit is visible
+        }
       }
       if (!node) {
         node = e.build();

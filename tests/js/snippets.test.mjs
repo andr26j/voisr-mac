@@ -44,7 +44,7 @@ function mount(t, { saveResult, cfg = {}, setFails = false } = {}) {
   nodes["snippet-text"].value = "";
   nodes["snippet-form"].hidden = true;
   env.V.views.snippets.init();
-  return { V: env.V, saves, deletes, config, ...nodes };
+  return { V: env.V, saves, deletes, config, setLive: (v) => { live = v; }, ...nodes };
 }
 
 const submit = (h) => h.V.views.snippets.save({ preventDefault() {} });
@@ -254,4 +254,32 @@ test("a history row for a snippet is tagged, and others aren't", () => {
   assert.equal(byClass(row({ snippet: true }), "tag")[0].textContent, "Snippet");
   assert.equal(byClass(row({}), "tag").length, 0);
   assert.ok(byClass(row({}), "row-time")[0].textContent, "every row has its time");
+});
+
+test("a render that changes the edited snippet's warning keeps the typed text and the row", async (t) => {
+  const h = mount(t);
+  await h.V.views.snippets.render();
+  const row = h["snippet-list"].children[0];
+  button(row, "Edit").dispatch("click");
+  const text = flatten(row).find((n) => n.tagName === "TEXTAREA");
+  text.value = "a long prompt, half typed";
+  h.setLive([{ trigger: "my email", text: "a@example.com\nline two", warning: "also matches another" }]);
+  await h.V.views.snippets.render();
+  assert.equal(h["snippet-list"].children[0], row, "same row node");
+  assert.equal(flatten(row).find((n) => n.tagName === "TEXTAREA").value, "a long prompt, half typed");
+  button(row, "Cancel").dispatch("click");
+  await new Promise((r) => setImmediate(r));
+  assert.equal(byClass(h["snippet-list"], "snippet-warning")[0].textContent, "also matches another");
+});
+
+test("a snippet removed elsewhere while edited goes, and nothing points at it", async (t) => {
+  const h = mount(t);
+  await h.V.views.snippets.render();
+  const row = h["snippet-list"].children[0];
+  button(row, "Edit").dispatch("click");
+  h.setLive([{ trigger: "other", text: "x", warning: null }]);
+  await h.V.views.snippets.render();
+  assert.ok(!h["snippet-list"].children.includes(row));
+  button(h["snippet-list"].children[0], "Edit").dispatch("click");
+  assert.equal(buttonText(h["snippet-list"].children[0]).includes("Save"), true);
 });
