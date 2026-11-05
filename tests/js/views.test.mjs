@@ -578,6 +578,33 @@ async function mountHistoryKeys(t, { animate = false } = {}) {
   return { V: env.V, deleted, press, selected, ...nodes };
 }
 
+test("with a row selected, Return and Backspace on a button leave the row alone", async (t) => {
+  const h = await mountHistoryKeys(t);
+  h.press("ArrowDown");
+  const [row] = h.selected();
+
+  const onButton = (key) => {
+    const ev = { key, target: { tagName: "BUTTON" }, preventDefault() { ev.prevented = true; } };
+    return ev;
+  };
+  const enter = onButton("Enter");
+  globalThis.document.dispatch("keydown", enter);
+  assert.equal(enter.prevented, undefined, "preventDefault would stop Return pressing the button");
+  assert.ok(!row.classList.contains("expanded"));
+
+  const back = onButton("Backspace");
+  globalThis.document.dispatch("keydown", back);
+  await settle();
+  assert.deepEqual(h.deleted, [], "nothing deleted from a button Tab happened to land on");
+
+  // the same keys off a button still act on the row
+  h.press("Enter");
+  assert.ok(row.classList.contains("expanded"));
+  h.press("Backspace");
+  await settle();
+  assert.equal(h.deleted.length, 1);
+});
+
 test("a refresh clears the keyboard selection along with the cursor", async (t) => {
   const h = await mountHistoryKeys(t);
   h.press("ArrowDown");

@@ -284,10 +284,13 @@ window.Voisr = window.Voisr || {};
         return;
       }
       if (e.target.tagName === "INPUT") return;
+      /* Tab can put focus on a button while a row stays selected. Return has to
+         press that button, and Backspace mustn't delete a row from it. */
+      const onButton = e.target.tagName === "BUTTON";
       if (e.key === "ArrowDown") { e.preventDefault(); moveCursor(1); }
       else if (e.key === "ArrowUp") { e.preventDefault(); moveCursor(-1); }
       else if (e.key === "Enter") {
-        if (!selectedItem()) return;
+        if (onButton || !selectedItem()) return;
         e.preventDefault();
         selectedRow().classList.toggle("expanded");
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
@@ -298,7 +301,7 @@ window.Voisr = window.Voisr || {};
         // Deliberately re-derive the item from the live DOM selection
         // instead of trusting an index into `flat` — see selectedItem()'s
         // comment. If nothing is visibly selected, Backspace is a no-op.
-        const item = selectedItem();
+        const item = onButton ? null : selectedItem();
         if (!item) return;
         e.preventDefault(); onDelete(item);
       }
