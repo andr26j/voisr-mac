@@ -31,87 +31,75 @@ test("step: a 50 ms attack covers 63% in 50 ms, a 220 ms release only 20%", () =
 });
 
 test("silence leaves every bar at rest", () => {
-  const meter = M.create(7, "classic");
+  const meter = M.createPill();
   const { out } = run(meter, 0.02, 500);
-  assert.deepEqual(out, [0, 0, 0, 0, 0, 0, 0]);
+  assert.deepEqual(out, new Array(17).fill(0));
 });
 
-test("classic is centre-weighted with bounded per-bar variance", () => {
-  const meter = M.create(7, "classic");
-  const { out } = run(meter, 1, 1000);
-  assert.ok(out[3] > 0.84 && out[3] <= 1, `centre ${out[3]}`);
-  for (const edge of [out[0], out[6]]) assert.ok(edge > 0.52 * 0.84 - 1e-9 && edge < 0.52 * 1.16 + 1e-9, `edge ${edge}`);
-  assert.ok(out[3] > out[1] && out[1] > out[0]);
-});
-
-test("bars fall slower than they rise", () => {
-  const meter = M.create(7, "breathe");
-  const rise = run(meter, 1, 100).out[3];
-  const m2 = M.create(7, "breathe");
-  run(m2, 1, 2000);
-  const fall = 1 - run(m2, 0, 100).out[3];
-  assert.ok(rise > fall, `rise ${rise} vs fall ${fall}`);
-});
-
-test("breathe moves all bars as one", () => {
-  const meter = M.create(7, "breathe");
-  const { out } = run(meter, 0.7, 300);
-  assert.ok(out.every((x) => x === out[0]));
-  assert.ok(out[0] > 0);
-});
-
-test("neon quantises to four steps", () => {
-  const meter = M.create(7, "neon");
-  for (const raw of [0.3, 0.55, 0.8, 1]) {
-    const { out } = run(meter, raw, 400);
-    for (const x of out) assert.ok([0, 0.25, 0.5, 0.75, 1].includes(x), `neon ${x}`);
+test("hump: low at the edges, full in the middle, symmetric", () => {
+  const h = M.hump(17);
+  assert.equal(h.length, 17);
+  assert.equal(h[8], 1);
+  for (let i = 0; i < 8; i++) {
+    assert.ok(h[i] < h[i + 1]);
+    assert.ok(Math.abs(h[i] - h[16 - i]) < 1e-9);
   }
 });
 
-test("ocean: edges lag the centre after a burst", () => {
-  const meter = M.create(7, "ocean");
-  const { out } = run(meter, 1, 80);
-  assert.ok(out[3] / M.weights(7)[3] > out[0] / M.weights(7)[0] + 0.1, `centre ${out[3]} edge ${out[0]}`);
+test("pillWeights: the pill's 17 bars take the design's 6.6-26 px silhouette", () => {
+  const w = M.pillWeights();
+  assert.equal(w.length, 17);
+  assert.equal(M.PILL_SPEAK.length, 17);
+  assert.equal(w[8], 1);
+  assert.ok(Math.abs(w[0] * 26 - 6.6) < 0.05, `edge ${w[0] * 26} px`);
 });
 
-test("ember flickers each bar between 72% and 112% of classic", () => {
-  let n = 0;
-  const rng = () => [0, 0.999][n++ % 2]; // alternate the two extremes
-  const meter = M.create(7, "ember", { random: rng });
-  const { out } = run(meter, 1, 1500);
-  for (const x of out) assert.ok(x >= 0 && x <= 1);
+test("the envelope's constants are the ones the sidebar wave shares", () => {
+  assert.equal(M.ATTACK_MS, 50);
+  assert.equal(M.RELEASE_MS, 220);
 });
 
-test("unknown themes behave as classic", () => {
-  const a = run(M.create(7, "nope"), 0.8, 400).out;
-  const b = run(M.create(7, "classic"), 0.8, 400).out;
-  assert.deepEqual(a, b);
-});
-
-test("weights: the pill's seven bars use the thesis table; other counts get a hump", () => {
-  assert.deepEqual(M.weights(7), [0.52, 0.7, 0.88, 1, 0.88, 0.7, 0.52]);
-  const w = M.weights(21);
-  assert.equal(w.length, 21);
-  assert.ok(w[10] > w[0] && Math.abs(w[0] - w[20]) < 1e-9);
+test("a voice moves each pill bar on its own rhythm, inside its share of the silhouette", () => {
+  const meter = M.createPill();
+  meter.setLevel(1);
+  const w = M.pillWeights();
+  const seen = w.map(() => [Infinity, -Infinity]);
+  let t = 0, frame;
+  for (let i = 0; i < 400; i++) {
+    t += 16;
+    frame = meter.frame(16, t);
+    if (t < 500) continue;  // past the attack
+    frame.forEach((x, b) => {
+      assert.ok(x >= 0 && x <= 1, `bar ${b}: ${x}`);
+      assert.ok(x <= w[b] * 1.35 + 1e-9, `bar ${b} ${x} past ${w[b] * 1.35}`);
+      seen[b] = [Math.min(seen[b][0], x), Math.max(seen[b][1], x)];
+    });
+  }
+  // the centre swings by most of its height rather than holding a stamped shape
+  assert.ok(seen[8][1] - seen[8][0] > 0.5, `centre range ${seen[8]}`);
+  // neighbours don't move as one
+  assert.ok(frame.some((x, b) => b < 8 && Math.abs(x / w[b] - frame[b + 1] / w[b + 1]) > 0.05));
 });
 
 test("reset puts the envelope back at rest", () => {
-  const meter = M.create(7, "classic");
+  const meter = M.createPill();
   run(meter, 1, 500);
   meter.reset();
   meter.setLevel(0);
-  assert.deepEqual(meter.frame(16, 10), [0, 0, 0, 0, 0, 0, 0]);
+  assert.deepEqual(meter.frame(16, 10), new Array(17).fill(0));
 });
 
-test("paintBar scales a bar and pre-stretches its caps, for the pill and the dock alike", () => {
+test("paintBar scales a bar and pre-stretches its caps, for the pill", () => {
   const style = {};
   M.paintBar({ style }, 0.5);
   assert.equal(style.transform, "scaleY(0.500)");
   assert.equal(style.borderRadius, "2px / 4.00px", "2 px caps survive a half-height scale");
+  M.paintBar({ style }, 0.5, 1.25);
+  assert.equal(style.borderRadius, "1.25px / 2.50px", "and so do the pill's narrower ones");
 });
 
 test("atRest: true in silence, false while a voice is in the envelope, true once it has fallen", () => {
-  const m = M.create(7, "classic");
+  const m = M.createPill();
   assert.ok(m.atRest(), "a fresh meter is at rest");
   run(m, 0.8, 200);
   assert.ok(!m.atRest());

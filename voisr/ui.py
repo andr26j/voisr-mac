@@ -26,43 +26,22 @@ from voisr.recording_queue import (
     RecordingSession,
     SessionResult,
 )
-from voisr.snippets import (SnippetError, find_snippet, has_speech_evidence, needs_leading_space,
+from voisr.snippets import (SnippetError, dictation_wants_space, find_snippet, has_speech_evidence, needs_leading_space,
                             snippet_warnings, tidy_trigger, trigger_hints, triggers_for_clip,
                             with_saved)
 from voisr.status_item import StatusItem
 from voisr.suggestions import (ACCEPTED, AUTO_ADDED, DISMISSED, PENDING, SuggestionStore,
                                dictionary_allows, ready_to_auto_add)
-from voisr.window_chrome import apply_chrome
+from voisr.window_chrome import apply_chrome, band_status, launch_background
 
 
-def _find_webview(native_window):
-    """The WKWebView pywebview put in the window, or None.
-
-    pywebview's Cocoa backend makes its WKWebView subclass
-    (BrowserView.WebKitHost) the window's contentView directly --
-    window.setContentView_(webview), fired from
-    webView_didFinishNavigation_ once the initial page load completes --
-    so the webview normally *is* native_window.contentView(), not a
-    subview inside it (confirmed on the running app: contentView().
-    subviews() holds only the webview's own internal WKFlippedView).
-    Subviews are still checked as a fallback for a differently-shaped
-    window. Either way, matching goes by class inheritance (isinstance
-    against the real WebKit.WKWebView), not by name: at runtime the class
-    is further KVO-swizzled to "NSKVONotifying_WebKitHost", so even a
-    corrected name check would be fragile. Wrapped so a missing/failed
-    WebKit import still returns None instead of raising -- chrome is
-    cosmetic and must never stop the app."""
+def _window_background(api):
+    """The window's colour before the page's first paint. Cosmetic, so a
+    config that can't be read must not stop startup."""
     try:
-        import WebKit
-        content = native_window.contentView()
-        if isinstance(content, WebKit.WKWebView):
-            return content
-        for view in content.subviews():
-            if isinstance(view, WebKit.WKWebView):
-                return view
+        return launch_background(api.get_config().get("appearance", "system"))
     except Exception:
-        pass
-    return None
+        return launch_background("system")
 
 
 def default_recorder():
@@ -96,8 +75,8 @@ def request_permissions(mode: str = "listen") -> None:
 
 
 def apply_app_appearance(mode: str) -> None:
-    """Point NSApp at a fixed appearance so the titlebar and vibrancy follow
-    the user's choice. 'system' clears the override. Never raises.
+    """Point NSApp at a fixed appearance so the titlebar follows the user's
+    choice. 'system' clears the override. Never raises.
 
     set_appearance() is a bridge call, and pywebview dispatches every
     bridge call on a fresh worker thread -- so without this, setAppearance_
@@ -205,23 +184,22 @@ HOTKEY_OPTIONS = [
     {"value": "f19", "label": "F19"},
 ]
 
-# Adding a theme? Also update: widget.html (theme CSS + THEME_VALUES),
-# style.css (mini-pill rule + keyframes), and app.js's dev-mock
-# get_pill_themes. test_widget_html_covers_all_pill_themes guards widget.html.
+# Adding a theme? Also update: widget.html (theme CSS + THEME_VALUES), the
+# Settings picker's preview (.pill-preview in css/views.css), and the
+# get_pill_themes mock in js/api.js.
+# test_widget_html_covers_all_pill_themes guards widget.html.
 PILL_THEMES = [
-    {"value": "classic", "label": "Classic"},
-    {"value": "ember", "label": "Ember"},
-    {"value": "aurora", "label": "Aurora"},
-    {"value": "ocean", "label": "Ocean"},
-    {"value": "neon", "label": "Neon EQ"},
-    {"value": "breathe", "label": "Breathe"},
-    {"value": "scanner", "label": "Scanner"},
+    # Saved as "classic" in every existing config, so the value stays
+    {"value": "classic", "label": "Signature"},
+    {"value": "quiet", "label": "Quiet"},
 ]
 _PILL_THEME_VALUES = {t["value"] for t in PILL_THEMES}
 
 
 def sanitize_pill_theme(name) -> str:
-    """Whitelist a theme name from config before it reaches JS interpolation."""
+    """Whitelist a theme name from config before it reaches JS interpolation.
+    Anything else, including a theme this version no longer has (ember, aurora,
+    ocean, neon, breathe, scanner), lands on Signature."""
     return name if isinstance(name, str) and name in _PILL_THEME_VALUES else "classic"
 
 
@@ -273,6 +251,9 @@ VK_LABELS = {
     105: "F13", 107: "F14", 113: "F15", 106: "F16", 64: "F17",
     79: "F18", 80: "F19",
 }
+
+# In the Settings pop-up Esc means back out, so it can't become the dictation key.
+ESCAPE_VK = 53
 
 _LEGACY_NAME_TO_VK = {
     "alt_r": 61, "alt_l": 58, "alt": 58,
@@ -368,10 +349,13 @@ class RecordingWidget:
     so paste-at-cursor is undisturbed.
     """
 
-    # 6 px of headroom above and below the 44 px pill for its entrance rise;
-    # the margin keeps the pill's centre where it has always been
-    WIDTH, HEIGHT = 232, 56
-    BOTTOM_MARGIN = 70
+    # Holds the 196x44 pill's shadow (0 8px 24px in widget.html: 24 px beside
+    # it, 32 px below), and 6 px more below for the entrance rise, or the
+    # shadow would end in a hard edge. Transparent and click-through, so the
+    # extra room costs nothing. The page centres the pill, and the margin keeps
+    # its centre 98 px up the screen, where it has always been.
+    WIDTH, HEIGHT = 248, 120
+    BOTTOM_MARGIN = 38
     EXIT_S = 0.18  # the pill's 160 ms exit (widget.html), plus a frame
 
     # AppKit constants (stable ABI values)
@@ -408,7 +392,9 @@ class RecordingWidget:
             from WebKit import WKWebView, WKWebViewConfiguration
             from Foundation import NSMakeRect, NSURL
 
-            frame = NSScreen.mainScreen().frame()
+            # Always the primary display, whose frame starts at (0, 0). The
+            # panel is placed once, and another display can be unplugged.
+            frame = NSScreen.screens()[0].frame()
             x = (frame.size.width - self.WIDTH) / 2
             y = self.BOTTOM_MARGIN
             rect = NSMakeRect(x, y, self.WIDTH, self.HEIGHT)
@@ -424,6 +410,7 @@ class RecordingWidget:
             panel.setHidesOnDeactivate_(False)
             panel.setOpaque_(False)
             panel.setBackgroundColor_(NSColor.clearColor())
+            panel.setHasShadow_(False)          # the pill draws its own (widget.html)
             panel.setTitle_("Voisr Recording")  # for identification, not shown
             panel.setIgnoresMouseEvents_(True)  # invisible resident overlay: click-through
             panel.setAlphaValue_(0.0)           # resident but faded out until a dictation
@@ -448,6 +435,29 @@ class RecordingWidget:
         except Exception as e:
             print(f"Voisr widget: build failed: {e}", flush=True)
 
+    def _apply_look(self, theme: str, color: str | None) -> None:
+        """Main thread. sanitize_* whitelist both values, so config.json
+        content can never be interpolated into JS verbatim."""
+        self._webview.evaluateJavaScript_completionHandler_(
+            f'setTheme("{sanitize_pill_theme(theme)}")', None)
+        safe = sanitize_pill_color(color)
+        self._webview.evaluateJavaScript_completionHandler_(
+            f'setColor("{safe}")' if safe else "setColor(null)", None)
+
+    def set_look(self, theme: str, color: str | None) -> None:
+        """Set the theme without showing anything, ahead of a state that has
+        no dictation behind it. Recording sets its own."""
+        try:
+            from PyObjCTools import AppHelper
+
+            def go():
+                if self._webview is not None:
+                    self._apply_look(theme, color)
+
+            AppHelper.callAfter(go)
+        except Exception:
+            pass  # never break the record path
+
     def _set(self, state: str, theme: str | None = None,
              color: str | None = None, is_current=None, if_current=None,
              label: str | None = None) -> None:
@@ -465,13 +475,7 @@ class RecordingWidget:
                     self._feed_gen += 1
                     self._vis_gen += 1
                     if theme is not None:
-                        # sanitize_* whitelist both values — config.json content
-                        # can never be interpolated into JS verbatim
-                        self._webview.evaluateJavaScript_completionHandler_(
-                            f'setTheme("{sanitize_pill_theme(theme)}")', None)
-                        safe = sanitize_pill_color(color)
-                        self._webview.evaluateJavaScript_completionHandler_(
-                            f'setColor("{safe}")' if safe else "setColor(null)", None)
+                        self._apply_look(theme, color)
                     if label is not None:
                         # json.dumps: a word from the user's text as a JS string
                         self._webview.evaluateJavaScript_completionHandler_(
@@ -737,6 +741,7 @@ class HotkeyService:
         self._target_vk = None
         self._state_lock = threading.RLock()
         self._epoch = 0  # bumped per recording; stale _finish threads must not touch the widget
+        self._pill_up = False  # shown, with no hide run since; see _take_pill_down
         self._notice_after = 0.0  # the pill is showing a dictation's result until then
         # Key events are handed to this serial worker instead of being acted
         # on inside the Quartz tap callback: press() can wait on the previous
@@ -819,18 +824,29 @@ class HotkeyService:
     def _widget_enabled(self) -> bool:
         return self._widget is not None and bool(self._api.get_config().get("show_widget", True))
 
-    def _run_widget_action(self, epoch: int, action) -> None:
+    def _run_widget_action(self, epoch: int, action, name: str | None = None) -> None:
         with self._state_lock:
             if epoch == self._epoch:
                 action()
+                if name == "hide":
+                    self._pill_up = False  # only now: a newer epoch drops a queued hide
 
     def _widget_action(self, name: str, epoch: int, *args, **kwargs) -> None:
+        """Caller holds _state_lock."""
         method = getattr(self._widget, name)
+        if name != "hide":
+            self._pill_up = True
         if getattr(self._widget, "_supports_ownership_action", False):
             method(*args, **kwargs,
-                   if_current=lambda action: self._run_widget_action(epoch, action))
+                   if_current=lambda action: self._run_widget_action(epoch, action, name))
         else:
-            method(*args, **kwargs)
+            self._run_widget_action(epoch, lambda: method(*args, **kwargs), name)
+
+    def _take_pill_down(self, epoch: int) -> None:
+        """Hide the pill if one is up; caller holds _state_lock. This goes by
+        what was shown, not by the setting, which may have changed since."""
+        if self._pill_up:
+            self._widget_action("hide", epoch)
 
     def press(self, latched=False, at=None) -> None:
         at = self._clock() if at is None else at
@@ -880,8 +896,9 @@ class HotkeyService:
             if "error" in result:
                 self._pressed = False
                 self._latched = False
-                # e.g. the dock owns the mic, or the queue is full. Say so
-                # once per press; a held key's auto-repeat lands here too.
+                # e.g. a click-to-record dictation owns the mic, or the queue
+                # is full. Say so once per press; a held key's auto-repeat
+                # lands here too.
                 if not self._rejected:
                     self._flash_error()
                 # a key already let go needs no guard against its repeats
@@ -902,6 +919,10 @@ class HotkeyService:
                             "show_recording", epoch,
                             theme=sanitize_pill_theme(cfg.get("pill_theme")),
                             color=sanitize_pill_color(cfg.get("pill_color")))
+                    else:
+                        # the setting went off under an older pill, and the
+                        # new epoch orphans that pill's own hide
+                        self._take_pill_down(epoch)
                     if released:
                         # a toggle ends at once; a held key goes through the gate
                         finish = (self._end_recording() if self._latched
@@ -1031,12 +1052,23 @@ class HotkeyService:
         self._pane_opened_at = now
         return key
 
+    def _dress_widget(self) -> None:
+        """Only a recording sets the pill's theme. A state with no dictation
+        behind it would otherwise wear the last dictation's, or Signature
+        straight after launch."""
+        set_look = getattr(self._widget, "set_look", None)
+        if set_look is None:
+            return
+        cfg = self._api.get_config()
+        set_look(cfg.get("pill_theme"), cfg.get("pill_color"))
+
     def _flash_error(self) -> None:
         """Error pill, then hide; caller holds _state_lock."""
         if not self._widget_enabled():
             return
         self._epoch += 1
         epoch = self._epoch
+        self._dress_widget()
         self._widget_action("show_error", epoch)
 
         def hide_later():
@@ -1080,9 +1112,11 @@ class HotkeyService:
         passes the result to _spawn_finish after letting go of it."""
         self._pressed = False
         epoch = self._epoch
-        show = self._widget_enabled()
+        show = self._pill_up and self._widget_enabled()
         if show:
             self._widget_action("show_processing", epoch)
+        else:
+            self._take_pill_down(epoch)
         future = self._api._release_recording(paste=True)
         return future, show, epoch
 
@@ -1137,8 +1171,11 @@ class HotkeyService:
             for _ in range(self.NOTICE_TRIES):
                 with self._state_lock:
                     if idle():
+                        if not self._widget_enabled():
+                            return  # turned off while this waited
                         self._epoch += 1
                         epoch = self._epoch
+                        self._dress_widget()
                         self._widget_action("show_notice", epoch, text)
                         break
                 time.sleep(self.NOTICE_RETRY_S)
@@ -1188,12 +1225,25 @@ class HotkeyService:
         mode = self._api.get_config().get("event_tap", "active")
         # a hand-edited config must not leave the service with no listener
         self.tap_mode = mode if mode in TAP_MODES else "active"
-        request_permissions(self.tap_mode)
+        # First run asks when someone clicks Open Settings, not over a window
+        # nobody has read yet. A tap can bring up the prompt too, so it waits
+        # for the grant, which _watch below notices.
+        hold = self._first_run_holds_prompts()
+        if not hold:
+            request_permissions(self.tap_mode)
         self._start_worker()
-        self._spawn_listener()
+        if not hold or self._permissions_check():
+            self._spawn_listener()
         self._refresh_status()
         self._watch()
         self._start_ticker()
+
+    def _first_run_holds_prompts(self) -> bool:
+        check = getattr(self._api, "first_run_pending", None)
+        try:
+            return check is not None and check() is True
+        except Exception:
+            return False  # a failed check must not stop push-to-talk asking
 
     def _toggle(self) -> None:
         """flagsChanged-only keys (Fn) report both edges identically."""
@@ -1334,7 +1384,8 @@ class HotkeyService:
         recording after letting go of it: closing a mic can block, and the
         pill's main-thread callbacks take the lock."""
         self._pressed = False
-        if self._widget_enabled():
+        # a pill that's up comes down even if the setting went off since
+        if self._pill_up or self._widget_enabled():
             self._widget_action("hide", epoch)
 
     def _spawn_listener(self, mode=None) -> None:
@@ -1562,12 +1613,17 @@ class Api:
         self._clipboard_fn = clipboard_fn
         # None = no check, so tests never probe the runner's real TCC state
         self._mic_check = mic_check
+        self._mic_heard = False  # a clip this launch held real audio
         # asks macOS for one pane's grant again after a reset (a TCC prompt)
         self._grant_requester = grant_requester or permissions.request_grant
+        # panes first run hasn't asked macOS for yet (see open_settings_pane)
+        self._held_grants = set()
+        self._first_run_seen = False
         self._last_paste_text = None
         self._last_paste_ts = None
         self._typing_generation = 0
         self._last_paste_typing_generation = 0
+        self._last_paste_app = None
         self._paste_state_lock = threading.Lock()
         self._window = None
         self._status_item = None
@@ -1724,16 +1780,16 @@ class Api:
         except Exception as error:
             print(f"Voisr: edit learning skipped ({error.__class__.__name__})", flush=True)
 
-    def _snippet_wants_space(self, text) -> bool:
+    def _read_paste_target(self):
         """Read where the paste is about to go: the release capture may be of a
-        field the user has since left. Bounded, and not knowing means no space."""
+        field the user has since left. Bounded, and not knowing means None."""
         if self._focus is None or not self._screen_context_on():
-            return False
+            return None
         try:
-            return needs_leading_space(self._focus.read_now(VERIFY_BUDGET_S), text)
+            return self._focus.read_now(VERIFY_BUDGET_S)
         except Exception as error:
             print(f"Voisr: screen context skipped ({error.__class__.__name__})", flush=True)
-            return False
+            return None
 
     def _end_learning_for_snippet(self, session) -> None:
         """Before the text can reach a field, where a window still open on an
@@ -1993,12 +2049,13 @@ class Api:
         return self._recordings.active_level()
 
     def get_level(self):
-        """The dock's 30 Hz poll while it records: the live mic level
-        (0..1), or None when nothing is metered. Bridge method."""
+        """The page's 30 Hz poll while a dictation runs (first run's mic check
+        and Home's banner wave): the live mic level (0..1), or None when
+        nothing is metered. Bridge method."""
         return self.current_level()
 
     def note_user_typing(self):
-        """Record manual typing without blocking the event-tap callback."""
+        """Record typing, or a click, without blocking the event-tap callback."""
         with self._paste_state_lock:
             self._typing_generation += 1
 
@@ -2078,7 +2135,8 @@ class Api:
     def capture_hotkey(self):
         """'Press any key' flow: suspend the live listener (so the pressed
         key doesn't trigger a dictation), capture the next key — any key,
-        including Fn/Globe — persist it, and restart the listener on it."""
+        including Fn/Globe, except Esc, which cancels — persist it, and
+        restart the listener on it."""
         svc = self._hotkey_service
         # capture with the same tap kind the hotkey uses: an active-tap user
         # may not have granted Input Monitoring at all
@@ -2095,6 +2153,8 @@ class Api:
             if not got:
                 return {"error": "no key detected — click Change and press a key"}
             vk, label = got
+            if vk == ESCAPE_VK:
+                return {"cancelled": True}
             self._update_config({"hotkey_vk": vk, "hotkey_label": label})
             return {"vk": vk, "label": label}
         finally:
@@ -2137,6 +2197,7 @@ class Api:
             if span.verdict == "all_zeros":
                 return SessionResult.failure(
                     session.sequence, "audio", MIC_SILENT_MESSAGE)
+            self._mic_heard = True
             if span.verdict == "no_speech":
                 return SessionResult.failure(
                     session.sequence, "audio", NO_SPEECH_MESSAGE)
@@ -2207,15 +2268,17 @@ class Api:
             paste_started = self._clock()
             with self._paste_state_lock:
                 typing_generation = self._typing_generation
-                join = (
-                    snippet is None
-                    and self._last_paste_text
+                recent = (
+                    self._last_paste_text
                     and typing_generation == self._last_paste_typing_generation
                     and self._clock() - self._last_paste_ts <= self.SPACE_JOIN_WINDOW_S
                     and not self._last_paste_text[-1].isspace()
                 )
-            if snippet is not None:
-                join = self._snippet_wants_space(text)
+                last_app = self._last_paste_app
+            # outside the lock: this waits on the Accessibility worker
+            target = self._read_paste_target()
+            join = (needs_leading_space(target, text) if snippet is not None
+                    else dictation_wants_space(target, text, recent, last_app))
             try:
                 pasted = self._paste_fn(
                     (" " if join else "") + text,
@@ -2237,6 +2300,7 @@ class Api:
                     self._last_paste_text = text
                     self._last_paste_ts = self._clock()
                     self._last_paste_typing_generation = typing_generation
+                    self._last_paste_app = target.bundle_id if target is not None else None
 
         verdict = check.get("verdict")
         manual_paste = bool(pasted and verdict and verdict.missed)
@@ -2425,6 +2489,9 @@ class Api:
             else:
                 cfg = load_config(self._config_path,
                                   on_corrupt=self._note_corrupt_config)
+                # the theme the pill will really show, so the Settings picker
+                # has one to highlight after an old theme was saved
+                cfg["pill_theme"] = sanitize_pill_theme(cfg.get("pill_theme"))
                 self._config_cache = (key, copy.deepcopy(cfg))
         cfg["launch_at_login"] = launch_agent.is_enabled(path=launch_agent.PLIST_PATH)
         return cfg
@@ -2578,16 +2645,70 @@ class Api:
             for pane in panes:
                 if pane["key"] == "accessibility" and pane["granted"] is True:
                     pane["effective"] = False
-            return {"panes": panes, "fallback": True}
+            return {"panes": self._with_mic_heard(panes), "fallback": True}
         panes = permissions.states(mode=mode)
         if running and getattr(svc, "health", None) == "not_effective":
             for pane in panes:
                 if pane["hotkey"]:
                     pane["effective"] = False
-        return {"panes": panes, "fallback": False}
+        return {"panes": self._with_mic_heard(panes), "fallback": False}
+
+    def _with_mic_heard(self, panes):
+        """When recording is what brought up macOS's prompt, AVCaptureDevice keeps
+        answering "not determined" until the app relaunches, so Home would go on
+        saying macOS will ask after it already has. Real audio settles it: a mic
+        without the grant only sends zeros. Only an unknown is overruled, never a
+        known refusal."""
+        if self._mic_heard:
+            for pane in panes:
+                if pane["key"] == "microphone" and pane["granted"] is None:
+                    pane["granted"] = True
+        return panes
 
     def open_settings_pane(self, key):
+        """While first run holds the launch prompt, Voisr isn't listed in the
+        pane yet, so the first trip there asks macOS first. That also covers
+        someone who chose Set up later and comes back through Home."""
+        if key in self._held_grants:
+            self._held_grants.discard(key)
+            try:
+                self._grant_requester(key)
+            except Exception:
+                pass  # the pane still opens; the user can add Voisr with +
         return {"ok": permissions.open_pane(key)}
+
+    def first_run_pending(self) -> bool:
+        """Does first run still need showing? A saved first_run_done answers.
+        With none, an existing config.json or history means an install from
+        before first run, which skips it and stays unwritten. Otherwise this is
+        a fresh install: save False now, so a change made during first run can't
+        make it look like an existing install if they quit midway."""
+        with self._config_lock:
+            done = self.get_config().get("first_run_done")
+            if done is None:
+                if self._config_path.exists() or self._has_history():
+                    return False
+                try:
+                    self._update_config({"first_run_done": False})
+                except OSError as error:
+                    print(f"Voisr: first run not saved ({error})", flush=True)
+            elif done:
+                return False
+        if not self._first_run_seen:  # this is asked again on every key change
+            self._first_run_seen = True
+            self._held_grants = {"accessibility", "input_monitoring"}
+        return True
+
+    def _has_history(self) -> bool:
+        path = Path(getattr(self._history, "path", ROOT / "data" / "history.jsonl"))
+        try:
+            return path.stat().st_size > 0
+        except OSError:
+            return False
+
+    def get_first_run(self):
+        """Bridge: whether the page opens on first run rather than Home."""
+        return {"pending": self.first_run_pending()}
 
     def reset_permission(self, key):
         """Bridge: reset Voisr's own grant, then open the pane to re-grant.
@@ -2596,6 +2717,7 @@ class Api:
         grant again first: that re-lists Voisr, switched off, in the pane."""
         result = permissions.reset_grant(key)
         if result.get("ok"):
+            self._held_grants.discard(key)  # asked here, so not again later
             try:
                 self._grant_requester(key)
             except Exception:
@@ -2810,6 +2932,30 @@ def close_hides_window(event, ns_window, now) -> bool:
     return False
 
 
+def install_click_watch(on_click, appkit=None):
+    """Call on_click when the mouse goes down in another app. A global monitor
+    only watches, so unlike the push-to-talk tap it can't hold up a click, and
+    it needs no permission for mouse events. Clicks in Voisr's own window aren't
+    seen, and don't move focus in any other app. Main thread. Returns the monitor
+    to keep, or None: without it a click just doesn't stop the joining space."""
+    try:
+        if appkit is None:
+            import AppKit as appkit
+
+        def handler(_event):
+            try:
+                on_click()
+            except Exception:
+                pass  # nothing here may reach AppKit
+
+        return appkit.NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+            appkit.NSEventMaskLeftMouseDown | appkit.NSEventMaskRightMouseDown
+            | appkit.NSEventMaskOtherMouseDown, handler)
+    except Exception as e:
+        print(f"Voisr: click watch not installed ({e})", flush=True)
+        return None
+
+
 def install_dock_reopen(on_reopen, delegate_cls=None) -> bool:
     """Make a Dock click call on_reopen. The red button only hides the
     dashboard, and pywebview's AppDelegate lacks
@@ -2846,7 +2992,7 @@ BRIDGE_METHODS = (
     "accept_suggestion", "capture_hotkey", "clear_history", "copy_text",
     "delete_history_item", "delete_snippet", "dismiss_suggestion", "get_snippets",
     "get_suggestions", "save_snippet",
-    "delete_model", "download_model", "export_history", "get_download_progress", "get_config", "get_history", "get_hotkey_status",
+    "delete_model", "download_model", "export_history", "get_download_progress", "get_config", "get_first_run", "get_history", "get_hotkey_status",
     "get_level", "get_models", "get_permissions", "get_pill_themes", "get_stats",
     "hotkey_display", "open_settings_pane", "relaunch_app",
     "reset_permission", "restore_history_item", "save_text_file",
@@ -2922,6 +3068,12 @@ def main():
         api = Api(mic_check=permissions.microphone_granted,
                   warm_server=make_warm_server(),
                   ax_adapter=make_ax_adapter())
+        # settled before anything can write config.json, which would make a
+        # fresh install look like an existing one
+        try:
+            api.first_run_pending()
+        except Exception as e:  # startup must not die over this
+            print(f"Voisr: first run not checked ({e})", flush=True)
         widget = RecordingWidget(level_source=api.current_level)
         service = HotkeyService(api, widget=widget, fallback_check=listen_tap_granted,
                                 key_state=hotkey_key_down)
@@ -2929,7 +3081,8 @@ def main():
         # No js_api: see bridge_functions
         window = webview.create_window("Voisr", str(WEB_DIR / "index.html"),
                                        width=1060, height=700,
-                                       min_size=(900, 620))
+                                       min_size=(900, 620),
+                                       background_color=_window_background(api))
         window.expose(*bridge_functions(api))
         api.attach_window(window)
         widget.create()
@@ -3014,56 +3167,35 @@ def main():
 
             from PyObjCTools import AppHelper
 
-            def apply_native_chrome(native):
+            band = {"cleared": False}
+
+            def apply_native_chrome(native, final=False):
                 # Chrome is AppKit and must be on the main thread. Cosmetic:
                 # failures are logged, not fatal.
-                chrome = apply_chrome(native, webview=_find_webview(native))
+                chrome = apply_chrome(native)
                 if not chrome["titlebar"]:
                     print("Voisr chrome: titlebar setup failed", flush=True)
-                if not chrome["vibrancy"]:
-                    print("Voisr chrome: vibrancy unavailable, using flat "
-                          "fallback", flush=True)
-                    # No native vibrancy effect view -- tell base.css's
-                    # :root[data-vibrancy="off"] fallback to paint a
-                    # solid tint instead of leaving the sidebar assuming
-                    # a translucency that was never applied. Fire-and-
-                    # forget off-thread, same pattern as
-                    # Api._notify_dictation: a slow or dead webview must
-                    # never block startup.
-                    def set_vibrancy_off():
-                        try:
-                            window.evaluate_js(
-                                'document.documentElement.setAttribute('
-                                '"data-vibrancy", "off")')
-                        except Exception:
-                            pass
-                    threading.Thread(target=set_vibrancy_off,
-                                     daemon=True).start()
+                band["cleared"], problem = band_status(
+                    chrome, band["cleared"], final)
+                if problem:
+                    print(problem, flush=True)
 
             def native_setup():
                 apply_app_appearance(api.get_config().get("appearance", "system"))
                 native = getattr(window, "native", None)
                 if native is not None:
-                    # pywebview's Cocoa backend only makes the WKWebView the
-                    # window's contentView once the initial page finishes
-                    # loading (webView_didFinishNavigation_ calls
-                    # window.setContentView_(webview)) -- calling
-                    # apply_chrome() any earlier finds a bare placeholder
-                    # NSView with no subviews, so _find_webview() always
-                    # returns None and vibrancy silently never engages, even
-                    # with a correct webview lookup. Defer to window.events
-                    # .loaded, falling back to an immediate call if the page
-                    # has (rarely) already finished by the time we get here.
+                    # At once, so the window doesn't change shape in view, and
+                    # again on load in case the window wasn't ready for it yet.
+                    apply_native_chrome(native)
                     try:
-                        loaded = window.events.loaded
-                        if loaded.is_set():
-                            apply_native_chrome(native)
-                        else:
-                            loaded += lambda *a: AppHelper.callAfter(
-                                apply_native_chrome, native)
+                        window.events.loaded += lambda *a: AppHelper.callAfter(
+                            apply_native_chrome, native, True)
                     except Exception:
-                        apply_native_chrome(native)
+                        # no second pass will come, so this one is the last
+                        apply_native_chrome(native, True)
                 status.create()
+                # a click can move the cursor, so the next dictation may not follow on
+                api._click_watch = install_click_watch(api.note_user_typing)
 
             AppHelper.callAfter(native_setup)
 

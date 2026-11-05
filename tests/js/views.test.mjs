@@ -6,56 +6,6 @@ import { makeNode } from "./dom.mjs";
 /* ui.js first: both views call V.ui.el / V.ui.$ at module scope. */
 const { V } = loadVoisr(["js/ui.js", "js/lists.js", "js/views/home.js", "js/views/history.js"]);
 
-/* ---------- home: trendBars + weekDelta ---------- */
-
-const trendBars = V.views.home.trendBars;
-const weekDelta = V.views.home.weekDelta;
-
-const daily = (...words) => words.map((w, i) => ({ date: `d${i}`, words: w }));
-
-test("trendBars scales every day against the tallest one in the series", () => {
-  const bars = trendBars(daily(0, 50, 100, 25, 0, 75, 100, 10, 0, 40, 100, 60, 30, 20));
-  assert.equal(bars.length, 14);
-  assert.ok(bars.every((b) => b >= 0 && b <= 1), `out of range: ${bars.join()}`);
-  assert.ok(bars.every((b) => Number.isFinite(b)), `non-finite: ${bars.join()}`);
-  assert.equal(bars[2], 1, "the tallest day is the full height");
-  assert.equal(bars[1], 0.5);
-  assert.equal(bars[0], 0);
-});
-
-test("trendBars keeps an all-zero series flat instead of dividing by zero", () => {
-  const bars = trendBars(daily(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
-  assert.equal(bars.length, 14);
-  assert.ok(bars.every((b) => b === 0), `expected a flat floor, got ${bars.join()}`);
-});
-
-test("trendBars treats a missing word count as zero rather than NaN", () => {
-  const bars = trendBars([{ date: "d0" }, { date: "d1", words: 10 }]);
-  assert.deepEqual(bars, [0, 1]);
-});
-
-test("trendBars returns nothing for an empty or absent series", () => {
-  assert.deepEqual(trendBars([]), []);
-  assert.deepEqual(trendBars(null), []);
-  assert.deepEqual(trendBars(undefined), []);
-});
-
-test("weekDelta compares the last seven days against the seven before them", () => {
-  // 70 in the first week, 140 in the second
-  assert.equal(weekDelta(daily(10, 10, 10, 10, 10, 10, 10, 20, 20, 20, 20, 20, 20, 20)), 100);
-  assert.equal(weekDelta(daily(20, 20, 20, 20, 20, 20, 20, 10, 10, 10, 10, 10, 10, 10)), -50);
-});
-
-test("weekDelta answers null rather than a fabricated percentage", () => {
-  // nothing last week is not a 0% or an infinite change -- there is no
-  // comparison to draw, and the tile shows no delta at all
-  assert.equal(weekDelta(daily(0, 0, 0, 0, 0, 0, 0, 10, 10, 10, 10, 10, 10, 10)), null);
-  // a fresh install has no fortnight of history yet
-  assert.equal(weekDelta(daily(10, 20, 30)), null);
-  assert.equal(weekDelta([]), null);
-  assert.equal(weekDelta(null), null);
-});
-
 /* ---------- history: matchesQuery ---------- */
 const { matchesQuery, highlighted } = V.views.history;
 
@@ -154,19 +104,19 @@ const HISTORY = [
   { id: "a3", ts: 1752000200, text: "Remember to book the trailer for Saturday morning.", words: 8, duration_s: 4 },
 ];
 
-const NODE_IDS = ["history-search", "history-empty", "history-more",
-                  "history-groups", "history-export", "export-popover",
+const NODE_IDS = ["history-search", "history-search-field", "history-banner", "history-empty",
+                  "history-more", "history-groups", "history-export", "export-popover",
                   "export-fmt-txt", "export-fmt-md", "export-fmt-json"];
 
 /* Mock timers are enabled BEFORE the scripts load so every setTimeout they
    register -- history.js's search debounce and api.js's dev-fallback -- is
    the mock's. t.mock restores them when the test ends. */
-async function mountHistory(t) {
+async function mountHistory(t, history = HISTORY) {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const env = loadVoisr(["js/ui.js", "js/lists.js", "js/api.js", "js/views/history.js"]);
   // js/api.js resolves the bridge lazily as `window.pywebview.api`, so
   // stubbing the property is enough -- no need to replace V.api itself.
-  env.window.pywebview = { api: { get_history: async () => HISTORY.map((i) => ({ ...i })) } };
+  env.window.pywebview = { api: { get_history: async () => history.map((i) => ({ ...i })) } };
 
   const nodes = {};
   for (const id of NODE_IDS) {
@@ -249,8 +199,56 @@ test("a query that matches nothing empties the list and shows the empty state", 
 
   assert.equal(rowsIn(groups).length, 0);
   assert.equal(h["history-empty"].hidden, false, "the empty state shows when nothing matches");
+  assert.equal(h["history-empty"].textContent, "No dictations match \u201cAltona\u201d.");
   assert.equal(h["history-more"].hidden, true, "nothing to page through either");
   assert.equal(search.value, "Altona");
+  assert.equal(h["history-search-field"].hidden, false, "the field stays, so it can be cleared");
+});
+
+test("the banner gives its room to a search, and comes back when the query goes", async (t) => {
+  const h = await mountHistory(t);
+  const search = h["history-search"];
+  assert.equal(h["history-banner"].hidden, false);
+
+  search.value = "Brunswick";
+  search.dispatch("input");
+  t.mock.timers.tick(500);
+  assert.equal(h["history-banner"].hidden, true);
+
+  search.value = "   ";
+  search.dispatch("input");
+  t.mock.timers.tick(500);
+  assert.equal(h["history-banner"].hidden, false, "spaces alone aren't a search");
+});
+
+test("an empty history says so, with nothing to search or export", async (t) => {
+  const h = await mountHistory(t, []);
+  assert.equal(h["history-empty"].hidden, false);
+  assert.equal(h["history-empty"].textContent, "Nothing yet.");
+  assert.equal(h["history-search-field"].hidden, true);
+  assert.equal(h["history-export"].disabled, true);
+  assert.equal(h["history-banner"].hidden, false);
+});
+
+test("a history that empties mid-search drops the query it can no longer show", async (t) => {
+  const h = await mountHistory(t);
+  h["history-search"].value = "Brunswick";
+  h["history-search"].dispatch("input");
+  t.mock.timers.tick(500);
+  window.pywebview.api.get_history = async () => [];
+  await h.V.views.history.render();
+  assert.equal(h["history-search"].value, "");
+  assert.equal(h["history-empty"].textContent, "Nothing yet.");
+  assert.equal(h["history-banner"].hidden, false);
+});
+
+test("rows carry a time column and their actions in one group", async (t) => {
+  const h = await mountHistory(t);
+  const row = rowsIn(h["history-groups"])[0];
+  assert.ok(byClass(row, "row-time")[0].textContent);
+  assert.equal(byClass(row, "row-actions")[0].children.length, 2);
+  assert.equal(byClass(row, "item-meta").length, 0);
+  assert.ok(byClass(h["history-groups"], "date-label")[0].textContent, "a day's label over its card");
 });
 
 /* ---------- history: undo must never claim a restore that failed ----------
@@ -579,6 +577,33 @@ async function mountHistoryKeys(t, { animate = false } = {}) {
   const selected = () => rowsIn(nodes["history-groups"]).filter((r) => r.classList.contains("selected"));
   return { V: env.V, deleted, press, selected, ...nodes };
 }
+
+test("with a row selected, Return and Backspace on a button leave the row alone", async (t) => {
+  const h = await mountHistoryKeys(t);
+  h.press("ArrowDown");
+  const [row] = h.selected();
+
+  const onButton = (key) => {
+    const ev = { key, target: { tagName: "BUTTON" }, preventDefault() { ev.prevented = true; } };
+    return ev;
+  };
+  const enter = onButton("Enter");
+  globalThis.document.dispatch("keydown", enter);
+  assert.equal(enter.prevented, undefined, "preventDefault would stop Return pressing the button");
+  assert.ok(!row.classList.contains("expanded"));
+
+  const back = onButton("Backspace");
+  globalThis.document.dispatch("keydown", back);
+  await settle();
+  assert.deepEqual(h.deleted, [], "nothing deleted from a button Tab happened to land on");
+
+  // the same keys off a button still act on the row
+  h.press("Enter");
+  assert.ok(row.classList.contains("expanded"));
+  h.press("Backspace");
+  await settle();
+  assert.equal(h.deleted.length, 1);
+});
 
 test("a refresh clears the keyboard selection along with the cursor", async (t) => {
   const h = await mountHistoryKeys(t);

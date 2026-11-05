@@ -47,7 +47,8 @@ window.Voisr.lists = (function () {
   }
 
   /* Keyed in-place update, no motion. entries: [{ key, sig, build }] in the
-     wanted order; a survivor whose sig changed is rebuilt. Rows that are no
+     wanted order; a survivor whose sig changed is rebuilt, unless it is open
+     for editing (class is-editing): that one is kept and marked data-stale. Rows that are no
      longer wanted are removed, unless opts.stillExists(key) says they only
      fell out of view: those are returned as `pushed`, still in the DOM. */
   function apply(list, entries, opts = {}) {
@@ -64,9 +65,15 @@ window.Voisr.lists = (function () {
       let node = current.get(e.key);
       let kind = null;
       if (node && node.dataset.sig !== String(e.sig)) {
-        node.remove();
-        node = null;
-        kind = "landed";  // changed in place: wash it so the edit is visible
+        if (node.classList.contains("is-editing")) {
+          // a row open for editing holds typed text: never rebuild it under
+          // the user. The view re-renders once the edit closes (data-stale).
+          node.dataset.stale = "1";
+        } else {
+          node.remove();
+          node = null;
+          kind = "landed";  // changed in place: wash it so the edit is visible
+        }
       }
       if (!node) {
         node = e.build();
@@ -212,5 +219,156 @@ window.Voisr.lists = (function () {
     }
   }
 
-  return { sync, serial, apply, measure, play, enter, wash, leave, fadeAway, stagger, reduced, canAnimate };
+  /* ---------- day groups: a label and a card per day (History, Home) ----------
+
+     groups: [{ key, build, rows: [{ key, sig, build }] }] in the wanted order;
+     build() makes a group holding one .item-list. Same story as a flat list. A
+     day that empties leaves as a whole, and a new day rises in as one piece, its
+     rows only taking the wash. opts: animate, stillExists, wasKnown, as sync. */
+  const listOf = (group) => group.querySelector(".item-list");
+
+  function syncGroups(container, groups, opts = {}) {
+    return serial(container, () => syncGroupsNow(container, groups, opts));
+  }
+
+  function syncGroupsNow(container, groups, opts) {
+    const wasEmpty = keyed(container).length === 0;
+    if (!opts.animate || wasEmpty || !canAnimate(container)) {
+      applyGroups(container, groups, opts).pushed.forEach((n) => n.remove());
+      if (wasEmpty && opts.animate) keyed(container).forEach((group) => stagger(listOf(group)));
+      return undefined;
+    }
+    return animateGroups(container, groups, opts);
+  }
+
+  function applyGroups(container, groups, opts) {
+    const byKey = new Map(groups.map((g) => [g.key, g]));
+    const { entered: newGroups } = apply(container,
+      groups.map((g) => ({ key: g.key, sig: g.key, build: g.build })));
+    const fresh = new Set(newGroups.map(([group]) => group));
+    const enteredRows = [], pushed = [];
+    for (const group of keyed(container)) {
+      const res = apply(listOf(group), byKey.get(keyOf(group)).rows,
+        { wasKnown: opts.wasKnown, stillExists: opts.stillExists });
+      for (const [row, kind] of res.entered) enteredRows.push([row, kind, fresh.has(group)]);
+      pushed.push(...res.pushed);
+    }
+    return { fresh, enteredRows, pushed };
+  }
+
+  async function animateGroups(container, groups, opts) {
+    const wantedGroups = new Set(groups.map((g) => g.key));
+    const wantedRows = new Set(groups.flatMap((g) => g.rows.map((r) => r.key)));
+    const onlyPushed = (key) => !!(opts.stillExists && opts.stillExists(key));
+
+    const deleted = [];
+    for (const group of keyed(container)) {
+      if (!wantedGroups.has(keyOf(group))) { deleted.push(group); continue; }
+      deleted.push(...keyed(listOf(group)).filter((row) =>
+        !wantedRows.has(keyOf(row)) && !onlyPushed(keyOf(row))));
+    }
+    if (deleted.length) await leave(deleted);
+
+    const still = reduced();
+    const before = still ? null : measureGroups(container, deleted);
+    const { fresh, enteredRows, pushed } = applyGroups(container, groups, opts);
+    fadeAway(pushed);
+    if (before) playGroups(container, before);
+    for (const group of fresh) enter(group, "group");
+    for (const [row, kind, inFreshGroup] of enteredRows) {
+      if (!inFreshGroup) enter(row, kind);
+      else if (kind === "landed") wash(row);
+    }
+  }
+
+  const rect = (node) => node.getBoundingClientRect();
+
+  /* Where each day and its rows stand. A row's top is taken within its list,
+     because a list above resizing is what moves the list itself. */
+  function measureGroups(container, deleted) {
+    const out = new Map();
+    for (const group of keyed(container)) {
+      if (deleted.includes(group)) continue;
+      const list = listOf(group);
+      const box = rect(list);
+      out.set(group, {
+        top: rect(group).top,
+        height: box.height || 0,
+        rows: new Map(keyed(list).filter((row) => !deleted.includes(row))
+          .map((row) => [row, rect(row).top - box.top])),
+      });
+    }
+    return out;
+  }
+
+  /* A card's height follows its rows, so whatever is below moves with it and
+     nothing slides over anything. height is the one layout property here, as
+     with an accordion: a transform would leave the card's edge behind, with the
+     next day's label on top of it. Only a day arriving or leaving moves the days
+     below by transform. A row fading out doesn't count towards its card's height,
+     since it is on its way out. All measured first: an animation started here
+     would change what the next read sees, and so would one still running from
+     the last update, which is why those stop before anything is read. Each card
+     starts from the height measured on screen, so nothing jumps. */
+  function playGroups(container, before) {
+    const lists = keyed(container).map(listOf);
+    for (const list of lists) {
+      if (list._resize) list._resize.cancel();
+      list._resize = null;
+    }
+    const plan = [];
+    let resizing = 0;  // how far the lists above will still move this group
+    for (const group of keyed(container)) {
+      const was = before.get(group);
+      if (!was) continue;
+      const list = listOf(group);
+      const box = rect(list);
+      const gone = Array.from(list.children).filter((row) => row.classList.contains("is-leaving"))
+        .reduce((sum, row) => sum + (rect(row).height || 0), 0);
+      const height = (box.height || 0) - gone;
+      plan.push({
+        group, list,
+        dy: was.top - rect(group).top + resizing,
+        from: was.height, to: height,
+        rows: keyed(list).filter((row) => was.rows.has(row))
+          .map((row) => [row, was.rows.get(row) - (rect(row).top - box.top)]),
+      });
+      resizing += height - was.height;
+    }
+    for (const { group, list, dy, from, to, rows } of plan) {
+      if (Math.abs(dy) > 0.5 && canAnimate(group)) {
+        group.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }],
+                      { duration: MOVE_MS, easing: EASE });
+      }
+      if (Math.abs(to - from) > 0.5 && canAnimate(list)) {
+        list._resize = list.animate([{ height: `${from}px` }, { height: `${to}px` }],
+                                    { duration: MOVE_MS, easing: EASE });
+      }
+      for (const [row, rowDy] of rows) {
+        if (Math.abs(rowDy) > 0.5 && canAnimate(row)) {
+          row.animate([{ transform: `translateY(${rowDy}px)` }, { transform: "none" }],
+                      { duration: MOVE_MS, easing: EASE });
+        }
+      }
+    }
+  }
+
+  /* Takes something out of a page for good and slides what follows up into its
+     place. Reduced motion: it fades, and what follows moves at once. */
+  async function closeUp(node) {
+    if (!canAnimate(node)) { node.hidden = true; return; }
+    const siblings = Array.from(node.parentElement.children);
+    const below = siblings.slice(siblings.indexOf(node) + 1);
+    const frames = reduced()
+      ? [{ opacity: 1 }, { opacity: 0 }]
+      : [{ opacity: 1, transform: "none" }, { opacity: 0, transform: "scale(.98)" }];
+    await finished(node.animate(frames, { duration: LEAVE_MS, easing: EASE, fill: "forwards" }));
+    const before = reduced() ? new Map() : measure(below);
+    node.hidden = true;
+    node.getAnimations().forEach((anim) => anim.cancel());
+    play(before);
+  }
+
+  return { sync, syncGroups, closeUp, serial, apply, measure, play, enter, wash, leave, fadeAway,
+           stagger, reduced, canAnimate };
 })();

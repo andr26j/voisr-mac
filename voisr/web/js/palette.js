@@ -91,6 +91,8 @@ window.Voisr = window.Voisr || {};
       if (e.target.id === "palette") close();   // click the scrim to dismiss
     });
 
+    document.getElementById("commands-open").addEventListener("click", open);
+
     input.addEventListener("input", () => {
       filtered = match(input.value, commands);
       cursor = 0;
@@ -127,14 +129,9 @@ window.Voisr = window.Voisr || {};
     register({ id: "snippets", title: "Go to Snippets", run: () => V.show("snippets") });
     register({ id: "settings", title: "Go to Settings", run: () => V.show("settings") });
     register({ id: "hotkey", title: "Change push-to-talk key",
-               run: async () => {
-                 V.show("settings");
-                 const res = await V.api().capture_hotkey();
-                 if (res.error) {
-                   V.ui.toast(res.error);
-                 } else {
-                   V.ui.toast(`Push-to-talk key set to ${res.label}`);
-                 }
+               run: () => {
+                 V.show("settings", { section: "key" });
+                 return V.views.settings.captureKey();
                } });
     register({ id: "appearance", title: "Toggle appearance", hint: "light / dark",
                run: async () => {

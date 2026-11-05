@@ -8,8 +8,6 @@ window.Voisr = window.Voisr || {};
   const ICONS = {
     copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>',
     trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>',
-    arrow: '<svg class="dict-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>',
-    keyboard: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="7" rx="3"/><path d="M6 11h.01M10 11h.01M14 11h.01M18 11h.01M8 15h8"/></svg>',
   };
 
   function timeOf(ts) {
@@ -404,14 +402,39 @@ window.Voisr = window.Voisr || {};
 
   function itemRow(item, { onCopy, onDelete }) {
     return el("li", { class: "item-row", data: { id: item.id } },
-      el("div", { class: "item-text" },
-        el("div", { class: "txt", text: item.text }),
-        el("div", { class: "item-meta",
-                    text: `${timeOf(item.ts)} · ${item.snippet ? "Snippet" : `${item.words} words`}` })),
-      el("button", { class: "icon-btn", "aria-label": "Copy text",
-                     html: ICONS.copy, on: { click: (e) => { e.stopPropagation(); onCopy(item); } } }),
-      el("button", { class: "icon-btn danger", "aria-label": "Delete dictation",
-                     html: ICONS.trash, on: { click: (e) => { e.stopPropagation(); onDelete(item); } } }));
+      el("span", { class: "row-time", text: timeOf(item.ts) }),
+      el("div", { class: "item-text" }, el("div", { class: "txt", text: item.text })),
+      // a snippet's row holds only the phrase, not what it pasted
+      item.snippet ? el("span", { class: "tag", text: "Snippet" }) : null,
+      el("div", { class: "row-actions" },
+        el("button", { class: "icon-btn", "aria-label": "Copy text",
+                       html: ICONS.copy, on: { click: (e) => { e.stopPropagation(); onCopy(item); } } }),
+        el("button", { class: "icon-btn danger", "aria-label": "Delete dictation",
+                       html: ICONS.trash, on: { click: (e) => { e.stopPropagation(); onDelete(item); } } })));
+  }
+
+  /* One day's label and card, for V.lists.syncGroups. */
+  function dayGroup(day) {
+    return el("div", { class: "day-group" },
+      el("div", { class: "date-row" }, el("h2", { class: "date-label", text: day })),
+      el("ul", { class: "item-list list-card" }));
+  }
+
+  /* ---------- banners a page lets you dismiss (Dictionary, Snippets) ---------- */
+
+  const bannerDismissed = (cfg, name) =>
+    !!cfg && Array.isArray(cfg.dismissed_banners) && cfg.dismissed_banners.includes(name);
+
+  /* Saved first, so a banner never goes away and comes back at the next launch:
+     a failed write leaves it up, and tryApi's toast says why. */
+  async function dismissBanner(name, node) {
+    const cfg = await tryApi(V.api().get_config(), "Load settings");
+    if (!cfg) return false;
+    const names = new Set(cfg.dismissed_banners || []);
+    names.add(name);
+    if (!await tryApi(V.api().set_config({ dismissed_banners: [...names] }), "Save settings")) return false;
+    await V.lists.closeUp(node);
+    return true;
   }
 
   /* One-of-N pickers (theme, pill) are radio groups. syncRadios updates the
@@ -456,6 +479,57 @@ window.Voisr = window.Voisr || {};
     return (...args) => (chain = chain.then(() => fn(...args)).catch(() => {}));
   }
 
-  V.ui = { el, $, toast, tryApi, timeOf, dayOf, formatDuration, ICONS, itemRow,
-           offerDictationUndo, offerEntryUndo, syncRadios, radioKeys, serial };
+  /* ---------- the push-to-talk key (Home, Settings, first run) ---------- */
+
+  const KEY_SYMBOLS = [["Option", "⌥"], ["Command", "⌘"], ["Shift", "⇧"], ["Control", "⌃"],
+                       ["Caps Lock", "⇪"], ["Fn", "fn"]];
+
+  /* hotkey_display()'s label as a name and a symbol. "Right Option (⌥)" names
+     its own symbol; "Caps Lock" gets it from the table; F13 and Space have none. */
+  function keyLabel(display) {
+    const text = String(display || "").trim() || "unset";
+    const named = /^(.*\S)\s*\(([^)]+)\)$/.exec(text);
+    if (named) return { name: named[1], symbol: named[2] };
+    const hit = KEY_SYMBOLS.find(([word]) => text.includes(word));
+    return { name: text, symbol: hit ? hit[1] : null };
+  }
+
+  /* The key press a capture took can reach the page just after Python has
+     answered, as a second event the capture never saw. Return mustn't then press
+     Change all over again, or Continue, and Esc mustn't close Settings. */
+  const AFTER_CAPTURE_MS = 300;
+
+  function captureGuard() {
+    let endedAt = -Infinity;
+    return {
+      ended: () => { endedAt = Date.now(); },
+      recent: () => Date.now() - endedAt < AFTER_CAPTURE_MS,
+    };
+  }
+
+  /* Tab is walked by hand, in document order, and wraps inside `root`. WebKit's
+     own Tab skips buttons unless the user has turned on Keyboard navigation in
+     System Settings, and nearly everything a keyboard needs here is a button. */
+  function walkTab(e, root) {
+    e.preventDefault();
+    // visibility: hidden still has a box, and focus() on it fails silently, so
+    // Tab would stop there for good (Home's Change key while recording).
+    const items = Array.from(root.querySelectorAll("button, input, select, textarea, summary"))
+      .filter((n) => !n.disabled && n.getAttribute("tabindex") !== "-1"
+                     && n.getClientRects().length > 0
+                     && getComputedStyle(n).visibility !== "hidden");
+    if (!items.length) return;
+    const at = items.indexOf(document.activeElement);
+    const step = e.shiftKey ? -1 : 1;
+    const next = at === -1 ? (e.shiftKey ? items.length - 1 : 0)
+                           : (at + step + items.length) % items.length;
+    items[next].focus();
+    // as WebKit's own Tab does, so typing replaces what's in a field
+    if (items[next].select) items[next].select();
+  }
+
+  V.ui = { el, $, toast, tryApi, timeOf, dayOf, formatDuration, ICONS, itemRow, dayGroup,
+           bannerDismissed, dismissBanner,
+           offerDictationUndo, offerEntryUndo, syncRadios, radioKeys, serial, walkTab,
+           keyLabel, captureGuard };
 })(window.Voisr);

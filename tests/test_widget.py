@@ -1,8 +1,15 @@
+import inspect
 import json
+import re
+import threading
+
+import pytest
 
 from voisr.app import load_config
 from voisr.history import HistoryStore
 from voisr.ui import Api, HotkeyService
+
+RETIRED_THEMES = ("ember", "aurora", "ocean", "neon", "breathe", "scanner")
 
 
 class FakeRecorder:
@@ -34,6 +41,9 @@ class FakeWidget:
 
     def show_error(self):
         self.calls.append("error")
+
+    def show_notice(self, text):
+        self.calls.append("notice")
 
     def hide(self):
         self.calls.append("hide")
@@ -421,6 +431,231 @@ def test_widget_disabled_via_config(tmp_path):
     assert widget.calls == []
 
 
+@pytest.fixture
+def settle_widget():
+    """Waits out the dictations and notices finishing since the test began, so
+    nothing more can reach the widget."""
+    before = set(threading.enumerate())
+
+    def settle():
+        for thread in set(threading.enumerate()) - before:
+            if thread.name.startswith(("voisr-widget-", "voisr-notice")):
+                thread.join(5)
+
+    return settle
+
+
+# (hands-free?, how the dictation ends or is cancelled)
+DICTATION_ENDINGS = [
+    pytest.param(False, lambda svc: svc.release(at=100.1), id="held-key-let-go"),
+    pytest.param(True, lambda svc: svc.press(at=100.1), id="hands-free-second-press"),
+    pytest.param(True, lambda svc: svc._stop_hands_free(), id="toggle-or-menu"),
+    pytest.param(False, lambda svc: svc.cancel_chord(at=100.1), id="chord-drop"),
+    pytest.param(True, lambda svc: svc.cancel_escape(), id="esc"),
+]
+
+
+@pytest.mark.parametrize("latched, end", DICTATION_ENDINGS)
+def test_pill_comes_down_when_the_setting_went_off_during_the_dictation(
+        tmp_path, settle_widget, latched, end):
+    widget = FakeWidget()
+    api = make_api(tmp_path)
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.press(latched=latched, at=100.0)
+    assert widget.calls == ["recording"]
+
+    api.set_config({"show_widget": False})
+    end(svc)
+    settle_widget()
+
+    api.close()
+    assert widget.calls == ["recording", "hide"]
+
+
+@pytest.mark.parametrize("latched, end", DICTATION_ENDINGS)
+def test_pill_never_starts_when_the_setting_came_on_during_the_dictation(
+        tmp_path, settle_widget, latched, end):
+    widget = FakeWidget()
+    api = make_api(tmp_path, config={"show_widget": False})
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.press(latched=latched, at=100.0)
+
+    api.set_config({"show_widget": True})
+    end(svc)
+    settle_widget()
+
+    api.close()
+    assert [call for call in widget.calls if call != "hide"] == []
+
+
+class HeldTimer:
+    """Never fires by itself; the test runs the timer's function."""
+
+    def start(self):
+        pass
+
+    def cancel(self):
+        pass
+
+
+def _tap_expires(svc, run_tap_timer):
+    run_tap_timer()
+
+
+def _late_second_press_then_let_go(svc, run_tap_timer):
+    svc.press(at=101.0)   # past the gate: the tap is dropped, this starts afresh
+    svc.release(at=103.0)
+
+
+def _double_tap_then_stop(svc, run_tap_timer):
+    svc.press(at=100.2)   # within the gate: hands-free
+    svc.release(at=100.3)
+    svc.press(at=101.0)
+
+
+@pytest.mark.parametrize("end", [
+    _tap_expires, _late_second_press_then_let_go, _double_tap_then_stop,
+])
+def test_pill_comes_down_when_the_setting_went_off_after_a_quick_tap(
+        tmp_path, settle_widget, end):
+    timers = []
+
+    def timer_factory(delay, fn):
+        timers.append(fn)
+        return HeldTimer()
+
+    widget = FakeWidget()
+    api = make_api(tmp_path)
+    svc = HotkeyService(api, widget=widget, hide_delay=0, tap_gate_s=0.5,
+                        timer_factory=timer_factory)
+    svc.press(at=100.0)
+    svc.release(at=100.1)
+    assert widget.calls == ["recording"]
+
+    api.set_config({"show_widget": False})
+    end(svc, lambda: timers[-1]())
+    settle_widget()
+
+    api.close()
+    assert widget.calls == ["recording", "hide"]
+
+
+def test_a_waiting_notice_is_dropped_when_the_setting_went_off(
+        tmp_path, settle_widget):
+    widget = FakeWidget()
+    api = make_api(tmp_path)
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.NOTICE_RETRY_S = 0.01
+    svc.NOTICE_HOLD_S = 0
+    svc.press()
+    svc.show_notice("Suggested: Voisr")   # waits: a dictation has the pill
+
+    api.set_config({"show_widget": False})
+    svc.release()
+    settle_widget()
+
+    api.close()
+    assert widget.calls == ["recording", "hide"]
+
+
+def test_pill_finishes_and_comes_down_when_the_setting_went_off_during_processing(
+        tmp_path, settle_widget):
+    allow = threading.Event()
+    widget = FakeWidget()
+    api = make_api(tmp_path)
+    api._transcribe_fn = lambda wav: allow.wait(5) and "hello widget"
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    try:
+        svc.press()
+        svc.release()
+        assert widget.calls == ["recording", "processing"]
+
+        api.set_config({"show_widget": False})
+    finally:
+        allow.set()
+    settle_widget()
+
+    api.close()
+    assert widget.calls == ["recording", "processing", "done", "hide"]
+
+
+def test_new_dictation_takes_down_an_older_pill_when_the_setting_is_off(
+        tmp_path, settle_widget):
+    """The new epoch orphans the older pill's own hide, and with the setting
+    off nothing else would replace it."""
+    allow = threading.Event()
+    widget = FakeWidget()
+    api = make_api(tmp_path)
+    api._transcribe_fn = lambda wav: allow.wait(5) and "hello widget"
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    try:
+        svc.press()
+        svc.release()
+        assert widget.calls == ["recording", "processing"]
+
+        api.set_config({"show_widget": False})
+        svc.press()
+        assert widget.calls == ["recording", "processing", "hide"]
+
+        svc.release()
+    finally:
+        allow.set()
+    settle_widget()
+
+    api.close()
+    assert widget.calls == ["recording", "processing", "hide"]
+
+
+class QueuedWidget:
+    """Like the real pill: each call waits for the main thread, where a newer
+    dictation's epoch can still drop it."""
+    _supports_ownership_action = True
+
+    def __init__(self):
+        self.calls = []
+        self.pending = []
+
+    def show_recording(self, theme="classic", color=None, if_current=None):
+        self.pending.append(("recording", if_current))
+
+    def show_processing(self, if_current=None):
+        self.pending.append(("processing", if_current))
+
+    def show_done(self, if_current=None):
+        self.pending.append(("done", if_current))
+
+    def hide(self, if_current=None):
+        self.pending.append(("hide", if_current))
+
+    def flush(self):
+        pending, self.pending = self.pending, []
+        for state, if_current in pending:
+            if_current(lambda state=state: self.calls.append(state))
+
+
+def test_a_hide_dropped_by_a_newer_dictation_does_not_count_as_down(
+        tmp_path, settle_widget):
+    widget = QueuedWidget()
+    api = make_api(tmp_path)
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.press()
+    widget.flush()
+    assert widget.calls == ["recording"]
+
+    # the first dictation's hide is queued but hasn't run when the next press
+    # lands, so that press's new epoch drops it
+    svc.release()
+    settle_widget()
+    assert widget.pending[-1][0] == "hide"
+
+    api.set_config({"show_widget": False})
+    svc.press()
+    widget.flush()
+
+    api.close()
+    assert widget.calls == ["recording", "hide"]
+
+
 def test_release_without_press_is_noop(tmp_path):
     widget = FakeWidget()
     svc = HotkeyService(make_api(tmp_path), widget=widget, hide_delay=0)
@@ -586,12 +821,15 @@ def _counting_factory():
 def test_start_attempts_listener_even_unpermitted_then_activates(tmp_path):
     # Registering the app in Input Monitoring REQUIRES creating the tap, so
     # the listener must be spawned even while unpermitted; status then flips
-    # to active once the grant lands, without a relaunch.
+    # to active once the grant lands, without a relaunch. Past first run only:
+    # first run holds the tap (tests/test_first_run.py).
     import time
 
     granted = {"ok": False}
     factory = _counting_factory()
-    svc = HotkeyService(make_api(tmp_path), widget=FakeWidget(), hide_delay=0,
+    api = make_api(tmp_path)
+    api.set_config({"first_run_done": True})
+    svc = HotkeyService(api, widget=FakeWidget(), hide_delay=0,
                         permissions_check=lambda: granted["ok"],
                         poll_interval=0.05, listener_factory=factory)
     svc.start("alt_r")
@@ -608,7 +846,9 @@ def test_start_attempts_listener_even_unpermitted_then_activates(tmp_path):
 
 def test_restart_while_unpermitted_does_not_crash(tmp_path):
     factory = _counting_factory()
-    svc = HotkeyService(make_api(tmp_path), widget=FakeWidget(), hide_delay=0,
+    api = make_api(tmp_path)
+    api.set_config({"first_run_done": True})  # first run holds the tap
+    svc = HotkeyService(api, widget=FakeWidget(), hide_delay=0,
                         permissions_check=lambda: False, poll_interval=999,
                         listener_factory=factory)
     svc.start("alt_r")
@@ -686,25 +926,54 @@ def test_real_audio_passes_silence_gate(tmp_path):
     assert res["text"] == "Real words"
 
 
-def test_unknown_theme_sanitized_to_classic():
+def test_unknown_theme_sanitized_to_signature():
     from voisr.ui import sanitize_pill_theme
-    assert sanitize_pill_theme("ember") == "ember"
     assert sanitize_pill_theme("classic") == "classic"
+    assert sanitize_pill_theme("quiet") == "quiet"
     assert sanitize_pill_theme('x"); alert(1); ("') == "classic"
     assert sanitize_pill_theme(None) == "classic"
     assert sanitize_pill_theme([]) == "classic"
     assert sanitize_pill_theme({}) == "classic"
 
 
-def test_press_passes_configured_theme_to_widget(tmp_path):
+def test_there_are_two_themes_and_signature_keeps_the_saved_value():
+    """Existing configs say "classic", and the Settings picker is built from
+    this list, so these values and labels are a contract with it."""
+    from voisr.ui import PILL_THEMES
+    assert PILL_THEMES == [{"value": "classic", "label": "Signature"},
+                           {"value": "quiet", "label": "Quiet"}]
+
+
+@pytest.mark.parametrize("old", RETIRED_THEMES)
+def test_a_retired_theme_lands_on_signature(tmp_path, old):
     widget = FakeWidget()
-    api = make_api(tmp_path, config={"pill_theme": "ember"})
+    api = make_api(tmp_path, config={"pill_theme": old, "pill_color": "#112233"})
+    # the picker reads this one, and would highlight nothing given the old name
+    assert api.get_config()["pill_theme"] == "classic"
     svc = HotkeyService(api, widget=widget, hide_delay=0)
     svc.press()
-    assert widget.themes == ["ember"]
+    assert widget.themes == ["classic"]
+    assert widget.colors == ["#112233"], "a custom colour outlives its old theme"
 
 
-def test_press_defaults_to_classic_theme(tmp_path):
+def test_reading_a_retired_theme_leaves_the_file_alone(tmp_path):
+    """Going back to an older build keeps the theme until a setting is saved."""
+    api = make_api(tmp_path, config={"pill_theme": "ember"})
+    api.get_config()
+    assert json.loads((tmp_path / "config.json").read_text())["pill_theme"] == "ember"
+    api.set_config({"show_widget": True})
+    assert json.loads((tmp_path / "config.json").read_text())["pill_theme"] == "classic"
+
+
+def test_press_passes_configured_theme_to_widget(tmp_path):
+    widget = FakeWidget()
+    api = make_api(tmp_path, config={"pill_theme": "quiet"})
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.press()
+    assert widget.themes == ["quiet"]
+
+
+def test_press_defaults_to_signature(tmp_path):
     widget = FakeWidget()
     svc = HotkeyService(make_api(tmp_path), widget=widget, hide_delay=0)
     svc.press()
@@ -712,16 +981,180 @@ def test_press_defaults_to_classic_theme(tmp_path):
 
 
 def test_widget_html_covers_all_pill_themes():
-    """widget.html's JS whitelist and CSS rules must track PILL_THEMES."""
+    """widget.html's JS whitelist and CSS rules must track PILL_THEMES, and
+    nothing is left of the themes that went."""
     from voisr.ui import PILL_THEMES, WEB_DIR
     html = (WEB_DIR / "widget.html").read_text()
     for theme in PILL_THEMES:
         assert f'"{theme["value"]}"' in html  # THEME_VALUES entry
-        if theme["value"] != "classic":       # classic = no attribute by design
+        if theme["value"] != "classic":       # no attribute means Signature
             assert f'[data-theme="{theme["value"]}"]' in html  # CSS rule exists
+    for old in RETIRED_THEMES:
+        assert old not in html
     # custom-color bridge must exist alongside the themes
     assert "--bar-color" in html
     assert "setColor" in html
+
+
+def test_the_dev_mock_lists_the_same_themes():
+    """The preview's picker comes from this mock (see the note on PILL_THEMES)."""
+    from voisr.ui import PILL_THEMES, WEB_DIR
+    mock = (WEB_DIR / "js" / "api.js").read_text()
+    block = mock[mock.index("get_pill_themes:"):mock.index("start_recording:")]
+    assert re.findall(r'value: "(\w+)", label: "(\w+)"', block) == [
+        (t["value"], t["label"]) for t in PILL_THEMES]
+
+
+def _css_rule(html, selector):
+    start = html.index(f"{selector} {{")
+    return html[start:html.index("}", start)]
+
+
+def test_only_quiet_has_the_live_dot():
+    """Signature's circle was taken out at the owner's request, after trying
+    it. Quiet keeps it, because it has nothing else to show while listening."""
+    from voisr.ui import WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    assert "display: none" in _css_rule(html, ".dot")
+    assert "display: block" in _css_rule(html, '.pill[data-theme="quiet"] .dot')
+    # the bars no longer make way for it
+    assert "translateX" not in _css_rule(html, ".bars")
+    assert not re.search(r"\.bars \{ [^}]*translateX", html)
+
+
+def test_the_live_dot_shows_only_while_recording_and_keeps_its_colour():
+    """It promises the mic is on: no other state may show it, and a custom
+    colour must not turn it into decoration."""
+    from voisr.ui import WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    dot = _css_rule(html, ".dot")
+    assert "opacity: 0" in dot
+    assert "background: var(--live)" in dot
+    assert "opacity: 1" in _css_rule(html, '.pill[data-state="recording"] .dot')
+    assert re.findall(r'\[data-state="(\w+)"\] \.dot\b', html) == ["recording"]
+
+
+def test_the_css_each_state_relies_on_is_there():
+    """The page's script is run in tests/js/widget.test.mjs, without CSS."""
+    from voisr.ui import WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    assert "animation: shimmer" in _css_rule(html, '.pill[data-state="processing"] .bar')
+    assert "animation: shimmer" in _css_rule(
+        html, '.pill[data-theme="quiet"][data-state="processing"] .qdot')
+    assert "width: var(--label-w" in _css_rule(
+        html, '.pill[data-theme="quiet"][data-state="label"]')
+    assert "animation: speak" in _css_rule(
+        html, '.pill[data-meter="loop"][data-state="recording"] .bar')
+    reduced = html[html.index("prefers-reduced-motion: reduce"):html.index("</style>")]
+    assert ".dot, .bar, .qdot { animation: none !important; }" in reduced
+    assert "transform: none !important" in reduced
+
+
+def test_custom_colour_reaches_signature_bars_and_quiet_dots():
+    from voisr.ui import WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    assert "var(--bar-color, var(--on-capsule))" in _css_rule(html, ".bar")
+    assert "var(--bar-color, var(--on-capsule))" in _css_rule(html, ".qdot")
+
+
+def test_settled_silence_does_not_restart_the_frame_loop():
+    """Python pushes the level at 30 Hz whatever it is, so an unconditional
+    start would never let the bars park."""
+    from voisr.ui import WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    set_level = html[html.index("function setLevel("):html.index("window.setLevel = setLevel")]
+    assert "!meter.atRest()) startFrames()" in set_level
+
+
+def test_a_hidden_pill_goes_idle_so_nothing_keeps_animating():
+    """The panel stays resident after a dictation. hide() alone would leave
+    data-state on "recording" and the dot pulsing on an invisible window."""
+    from voisr.ui import WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    hide = html[html.index("function hide()"):html.index("window.hide = hide")]
+    assert 'pill.dataset.state = "idle"' in hide
+    settle = int(re.search(r"SETTLE_MS = (\d+)", html).group(1))
+    assert settle > 160, "the exit plays out first"
+
+
+def test_panel_holds_the_pill_and_its_shadow_around_the_same_centre():
+    from voisr.ui import RecordingWidget, WEB_DIR
+    html = (WEB_DIR / "widget.html").read_text()
+    pill = _css_rule(html, ".pill")
+    width = int(re.search(r"width: (\d+)px", pill).group(1))
+    height = int(re.search(r"height: (\d+)px", pill).group(1))
+    assert (width, height) == (196, 44)
+    y, blur = map(int, re.search(r"0 (\d+)px (\d+)px rgba", pill).groups())
+    rise = int(re.search(r"translateY\((\d+)px\)", pill).group(1))
+    # the page centres the pill in the panel, so each side has half the spare room
+    assert (RecordingWidget.WIDTH - width) / 2 >= blur
+    assert (RecordingWidget.HEIGHT - height) / 2 >= y + blur + rise
+    assert RecordingWidget.BOTTOM_MARGIN + RecordingWidget.HEIGHT / 2 == 98
+
+
+def test_panel_is_built_on_the_primary_display():
+    """It is placed once. mainScreen() could be a display that later goes away,
+    and its frame doesn't start at (0, 0)."""
+    from voisr.ui import RecordingWidget
+    source = inspect.getsource(RecordingWidget._build)
+    assert "NSScreen.screens()[0].frame()" in source
+    assert "mainScreen" not in source
+
+
+class FakeWebview:
+    def __init__(self):
+        self.js = []
+
+    def evaluateJavaScript_completionHandler_(self, js, handler):
+        self.js.append(js)
+
+
+def test_set_look_sends_only_sanitized_values(monkeypatch):
+    from PyObjCTools import AppHelper
+
+    from voisr.ui import RecordingWidget
+    monkeypatch.setattr(AppHelper, "callAfter", lambda fn, *a: fn(*a))
+    widget = RecordingWidget()
+    widget._webview = FakeWebview()
+    widget.set_look("quiet", "#112233")
+    widget.set_look('x"); alert(1); ("', '#12345"); alert(1); ("')
+    assert widget._webview.js == [
+        'setTheme("quiet")', 'setColor("#112233")',
+        'setTheme("classic")', "setColor(null)"]
+
+
+class LookWidget(FakeWidget):
+    """Records the theme it was given and what was shown, in order."""
+
+    def __init__(self):
+        super().__init__()
+        self.shown = threading.Event()
+
+    def set_look(self, theme, color):
+        self.calls.append(("look", theme, color))
+
+    def show_notice(self, text):
+        self.calls.append("notice")
+        self.shown.set()
+
+
+def test_an_error_with_no_dictation_behind_it_wears_the_saved_theme(tmp_path):
+    widget = LookWidget()
+    api = make_api(tmp_path, config={"pill_theme": "quiet", "pill_color": "#112233"})
+    api.start_recording()  # the dashboard has the mic, so the press is refused
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.press()
+    assert widget.calls[:2] == [("look", "quiet", "#112233"), "error"]
+
+
+def test_a_notice_wears_the_saved_theme(tmp_path):
+    widget = LookWidget()
+    api = make_api(tmp_path, config={"pill_theme": "quiet"})
+    svc = HotkeyService(api, widget=widget, hide_delay=0)
+    svc.NOTICE_HOLD_S = 0
+    svc.show_notice("Suggested: Voisr")
+    assert widget.shown.wait(2)
+    assert widget.calls[:2] == [("look", "quiet", None), "notice"]
 
 
 def test_pill_color_sanitizer():

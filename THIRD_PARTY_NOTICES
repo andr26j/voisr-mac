@@ -1,11 +1,50 @@
 Third-party notices for Voisr
 =============================
 
-Voisr itself is MIT licensed (see LICENSE). It contains none of the software
-or models below: the installer downloads them to your Mac from their original
-sources. Licence facts here were checked on 2026-11-03 against the upstream
-LICENSE files, the package metadata of the pinned versions, and the Homebrew
-formulae. Check upstream for anything newer.
+Voisr itself is MIT licensed (see LICENSE).
+
+Two third-party items ship inside Voisr, and are listed first: a font and some
+icons. It contains none of the other software or models below: the installer
+downloads them to your Mac from their original sources.
+
+Licence facts here were checked against the upstream LICENSE files, the package
+metadata of the pinned versions, and the Homebrew formulae: on 2026-11-05 for
+the font and icons, and on 2026-11-03 for the rest. Check upstream for anything
+newer.
+
+
+Inside Voisr
+------------
+
+Instrument Serif -- SIL Open Font License 1.1
+  Copyright 2022 The Instrument Serif Project Authors
+  https://github.com/Instrument/instrument-serif
+  voisr/web/fonts/InstrumentSerif-Regular.ttf and InstrumentSerif-Italic.ttf
+  are unmodified copies from https://github.com/google/fonts . The licence is
+  beside them in voisr/web/fonts/OFL.txt. Voisr loads them only from those
+  files, and never asks Google or anyone else for a font.
+
+Lucide icons -- ISC License, with some icons also under MIT (from Feather)
+  Copyright (c) 2026 Lucide Icons and Contributors
+  Copyright (c) 2013-present Cole Bemis (Feather)
+  https://github.com/lucide-icons/lucide
+  Most of the small icons drawn in the dashboard are copied or adapted from
+  Lucide. The ISC licence text reads:
+
+  Permission to use, copy, modify, and/or distribute this software for any
+  purpose with or without fee is hereby granted, provided that the above
+  copyright notice and this permission notice appear in all copies.
+
+  THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+  WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+  MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+  ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+  WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+  ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+  OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+  The MIT licence that covers the Feather icons is the same text as the one
+  quoted under "Speech engine and models" below.
 
 
 Speech engine and models

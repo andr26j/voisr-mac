@@ -17,3 +17,22 @@ venv_usable() {
 bundle_cdhash() {
   codesign -dvvv "$1" 2>&1 | sed -n 's/^CDHash=//p' || true
 }
+
+# icon_replaced OLD NEW: succeeds only when OLD already exists and differs
+# from NEW. A fresh install (no OLD) or an unchanged icon returns 1, so the
+# caller stays quiet. The Dock keeps its own icon cache, which a replaced
+# icon doesn't invalidate.
+icon_replaced() {
+  [ -f "$1" ] || return 1
+  ! cmp -s "$1" "$2"
+}
+
+# dock_icon_note: the commands that clear the Dock's stale icon cache.
+dock_icon_note() {
+  cat <<'NOTE'
+    The icon changed. The Dock may keep showing the old one from its own cache.
+    If it does, run:
+      mv "$(getconf DARWIN_USER_CACHE_DIR)com.apple.dock.iconcache" ~/Desktop/
+      killall Dock
+NOTE
+}

@@ -154,6 +154,7 @@ export function makeNode(tag = "div") {
       if (k === "id") node.id = String(v);
     },
     getAttribute(k) { return k in node.attributes ? node.attributes[k] : null; },
+    removeAttribute(k) { delete node.attributes[k]; },
     addEventListener(type, fn) { (node._listeners[type] ??= []).push(fn); },
     removeEventListener(type, fn) {
       const arr = node._listeners[type];
@@ -391,6 +392,8 @@ export function installDom() {
   };
   globalThis.window = win;
   globalThis.document = doc;
+  // Only what the app reads. A test marks a node as CSS would with style.visibility.
+  globalThis.getComputedStyle = (n) => ({ visibility: (n.style && n.style.visibility) || "visible" });
   return {
     window: win, document: doc,
     // Mirrors the real DOM: an element's `.id` reflects the id it was

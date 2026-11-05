@@ -131,20 +131,33 @@ window.Voisr = window.Voisr || {};
      A search keystroke applies instantly. Runs serialised, so a refresh
      that lands mid-animation waits its turn. */
   function renderList({ animate = false } = {}) {
+    const search = document.getElementById("history-search");
+    const nothing = items.length === 0;
+    // A hidden field must not leave a stale query in effect: there would be no
+    // visible control to clear it.
+    if (nothing) { query = ""; search.value = ""; }
+    document.getElementById("history-search-field").hidden = nothing;
+    document.getElementById("history-export").disabled = nothing;
+    if (nothing) closeExportPopover();
+    // while searching, the results get the banner's room
+    document.getElementById("history-banner").hidden = query.trim() !== "";
+
     const visible = items.filter(matches);
     flat = visible.slice(0, shown);
-    document.getElementById("history-empty").hidden = visible.length > 0;
+    const empty = document.getElementById("history-empty");
+    empty.hidden = visible.length > 0;
+    empty.textContent = nothing ? "Nothing yet." : `No dictations match \u201c${query.trim()}\u201d.`;
     document.getElementById("history-more").hidden = visible.length <= shown;
 
-    const groups = new Map();
+    const days = new Map();
     for (const item of flat) {
       const day = V.ui.dayOf(item.ts);
-      if (!groups.has(day)) groups.set(day, []);
-      groups.get(day).push(item);
+      if (!days.has(day)) days.set(day, []);
+      days.get(day).push(item);
     }
     const known = knownIds;
-    knownIds = new Set(items.map((item) => item.id));
-    const ids = knownIds;
+    const ids = new Set(items.map((item) => item.id));
+    knownIds = ids;
     const q = query;
 
     // `flat` was just rebuilt (delete / Load more / search / background
@@ -153,8 +166,15 @@ window.Voisr = window.Voisr || {};
     // they do. Kept rows would otherwise stay highlighted.
     clearSelection();
 
-    return V.lists.serial(document.getElementById("history-groups"),
-                          () => syncGroups(groups, { animate, known, ids, q }));
+    return V.lists.syncGroups(document.getElementById("history-groups"), [...days].map(([day, rows]) => ({
+      key: day,
+      build: () => V.ui.dayGroup(day),
+      rows: rows.map((item) => ({ key: item.id, sig: q, build: () => buildRow(item, q) })),
+    })), {
+      animate,
+      stillExists: (id) => ids.has(id),
+      wasKnown: (id) => !!known && known.has(id),
+    });
   }
 
   function buildRow(item, q) {
@@ -162,73 +182,6 @@ window.Voisr = window.Voisr || {};
     row.querySelector(".txt").replaceChildren(...highlighted(item.text, q));
     row.addEventListener("click", () => row.classList.toggle("expanded"));
     return row;
-  }
-
-  /* Returns a promise only when it animates (see V.lists.serial). */
-  function syncGroups(groups, opts) {
-    const container = document.getElementById("history-groups");
-    const wasEmpty = container.children.length === 0;
-    const motion = opts.animate && !wasEmpty && V.lists.canAnimate(container);
-    if (!motion) {
-      applyGroups(container, groups, opts);
-      if (wasEmpty && opts.animate) {
-        for (const group of Array.from(container.children)) V.lists.stagger(group.querySelector(".item-list"));
-      }
-      return undefined;
-    }
-    return animateGroups(container, groups, opts);
-  }
-
-  async function animateGroups(container, groups, opts) {
-    const L = V.lists;
-    const { ids } = opts;
-    const listOf = (group) => group.querySelector(".item-list");
-
-    // deleted rows leave first; a day that empties leaves as a whole
-    const leaving = [];
-    for (const group of Array.from(container.children)) {
-      if (!groups.has(group.dataset.key)) { leaving.push(group); continue; }
-      for (const row of Array.from(listOf(group).children)) {
-        if (!ids.has(row.dataset.key)) leaving.push(row);
-      }
-    }
-    if (leaving.length) await L.leave(leaving);
-
-    const before = !L.reduced()
-      ? L.measure(Array.from(container.children).flatMap((group) =>
-          [group.querySelector(".day-label"), ...Array.from(listOf(group).children)]))
-      : new Map();
-
-    const { fresh, enteredRows } = applyGroups(container, groups, opts);
-    L.play(before);
-    // a new day rises in as one piece; its rows only take the wash
-    for (const group of fresh) L.enter(group, "group");
-    for (const [row, kind, inFreshGroup] of enteredRows) {
-      if (inFreshGroup) { if (kind === "landed") L.wash(row); }
-      else L.enter(row, kind);
-    }
-  }
-
-  /* Keyed, motion-free: day groups by label, rows by id. */
-  function applyGroups(container, groups, { known, q }) {
-    const L = V.lists;
-    const listOf = (group) => group.querySelector(".item-list");
-    const { entered: newGroups } = L.apply(container, [...groups.keys()].map((day) => ({
-      key: day, sig: day,
-      build: () => V.ui.el("div", { class: "day-group" },
-        V.ui.el("div", { class: "day-label", text: day }),
-        V.ui.el("div", { class: "card" }, V.ui.el("ul", { class: "item-list" }))),
-    })));
-    const fresh = new Set(newGroups.map(([group]) => group));
-    const enteredRows = [];
-    for (const group of Array.from(container.children)) {
-      const rows = groups.get(group.dataset.key) || [];
-      const { entered } = L.apply(listOf(group), rows.map((item) => ({
-        key: item.id, sig: q, build: () => buildRow(item, q),
-      })), { wasKnown: (id) => !!known && known.has(id) });
-      for (const [row, kind] of entered) enteredRows.push([row, kind, fresh.has(group)]);
-    }
-    return { fresh, enteredRows };
   }
 
   /* Genuine data-changing entry point: refetches from Python then rebuilds.
@@ -318,7 +271,9 @@ window.Voisr = window.Voisr || {};
     });
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
-      if (!document.getElementById("export-popover").hidden) closeExportPopover();
+      if (document.getElementById("export-popover").hidden) return;
+      closeExportPopover();
+      document.getElementById("history-export").focus();
     });
 
     document.addEventListener("keydown", (e) => {
@@ -329,10 +284,13 @@ window.Voisr = window.Voisr || {};
         return;
       }
       if (e.target.tagName === "INPUT") return;
+      /* Tab can put focus on a button while a row stays selected. Return has to
+         press that button, and Backspace mustn't delete a row from it. */
+      const onButton = e.target.tagName === "BUTTON";
       if (e.key === "ArrowDown") { e.preventDefault(); moveCursor(1); }
       else if (e.key === "ArrowUp") { e.preventDefault(); moveCursor(-1); }
       else if (e.key === "Enter") {
-        if (!selectedItem()) return;
+        if (onButton || !selectedItem()) return;
         e.preventDefault();
         selectedRow().classList.toggle("expanded");
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
@@ -343,7 +301,7 @@ window.Voisr = window.Voisr || {};
         // Deliberately re-derive the item from the live DOM selection
         // instead of trusting an index into `flat` — see selectedItem()'s
         // comment. If nothing is visibly selected, Backspace is a no-op.
-        const item = selectedItem();
+        const item = onButton ? null : selectedItem();
         if (!item) return;
         e.preventDefault(); onDelete(item);
       }

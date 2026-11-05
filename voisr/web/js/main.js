@@ -8,6 +8,8 @@ window.Voisr = window.Voisr || {};
   // stuck with a stale "entering" class or an orphaned listener
   let enteringTarget = null;
   let enteringController = null;
+  let currentView = null;   // the page, which stays behind the Settings pop-up
+  let litView = null;       // what the sidebar highlights: the page, or Settings
 
   /* One highlight glides behind the sidebar to the active item (180 ms,
      base.css) instead of each item painting its own. The first placement
@@ -26,15 +28,31 @@ window.Voisr = window.Voisr || {};
     }
   }
 
-  function show(view) {
-    document.querySelectorAll(".view").forEach((v) => { v.hidden = v.id !== `view-${view}`; });
+  /* Settings sits at the bottom of the sidebar, so its offset changes with the
+     window's height. Drop .is-live so the highlight tracks the resize instead of
+     trailing it: glideTo switches the transition back on after placing it. */
+  window.addEventListener("resize", () => {
+    if (!litView) return;
+    const glide = document.getElementById("nav-glide");
+    if (glide) glide.classList.remove("is-live");
+    glideTo(litView);
+  });
+
+  function highlight(view) {
+    litView = view;
     document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     glideTo(view);
+  }
+
+  function show(view) {
+    currentView = view;
+    document.querySelectorAll(".view").forEach((v) => { v.hidden = v.id !== `view-${view}`; });
+    highlight(view);
     const target = document.getElementById(`view-${view}`);
 
     // .main is the one scroll container for every view, so its offset
     // carries across a switch: leave Home scrolled to the bottom, open
-    // Settings, and it opens scrolled past its own content — a blank pane.
+    // History, and it opens scrolled past its own content — a blank pane.
     const main = document.querySelector(".main");
     if (main) main.scrollTop = 0;
 
@@ -69,8 +87,51 @@ window.Voisr = window.Voisr || {};
     if (view === "history") V.views.history.render();
     if (view === "dictionary") V.views.dictionary.render();
     if (view === "snippets") V.views.snippets.render();
-    if (view === "settings") V.views.settings.render();
   }
+
+  /* Settings is a pop-up over the page rather than a page of its own, so it
+     never goes through show(): the page behind stays exactly as it was.
+     opts.section opens it on one section (settings.js's SECTIONS). A page
+     switch, which only the palette can ask for while it's up, closes it. */
+  function go(view, opts) {
+    const settings = V.views.settings;
+    if (view === "settings") {
+      highlight("settings");
+      settings.open(opts);
+      return;
+    }
+    currentView = null;  // the page being left has nothing to refresh
+    settings.close();
+    show(view);
+  }
+
+  /* A setting can change what the page behind says. Home learns the key's name
+     and the auto-paste line only when it renders, and Dictionary's suggestions
+     depend on the learning switches. History has nothing that depends on them,
+     and rendering it would lose the row you had selected. */
+  window.addEventListener("voisr:settings-closed", () => {
+    if (currentView) highlight(currentView);
+    if (currentView === "home") V.views.home.render();
+    if (currentView === "dictionary") V.views.dictionary.render();
+  });
+
+  /* ---------- the keyboard ----------
+
+     The pages have no walker of their own, so this one covers the whole window,
+     Undo in the toast included. On the document, because focus can be on the
+     body: first run leaves it there, and so does a redrawn list. While Settings
+     is up its own handlers stop Tab before it gets here, except when the palette
+     is over it; first run hides the shell and walks its own steps. Once Settings
+     is closing its handlers have stopped, but its buttons are there until the
+     fade ends, so that moment walks the page alone. */
+  function onTab(e) {
+    if (e.key !== "Tab" || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+    const $ = V.ui.$;
+    const scrim = $("#settings-scrim");
+    if ($(".shell").hidden || !$("#palette").hidden || scrim.classList.contains("is-open")) return;
+    V.ui.walkTab(e, scrim.hidden ? document.body : $(".shell"));
+  }
+  document.addEventListener("keydown", onTab);
 
   /* ---------- appearance ---------- */
 
@@ -106,7 +167,7 @@ window.Voisr = window.Voisr || {};
   async function init() {
     const $ = V.ui.$;
     document.querySelectorAll("[data-view]").forEach((b) =>
-      b.addEventListener("click", () => show(b.dataset.view)));
+      b.addEventListener("click", () => go(b.dataset.view)));
     $("#record-btn").addEventListener("click", V.views.home.toggleRecord);
     $("#dict-form").addEventListener("submit", V.views.dictionary.addEntry);
     $("#paste-toggle").addEventListener("change", async (e) => {
@@ -153,30 +214,11 @@ window.Voisr = window.Voisr || {};
       }
       if (!$("#view-dictionary").hidden) V.views.dictionary.render();
     });
-    $("#hotkey-capture").addEventListener("click", async (e) => {
-      const btn = e.currentTarget;
-      if (btn.disabled) return;
-      btn.disabled = true;
-      btn.textContent = "Press any key…";
-      $("#hotkey-current").textContent = "…";
-      try {
-        const res = await V.api().capture_hotkey();
-        if (res.error) {
-          V.ui.toast(res.error);
-        } else {
-          V.ui.toast(`Push-to-talk key set to ${res.label}`);
-        }
-      } finally {
-        btn.disabled = false;
-        btn.textContent = "Change…";
-        V.views.settings.render();
-      }
-    });
+    V.views.home.init();
     V.views.history.initKeys();
-    V.views.dictionary.initSearch();
+    V.views.dictionary.init();
     V.views.snippets.init();
     V.views.settings.init();
-    V.palette.init();
 
     // The app still has to start even if this read fails, so fall back to
     // "system" rather than block boot -- tryApi's toast is enough to say why
@@ -189,10 +231,12 @@ window.Voisr = window.Voisr || {};
     const notice = await V.ui.tryApi(V.api().take_config_notice(), "Check settings file");
     if (notice && notice.notice) V.ui.toast(notice.notice);
 
-    show("home");
+    // The palette waits too: first run has nothing it could jump to.
+    const enterApp = () => { V.palette.init(); show("home"); };
+    if (!await V.views.firstRun.start(enterApp)) enterApp();
   }
 
   window.addEventListener("pywebviewready", init);
 
-  V.show = show;
+  V.show = go;
 })(window.Voisr);

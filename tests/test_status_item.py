@@ -1,7 +1,11 @@
+import math
+
 import pytest
 
 import voisr.status_item as status_item
-from voisr.status_item import IDLE_GLYPH, RECORDING_GLYPH, StatusItem
+from voisr import logo_wave
+from voisr.status_item import (GLYPH_POINTS, IDLE_GLYPH, LIVE_ON_DARK_BAR,
+                               LIVE_ON_LIGHT_BAR, RECORDING_GLYPH, StatusItem)
 
 
 class FakeButton:
@@ -9,6 +13,14 @@ class FakeButton:
         self.title = None
         self.tooltip = None
         self.image = None
+        self.appearance_name = "NSAppearanceNameAqua"
+
+    def effectiveAppearance(self):
+        # A real NSAppearance: the colour hangs on AppKit's own matching, so a
+        # fake here would only test the fake. Off macOS the import fails, the
+        # same way the code under test does there.
+        import AppKit
+        return AppKit.NSAppearance.appearanceNamed_(self.appearance_name)
 
     def setTitle_(self, t):
         self.title = t
@@ -87,41 +99,207 @@ def _force_text_glyphs(monkeypatch):
     "" in both states -- so asserting on the title there would pass whether
     or not the render happened. Pinning them to the text path restores a
     two-valued observable, which is the only thing that gives them teeth."""
-    def boom(_recording):
+    def boom(*_args):
         raise RuntimeError("cannot draw")
 
     monkeypatch.setattr(status_item, "_glyph_image", boom)
 
 
 def test_idle_and_recording_states_differ():
-    """The two states are distinguished by the drawn image now, not the
-    title. Both must be real template images -- a non-template image would
-    render as literal black and vanish against a dark menu bar -- and their
-    pixels must actually differ, or the recording state is invisible.
+    """The two states are distinguished by the drawn image, not the title.
+    Idle must be a template, or it would render as literal black and vanish
+    against a dark menu bar. Live must not be one, because a template carries
+    no colour of ours, and colour is the only thing separating the two: they
+    are the same shape. Without it the live state is invisible.
 
-    NSImage.lockFocus works in this headless pytest process (no
-    NSApplication, no window server) and draws deterministically: the same
-    state twice yields byte-identical TIFF, so a difference here is real
-    pixel content rather than incidental metadata.
+    Bitmap drawing works in this headless pytest process (no NSApplication, no
+    window server) and is deterministic: the same state twice yields
+    byte-identical TIFF, so a difference here is real pixel content rather
+    than incidental metadata.
     """
     pytest.importorskip("AppKit")
     si, _ = make()
     si.create()
+    button = si.item.button()
 
-    idle = si.item.button().image
+    idle = button.image
     assert idle is not None
     assert idle.isTemplate()
-    assert tuple(idle.size()) == (22.0, 14.0)
-    assert si.item.button().title == "", "the title must yield to the image"
+    assert tuple(idle.size()) == (GLYPH_POINTS, GLYPH_POINTS)
+    assert button.title == "", "the title must yield to the image"
 
     si.set_recording(True)
-    recording = si.item.button().image
-    assert recording is not None
-    assert recording.isTemplate()
-    assert _tiff(recording) != _tiff(idle)
+    live = button.image
+    assert live is not None
+    assert not live.isTemplate()
+    assert tuple(live.size()) == (GLYPH_POINTS, GLYPH_POINTS)
+    assert button.title == "", "a live image must not fall back to text"
+    assert _tiff(live) != _tiff(idle)
 
     si.set_recording(False)
-    assert _tiff(si.item.button().image) == _tiff(idle)
+    assert button.image.isTemplate()
+    assert _tiff(button.image) == _tiff(idle)
+
+
+def _rep(image, pixels):
+    for rep in image.representations():
+        if rep.pixelsWide() == pixels:
+            return rep
+    raise AssertionError(f"no {pixels}px bitmap in the image")
+
+
+def _ink_on_curve(rep):
+    """The colour at a pixel in the middle of the stroke, as 0-255 ints."""
+    scale = rep.pixelsWide() / 100
+    x, y = max(logo_wave.wave_points(logo_wave.SMALL), key=lambda p: p[1])
+    c = rep.colorAtX_y_(int(x * scale), int(y * scale))
+    assert c.alphaComponent() == pytest.approx(1.0, abs=0.01)
+    return tuple(round(v * 255) for v in
+                 (c.redComponent(), c.greenComponent(), c.blueComponent()))
+
+
+def _hex_rgb(hex_colour):
+    return tuple(int(hex_colour[i:i + 2], 16) for i in (1, 3, 5))
+
+
+@pytest.mark.parametrize("appearance, expected", [
+    # The Vibrant pair is what a real status button reports on macOS 27.
+    ("NSAppearanceNameAqua", LIVE_ON_LIGHT_BAR),
+    ("NSAppearanceNameVibrantLight", LIVE_ON_LIGHT_BAR),
+    ("NSAppearanceNameDarkAqua", LIVE_ON_DARK_BAR),
+    ("NSAppearanceNameVibrantDark", LIVE_ON_DARK_BAR),
+])
+def test_the_live_colour_follows_the_menu_bar(appearance, expected):
+    pytest.importorskip("AppKit")
+    si, _ = make()
+    si.create()
+    button = si.item.button()
+    button.appearance_name = appearance
+
+    si.set_recording(True)
+
+    for scale in status_item.GLYPH_SCALES:
+        ink = _ink_on_curve(_rep(button.image, GLYPH_POINTS * scale))
+        assert ink == pytest.approx(_hex_rgb(expected), abs=1)
+
+
+def test_each_dictation_reads_the_bar_again():
+    """The bar can change between dictations. A colour read once at launch
+    would leave ultramarine on what has since become a dark bar."""
+    pytest.importorskip("AppKit")
+    si, _ = make()
+    si.create()
+    button = si.item.button()
+
+    si.set_recording(True)
+    first = _ink_on_curve(_rep(button.image, GLYPH_POINTS * 2))
+    si.set_recording(False)
+    button.appearance_name = "NSAppearanceNameDarkAqua"
+    si.set_recording(True)
+    second = _ink_on_curve(_rep(button.image, GLYPH_POINTS * 2))
+
+    assert first == pytest.approx(_hex_rgb(LIVE_ON_LIGHT_BAR), abs=1)
+    assert second == pytest.approx(_hex_rgb(LIVE_ON_DARK_BAR), abs=1)
+
+
+def _alpha(rep):
+    return [[rep.colorAtX_y_(x, y).alphaComponent()
+             for x in range(rep.pixelsWide())]
+            for y in range(rep.pixelsHigh())]
+
+
+def test_idle_and_live_are_the_same_shape():
+    """On the approved board only the colour changes. Note this makes colour
+    the sole signal, which is why a colour that can't be worked out falls back
+    to text instead of drawing something that looks idle."""
+    pytest.importorskip("AppKit")
+    si, _ = make()
+    si.create()
+    button = si.item.button()
+    idle = _alpha(_rep(button.image, GLYPH_POINTS * 2))
+
+    si.set_recording(True)
+
+    assert _alpha(_rep(button.image, GLYPH_POINTS * 2)) == idle
+
+
+def _distance_to_polyline(px, py, points):
+    best = math.inf
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        dx, dy = x1 - x0, y1 - y0
+        t = max(0.0, min(1.0, ((px - x0) * dx + (py - y0) * dy)
+                         / (dx * dx + dy * dy)))
+        best = min(best, math.hypot(px - x0 - t * dx, py - y0 - t * dy))
+    return best
+
+
+@pytest.mark.parametrize("scale", status_item.GLYPH_SCALES)
+def test_the_glyph_is_the_small_ribbon_curve_at_every_density(scale):
+    """Checked pixel by pixel against the geometry, since "some wave" would
+    pass any weaker test. Inside the stroke must be solid and well outside it
+    empty, in both bitmaps: a missing @2x one would be blurred on Retina."""
+    pytest.importorskip("AppKit")
+    assert logo_wave.style_for(GLYPH_POINTS) is logo_wave.SMALL
+
+    si, _ = make()
+    si.create()
+    side = GLYPH_POINTS * scale
+    rep = _rep(si.item.button().image, side)
+    assert rep.pixelsHigh() == side
+    assert tuple(rep.size()) == (GLYPH_POINTS, GLYPH_POINTS)
+
+    k = side / 100
+    points = [(x * k, y * k) for x, y in logo_wave.wave_points(logo_wave.SMALL)]
+    radius = logo_wave.SMALL.stroke * k / 2
+    solid = empty = 0
+    for py in range(side):
+        for px in range(side):
+            d = _distance_to_polyline(px + 0.5, py + 0.5, points)
+            alpha = rep.colorAtX_y_(px, py).alphaComponent()
+            if d <= radius - 1:
+                assert alpha > 0.99, f"hole in the stroke at {px},{py}"
+                solid += 1
+            elif d >= radius + 1:
+                assert alpha < 0.01, f"stray ink at {px},{py}"
+                empty += 1
+    assert empty > 0
+    assert solid > 0
+
+
+def test_idle_does_not_need_to_know_the_bar(monkeypatch):
+    """A template adapts by itself, so a broken appearance read must not cost
+    the idle icon. Only the live colour depends on it."""
+    pytest.importorskip("AppKit")
+
+    def boom(_self):
+        raise RuntimeError("no appearance")
+
+    monkeypatch.setattr(FakeButton, "effectiveAppearance", boom)
+    si, _ = make()
+
+    assert si.create() is True
+    assert si.item.button().image.isTemplate()
+
+
+def test_an_unknown_bar_falls_back_to_text_rather_than_looking_idle(monkeypatch):
+    """Idle and live share a shape, so without a colour a live glyph can't be
+    told from idle, and a guessed colour might vanish against the bar. The text
+    glyph is ugly but says the right thing."""
+    pytest.importorskip("AppKit")
+    si, _ = make()
+    si.create()
+    button = si.item.button()
+
+    class NoMatch:
+        def bestMatchFromAppearancesWithNames_(self, _names):
+            return None
+
+    monkeypatch.setattr(FakeButton, "effectiveAppearance",
+                        lambda _self: NoMatch())
+    si.set_recording(True)
+
+    assert button.image is None
+    assert button.title == RECORDING_GLYPH
 
 
 def test_a_failed_glyph_image_falls_back_to_the_text_glyphs(monkeypatch):

@@ -154,6 +154,25 @@ def needs_leading_space(focus, text: str) -> bool:
         focus.before_text) is not None
 
 
+def dictation_wants_space(focus, text: str, recent: bool, last_app) -> bool:
+    """A dictation goes by the field where it can be read, the same as a snippet.
+    Where it can't, `recent` says the last paste was moments ago with no typing or
+    click since, and that only counts in the same app. `focus`: a read just before
+    the paste, or None. Browsers, Electron apps and terminals can report an empty
+    field that isn't, so an empty read only counts where absence can be trusted."""
+    if not text or text[0].isspace() or text[0] in _NO_SPACE_BEFORE:
+        return False
+    if focus is not None:
+        if focus.secure:
+            return False
+        if focus.readable and focus.caret_known and (focus.before_text or focus.trust_absence):
+            # inside a word, a space would split it
+            return not focus.after_text[:1].isalnum() and needs_leading_space(focus, text)
+        if last_app and focus.bundle_id and focus.bundle_id != last_app:
+            return False
+    return bool(recent)
+
+
 def snippet_warnings(snippets: dict) -> dict:
     """{trigger: what to say on its row, or None}. Hints are shared, so saving
     one snippet can cost another its hint."""

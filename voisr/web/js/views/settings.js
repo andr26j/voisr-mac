@@ -1,9 +1,35 @@
 "use strict";
 window.Voisr = window.Voisr || {};
 (function (V) {
-  function miniPillNode(value) {
-    const node = V.ui.el("div", { class: "mini-pill", data: { theme: value } });
-    for (let i = 0; i < 7; i++) node.append(V.ui.el("span", { class: "mb" }));
+  const byId = (id) => document.getElementById(id);
+
+  /* ----- pill previews -----
+
+     Still pictures of the real pill, so a Settings page left open draws
+     nothing. The bars are the board's, and only their height is per-bar. */
+
+  const BAR_HEIGHTS = [3, 6, 4.9, 10.1, 7.8, 14.3, 11.3, 15.4, 9.8, 13.6, 7.1, 9.5, 6.2, 6, 3];
+
+  /* A custom colour recolours Signature's bars and Quiet's transcribing dots.
+     Quiet's live dot is always periwinkle, so its picker picture shows that
+     dot, and the colour popover shows the dots the colour actually changes. */
+  function pillArt(theme, showColour) {
+    const el = V.ui.el;
+    if (theme === "quiet") {
+      return showColour
+        ? [el("i", { class: "pp-dot" }), el("i", { class: "pp-dot" }), el("i", { class: "pp-dot" })]
+        : [el("i", { class: "pp-live" })];
+    }
+    return BAR_HEIGHTS.map((h) => {
+      const bar = el("i", { class: "pp-bar" });
+      bar.style.height = `${h}px`;
+      return bar;
+    });
+  }
+
+  function pillPreviewNode(theme, showColour) {
+    const node = V.ui.el("span", { class: "pill-preview", data: { theme } });
+    node.append(...pillArt(theme, showColour));
     return node;
   }
 
@@ -24,7 +50,8 @@ window.Voisr = window.Voisr || {};
       checked: cfg.pill_theme || "classic",
       cls: "theme-opt",
       build: (value) => V.ui.el("button", { type: "button", data: { value } },
-        miniPillNode(value), V.ui.el("span", { class: "theme-name", text: labels[value] })),
+        V.ui.el("span", { class: "theme-art" }, pillPreviewNode(value, false)),
+        V.ui.el("span", { class: "theme-name", text: labels[value] })),
     });
   }
 
@@ -118,15 +145,14 @@ window.Voisr = window.Voisr || {};
     ctx.putImageData(img, 0, 0);
   }
 
+  /* The picker's Signature picture shows the colour too, so it stays a true
+     picture of the pill while the wheel is being dragged. */
   function setColorUi(hex) {
     const $ = V.ui.$;
-    const preview = $("#color-preview"), thumb = $("#wheel-thumb");
+    const preview = $("#color-preview"), thumb = $("#wheel-thumb"), grid = $("#theme-grid");
     if (hex) {
       preview.style.setProperty("--mb-color", hex);
-      const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16),
-            b = parseInt(hex.slice(5, 7), 16);
-      preview.style.setProperty("--mb-glow", `rgba(${r}, ${g}, ${b}, .75)`);
-      preview.dataset.customColor = "";
+      if (grid) grid.style.setProperty("--mb-color", hex);
       $("#color-swatch").style.background = hex;
       $("#color-hex").textContent = hex;
       const { h, s } = hexToHs(hex);
@@ -136,10 +162,9 @@ window.Voisr = window.Voisr || {};
       thumb.hidden = false;
     } else {
       preview.style.removeProperty("--mb-color");
-      preview.style.removeProperty("--mb-glow");
-      delete preview.dataset.customColor;
-      $("#color-swatch").style.background = "transparent";
-      $("#color-hex").textContent = "theme default";
+      if (grid) grid.style.removeProperty("--mb-color");
+      $("#color-swatch").style.removeProperty("background");
+      $("#color-hex").textContent = "Theme default";
       thumb.hidden = true;
     }
   }
@@ -148,7 +173,11 @@ window.Voisr = window.Voisr || {};
     const $ = V.ui.$;
     const cfg = known || await V.ui.tryApi(V.api().get_config(), "Load settings");
     if (!cfg) return;
-    $("#color-preview").dataset.theme = cfg.pill_theme || "classic";
+    const preview = $("#color-preview"), theme = cfg.pill_theme || "classic";
+    if (preview.dataset.theme !== theme) {
+      preview.dataset.theme = theme;
+      preview.replaceChildren(...pillArt(theme, true));
+    }
     setColorUi(cfg.pill_color || null);
   }
 
@@ -214,14 +243,36 @@ window.Voisr = window.Voisr || {};
      Settings render, which would waste a full-canvas repaint nobody sees. */
   let wheelDrawn = false;
 
+  /* Fixed to the window, because the scrolling pane would cut it off: it hangs
+     from the button's right edge and opens upward when there's no room below. */
+  function placeColorPopover(pop) {
+    const opener = byId("color-open");
+    if (!opener) return;
+    const r = opener.getBoundingClientRect();
+    const gap = 8, h = pop.offsetHeight, w = pop.offsetWidth;
+    const below = r.bottom + gap + h <= window.innerHeight - gap;
+    pop.style.left = `${Math.max(gap, r.right - w)}px`;
+    pop.style.top = `${below ? r.bottom + gap : Math.max(gap, r.top - gap - h)}px`;
+    pop.dataset.side = below ? "below" : "above";
+  }
+
+  function setColorExpanded(open) {
+    const opener = byId("color-open");
+    if (opener) opener.setAttribute("aria-expanded", String(open));
+  }
+
   function openColorPopover() {
-    const pop = document.getElementById("color-popover");
+    const pop = byId("color-popover");
     if (!wheelDrawn) { drawColorWheel(); initColorWheel(); wheelDrawn = true; }
     pop.hidden = !pop.hidden;
+    setColorExpanded(!pop.hidden);
+    if (!pop.hidden) placeColorPopover(pop);
   }
 
   function closeColorPopover() {
-    document.getElementById("color-popover").hidden = true;
+    const pop = byId("color-popover");
+    if (pop) pop.hidden = true;
+    setColorExpanded(false);
   }
 
   /* known-applied appearance value, kept in sync by render() and the change
@@ -248,6 +299,8 @@ window.Voisr = window.Voisr || {};
      `benchmark` stays null until measured figures exist, and the row shows
      it only then -- never a claim about speed or accuracy without numbers. */
 
+  const CHECK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+
   function formatSize(bytes) {
     if (!bytes) return "";
     const mb = bytes / (1024 * 1024);
@@ -259,53 +312,73 @@ window.Voisr = window.Voisr || {};
     const parts = [];
     if (typeof b.wer === "number") parts.push(`${(b.wer * 100).toFixed(1)}% word errors`);
     if (typeof b.median_s === "number") parts.push(`median ${b.median_s.toFixed(1)} s`);
-    return parts.length ? `Measured: ${parts.join(", ")}` : "";
+    return parts.length ? `Measured: ${parts.join(", ")}.` : "";
+  }
+
+  function modelState(m) {
+    if (m.active) return "In use";
+    if (!m.installed) return "";
+    return m.custom ? "Custom" : "Installed";
+  }
+
+  function downloadShare(d) {
+    return d.total ? Math.min(1, d.done / d.total) : 0;
+  }
+  function downloadPercent(d) {
+    return `${Math.floor(100 * downloadShare(d))}%`;
+  }
+  function downloadAmount(d) {
+    return `${formatSize(d.done) || "0 MB"} of ${formatSize(d.total)}`;
   }
 
   function modelRow(m, download) {
     const el = V.ui.el;
     const busy = !!download && download.state === "downloading";
     const mine = busy && download.id === m.id;
-    const meta = [formatSize(m.bytes),
-      m.installed ? (m.active ? "In use" : "Installed")
-        : (m.custom ? "" : "Not installed"),
-      m.custom ? "Custom" : "", benchmarkText(m.benchmark)].filter(Boolean).join(" · ");
-    const buttons = [];
-    if (m.installed && !m.active) {
-      buttons.push(el("button", { type: "button", class: "btn-secondary model-btn",
-        data: { act: "use", id: m.id }, text: "Use" }));
-    }
-    if (!m.installed && !m.custom) {
-      buttons.push(el("button", { type: "button", class: "btn-secondary model-btn",
+    const size = formatSize(m.bytes);
+    const desc = [m.description, size ? `${size}.` : "", benchmarkText(m.benchmark)]
+      .filter(Boolean).join(" ");
+    const state = modelState(m);
+    const actions = [state ? el("span", { class: "pill", text: state }) : null];
+    if (mine) {
+      actions.push(el("span", { class: "pill model-percent", text: downloadPercent(download) }));
+    } else if (!m.installed && !m.custom) {
+      actions.push(el("button", { type: "button", class: "btn-quiet model-btn",
         data: { act: "download", id: m.id }, text: "Download",
         disabled: (m.blocked || busy) ? true : null }));
     }
     if (m.installed && !m.active) {
-      buttons.push(el("button", { type: "button", class: "btn-danger model-btn",
+      actions.push(el("button", { type: "button", class: "btn-quiet model-btn",
+        data: { act: "use", id: m.id }, text: "Use" }));
+      actions.push(el("button", { type: "button", class: "btn-danger model-btn",
         data: { act: "delete", id: m.id, custom: m.custom ? "1" : "0" },
         text: "Delete" }));
     }
+    let bar = null;
+    if (mine) {
+      const fill = el("i", { class: "model-bar-fill" });
+      fill.style.transform = `scaleX(${downloadShare(download)})`;
+      bar = el("span", { class: "model-bar", "aria-hidden": "true" }, fill);
+    }
     return el("div", { class: "model-row" + (m.active ? " active" : ""),
         data: { id: m.id } },
-      el("div", { class: "model-copy" },
+      el("span", { class: "model-check", html: m.active ? CHECK_ICON : "" }),
+      el("div", { class: "setting-copy" },
         el("h3", { text: m.label }),
-        el("p", { class: "setting-desc", text: m.description }),
-        el("p", { class: "setting-desc model-meta", text: meta }),
-        m.warning ? el("p", { class: "model-warn", text: m.warning }) : null,
-        m.blocked ? el("p", { class: "model-warn", text: m.blocked }) : null,
+        el("p", { class: "setting-desc", text: desc }),
+        m.warning ? el("p", { class: "setting-desc", text: m.warning }) : null,
+        m.blocked ? el("p", { class: "setting-desc", text: m.blocked }) : null,
         mine ? el("p", { class: "setting-desc model-progress",
-          text: progressText(download) }) : null),
-      el("div", { class: "model-actions" }, buttons));
-  }
-
-  function progressText(d) {
-    const pct = d.total ? Math.min(100, Math.floor(100 * d.done / d.total)) : 0;
-    return `Downloading… ${pct}% (${formatSize(d.done)} of ${formatSize(d.total)})`;
+          text: downloadAmount(download) }) : null),
+      el("div", { class: "model-actions" }, actions),
+      bar);
   }
 
   function renderModels(models) {
     const list = V.ui.$("#model-list");
     if (!list || !models || !models.models) return;
+    // New buttons read "Delete", so none of them may count as already armed.
+    if (modelArmed) disarmModelDelete(modelArmed.btn);
     list.replaceChildren(...models.models.map((m) => modelRow(m, models.download)));
     const sys = models.system || {};
     const note = V.ui.$("#model-system");
@@ -330,6 +403,16 @@ window.Voisr = window.Voisr || {};
     reportedDownloadSeq = d.seq;
   }
 
+  /* The row may be gone or redrawn between polls, so each part is looked up
+     fresh and may be missing: closing the pop-up doesn't stop a download. */
+  function paintDownload(d) {
+    const $ = V.ui.$;
+    const percent = $(".model-percent"), amount = $(".model-progress"), fill = $(".model-bar-fill");
+    if (percent) percent.textContent = downloadPercent(d);
+    if (amount) amount.textContent = downloadAmount(d);
+    if (fill) fill.style.transform = `scaleX(${downloadShare(d)})`;
+  }
+
   let downloadPoll = null;
   function pollDownload() {
     if (downloadPoll) return;
@@ -337,8 +420,7 @@ window.Voisr = window.Voisr || {};
       downloadPoll = null;
       const d = await V.ui.tryApi(V.api().get_download_progress(), "Check download");
       if (d && d.state === "downloading") {
-        const p = document.querySelector(".model-progress");
-        if (p) p.textContent = progressText(d);
+        paintDownload(d);
         pollDownload();
         return;
       }
@@ -350,7 +432,7 @@ window.Voisr = window.Voisr || {};
   /* A Custom model is the user's own file, and deleting it is permanent, so
      it asks twice -- the same arm/confirm as Clear history. Registry models
      can be downloaded again and stay one click. */
-  let modelArmed = null;  // { id, at, timer }
+  let modelArmed = null;  // { id, at, timer, btn }
 
   function disarmModelDelete(btn) {
     if (modelArmed) clearTimeout(modelArmed.timer);
@@ -371,10 +453,10 @@ window.Voisr = window.Voisr || {};
     } else if (act === "delete") {
       if (btn.dataset.custom === "1") {
         if (!modelArmed || modelArmed.id !== id) {
-          disarmModelDelete();
+          disarmModelDelete(modelArmed && modelArmed.btn);
           btn.classList.add("armed");
           btn.textContent = "Click again to delete the file";
-          modelArmed = { id, at: Date.now(),
+          modelArmed = { id, btn, at: Date.now(),
             timer: setTimeout(() => disarmModelDelete(btn), 4000) };
           return;
         }
@@ -385,6 +467,81 @@ window.Voisr = window.Voisr || {};
       if (res && res.error) V.ui.toast(res.error);
     }
     render();
+  }
+
+  /* ----- push-to-talk key ----- */
+
+  /* A keycap and a name. A key with no symbol is just its name, because a blank
+     keycap would say nothing. */
+  function showKey(display) {
+    const $ = V.ui.$;
+    const name = $("#hotkey-current"), cap = $("#hotkey-cap");
+    const key = V.ui.keyLabel(display);
+    if (name) name.textContent = key.name;
+    if (cap) {
+      cap.textContent = key.symbol || "";
+      cap.hidden = !key.symbol;
+    }
+  }
+
+  /* The sentence comes from Python; its colour from state, so "push-to-talk
+     not running" reads as needing you and "active" stays quiet. */
+  function renderHotkeyStatus(status) {
+    const node = V.ui.$("#hotkey-status");
+    node.textContent = status.status;
+    // A slow tap is undecided, not broken, so it isn't asking for anything yet.
+    const starting = status.health === "starting";
+    node.dataset.state = starting ? "busy" : (status.state || "unknown");
+    clearTimeout(statusRecheck);
+    if (starting && isOpen) statusRecheck = setTimeout(recheckStatus, STATUS_RECHECK_MS);
+  }
+
+  /* Nothing else tells this row when the tap makes up its mind. */
+  const STATUS_RECHECK_MS = 1000;
+  let statusRecheck = null;
+
+  async function recheckStatus() {
+    if (!isOpen || capturing) return;
+    const status = await V.ui.tryApi(V.api().get_hotkey_status(), "Load shortcut status");
+    if (status && isOpen && !capturing) renderHotkeyStatus(status);
+  }
+
+  /* The app stops listening for up to 8 s and takes the next key it sees, from
+     anywhere, so while it waits nothing else here may change: Esc belongs to
+     the capture (Python treats it as cancel), and the pop-up stays put. */
+  let capturing = false;
+  const capture = V.ui.captureGuard();
+
+  function setListening(on) {
+    const control = byId("key-control");
+    if (control) control.classList.toggle("is-listening", on);
+    const cap = byId("hotkey-cap");
+    if (on && cap) cap.hidden = true;
+    const name = byId("hotkey-current");
+    if (on && name) name.textContent = "Press a key…";
+  }
+
+  async function captureKey() {
+    if (capturing || capture.recent()) return;
+    capturing = true;
+    const btn = byId("hotkey-capture"), dialog = byId("settings-dialog");
+    btn.disabled = true;
+    setListening(true);
+    if (dialog) dialog.focus();  // a disabled button can't hold it
+    try {
+      const res = await V.api().capture_hotkey();
+      if (res.error) V.ui.toast(res.error);
+      else if (!res.cancelled) V.ui.toast(`Push-to-talk key set to ${res.label}`);
+    } catch (err) {
+      V.ui.toast(`Change key failed: ${err.message}`);
+    } finally {
+      capturing = false;
+      capture.ended();
+      setListening(false);
+      btn.disabled = false;
+      if (isOpen) btn.focus();
+      await render();
+    }
   }
 
   /* Settings is a list of independent rows fed by four independent bridge
@@ -410,8 +567,12 @@ window.Voisr = window.Voisr || {};
         showContext(cfg);
         showUnload(cfg.model_unload);
       }
-      if (hotkey) $("#hotkey-current").textContent = hotkey.display || "unset";
-      if (status) renderHotkeyStatus(status);
+      // While capturing, the key's own row is saying "Press a key…", and the
+      // status reads as off because the listener is stopped on purpose.
+      if (!capturing) {
+        if (hotkey) showKey(hotkey.display);
+        if (status) renderHotkeyStatus(status);
+      }
 
       if (models && models.models) renderModels(models);
 
@@ -442,6 +603,131 @@ window.Voisr = window.Voisr || {};
     btn.textContent = "Clear…";
   }
 
+  /* An armed button must not survive being looked away from: a click on it
+     later would erase something the user no longer has in mind. */
+  function disarmEverything() {
+    const clear = byId("clear-history");
+    if (clear && clear.dataset.armed === "1") disarmClearHistory(clear);
+    if (modelArmed) disarmModelDelete(modelArmed.btn);
+  }
+
+  /* ----- the pop-up ----- */
+
+  const SECTIONS = ["dictation", "models", "key", "appearance", "privacy"];
+  const LEAVE_MS = 140;  // keep in step with .settings-scrim's closing transition
+
+  let isOpen = false;
+  let section = SECTIONS[0];     // reopens where it was left, until the app restarts
+  let openedFrom = null;
+  let leaveTimer = null;
+  let pressedScrim = false;
+
+  function showSection(name) {
+    section = name;
+    document.querySelectorAll(".settings-section").forEach((s) => {
+      s.hidden = s.dataset.section !== name;
+    });
+    document.querySelectorAll(".settings-nav-item").forEach((b) => {
+      const on = b.dataset.section === name;
+      b.classList.toggle("active", on);
+      if (on) b.setAttribute("aria-current", "page");
+      else b.removeAttribute("aria-current");
+    });
+    const body = byId("settings-body");
+    if (body) body.scrollTop = 0;
+    closeColorPopover();
+    disarmEverything();
+  }
+
+  /* The page behind must be out of reach, or Tab walks into it. */
+  function setPageInert(inert) {
+    const shell = V.ui.$(".shell");
+    if (shell) shell.inert = inert;
+  }
+
+  function activeNavItem() {
+    return Array.from(document.querySelectorAll(".settings-nav-item"))
+      .find((b) => b.dataset.section === section);
+  }
+
+  /* opts.section names one of SECTIONS. Anything else is ignored, so a caller
+     can't open onto a blank pane. */
+  function open(opts) {
+    const wanted = opts && opts.section;
+    showSection(SECTIONS.includes(wanted) ? wanted : section);
+    render();
+    if (isOpen) return;
+    isOpen = true;
+    openedFrom = document.activeElement;
+    clearTimeout(leaveTimer);  // reopened mid-close: carry on from where it is
+    const scrim = byId("settings-scrim");
+    scrim.hidden = false;
+    void scrim.offsetWidth;    // commit the closed look so the transition runs
+    scrim.classList.add("is-open");
+    setPageInert(true);
+    const first = activeNavItem();
+    if (first) first.focus();
+  }
+
+  function close() {
+    if (!isOpen || capturing) return;
+    isOpen = false;
+    closeColorPopover();
+    disarmEverything();
+    const scrim = byId("settings-scrim");
+    scrim.classList.remove("is-open");
+    leaveTimer = setTimeout(() => { scrim.hidden = true; }, LEAVE_MS);
+    setPageInert(false);
+    if (openedFrom && openedFrom.focus) openedFrom.focus();
+    openedFrom = null;
+    // main.js moves the sidebar highlight back and refreshes the page behind.
+    window.dispatchEvent(new Event("voisr:settings-closed"));
+  }
+
+  function paletteOpen() {
+    const palette = byId("palette");
+    return !!palette && !palette.hidden;
+  }
+
+  /* Esc peels one layer: the capture keeps it, then the colour popover takes
+     it, then the pop-up does. The palette sits above all of this and handles
+     its own Esc, marking it with preventDefault. */
+  function onEscape(e) {
+    if (e.key !== "Escape" || e.defaultPrevented) return;
+    const pop = byId("color-popover");
+    if (pop && !pop.hidden) {
+      closeColorPopover();
+      const opener = byId("color-open");
+      if (opener && isOpen) opener.focus();
+      return;
+    }
+    if (!isOpen || capture.recent() || paletteOpen()) return;
+    close();
+  }
+
+  const isPaletteKey = (e) =>
+    (e.metaKey || e.ctrlKey) && String(e.key).toLowerCase() === "k";
+
+  /* The pages listen for keys on the document, and History's arrows, Return
+     and Backspace act on its selected row. A pop-up over History must not
+     delete a dictation nobody can see, so keys stop here. ⌘K alone goes on,
+     because the palette works from anywhere. */
+  function onScrimKey(e) {
+    if (e.key === "Tab") V.ui.walkTab(e, byId("settings-scrim"));
+    else if (e.key === "Escape") onEscape(e);
+    if (!isPaletteKey(e)) e.stopPropagation();
+  }
+
+  /* The same rule for a key with nowhere better to land, such as when focus has
+     fallen back to the body. Runs on the way down, so it gets there first. */
+  function onStrayKey(e) {
+    if (!isOpen || isPaletteKey(e) || paletteOpen()) return;
+    if (byId("settings-scrim").contains(e.target)) return;
+    e.stopPropagation();
+    if (e.key === "Tab") V.ui.walkTab(e, byId("settings-scrim"));
+    else if (e.key === "Escape") onEscape(e);
+  }
+
   /* ---------- bind, once ----------
 
      Called by main.js's init(), exactly like home/history/dictionary's
@@ -453,6 +739,29 @@ window.Voisr = window.Voisr || {};
      document-level listeners in particular would stack. */
 
   function init() {
+    const scrim = byId("settings-scrim");
+    scrim.addEventListener("keydown", onScrimKey);
+    document.addEventListener("keydown", onStrayKey, true);
+    // A drag from the wheel or a selection can end out here, and that isn't
+    // asking to close: the press has to have started on the scrim too.
+    scrim.addEventListener("pointerdown", (e) => { pressedScrim = e.target === scrim; });
+    scrim.addEventListener("click", (e) => {
+      if (e.target !== scrim || !pressedScrim) return;
+      pressedScrim = false;
+      // The first click out only closes the colour popover (see below).
+      if (!byId("color-popover").hidden) return;
+      close();
+    });
+    byId("settings-nav").addEventListener("click", (e) => {
+      const btn = e.target.closest(".settings-nav-item");
+      if (btn && !capturing) showSection(btn.dataset.section);
+    });
+    // It hangs from the button, so it goes when the button moves.
+    byId("settings-body").addEventListener("scroll", closeColorPopover);
+    window.addEventListener("resize", closeColorPopover);
+
+    byId("hotkey-capture").addEventListener("click", captureKey);
+
     /* Delegated, because renderAppearance() replaces the buttons on every
        render — a listener bound to each button would be lost with it. A
        failed write re-renders from appliedAppearance, so the grid can never
@@ -467,7 +776,7 @@ window.Voisr = window.Voisr || {};
       V.applyAppearance(next);
       V.ui.toast(`Theme: ${next}`);
     });
-    const appearanceGrid = document.getElementById("appearance-grid");
+    const appearanceGrid = byId("appearance-grid");
     appearanceGrid.addEventListener("click", (e) => {
       const btn = e.target.closest(".thumb");
       if (btn) pickAppearance(btn);
@@ -483,24 +792,24 @@ window.Voisr = window.Voisr || {};
       renderAppearance();
     });
 
-    document.getElementById("model-list").addEventListener("click", onModelClick);
+    byId("model-list").addEventListener("click", onModelClick);
 
     for (const [id, key, label] of [
       ["screen-context-toggle", "use_screen_context", "screen context"],
       ["learn-toggle", "learn_from_edits", "learning"],
       ["auto-add-toggle", "dictionary_auto_add", "auto-add"],
     ]) {
-      const box = document.getElementById(id);
+      const box = byId(id);
       if (box) box.addEventListener("change", (e) => saveContextToggle(e, key, label));
     }
-    document.getElementById("launch-toggle").addEventListener("change", async (e) => {
+    byId("launch-toggle").addEventListener("change", async (e) => {
       const res = await V.ui.tryApi(
         V.api().set_launch_at_login(e.target.checked), "Save launch at login");
       if (!res) { e.target.checked = !e.target.checked; return; }
       V.ui.toast(e.target.checked ? "Voisr will start at login" : "Launch at login off");
     });
 
-    const unloadSelect = document.getElementById("unload-select");
+    const unloadSelect = byId("unload-select");
     if (unloadSelect) {
       unloadSelect.addEventListener("change", async (e) => {
         const next = e.target.value;
@@ -512,7 +821,7 @@ window.Voisr = window.Voisr || {};
       });
     }
 
-    document.getElementById("color-open").addEventListener("click", openColorPopover);
+    byId("color-open").addEventListener("click", openColorPopover);
 
     /* click-outside / Escape dismissal for the colour popover -- registered
        once here (init, called once), not inside openColorPopover, so repeated
@@ -522,18 +831,15 @@ window.Voisr = window.Voisr || {};
        document right after) can never immediately close it again. Mirrors the
        scrim/Escape pattern in palette.js. */
     document.addEventListener("click", (e) => {
-      const pop = document.getElementById("color-popover");
+      const pop = byId("color-popover");
       if (pop.hidden) return;
       if (pop.contains(e.target) || e.target.closest("#color-open")) return;
       closeColorPopover();
     });
-    document.addEventListener("keydown", (e) => {
-      if (e.key !== "Escape") return;
-      if (!document.getElementById("color-popover").hidden) closeColorPopover();
-    });
+    document.addEventListener("keydown", onEscape);
 
-    document.getElementById("clear-history").addEventListener("click", async () => {
-      const btn = document.getElementById("clear-history");
+    byId("clear-history").addEventListener("click", async () => {
+      const btn = byId("clear-history");
       if (btn.dataset.armed !== "1") {
         clearTimeout(clearHistoryDisarmTimer);
         btn.dataset.armed = "1";
@@ -563,13 +869,7 @@ window.Voisr = window.Voisr || {};
   }
 
   V.views = V.views || {};
-  /* The sentence comes from Python; its colour from state, so "push-to-talk
-     not running" no longer shows in the same green as "active". */
-  function renderHotkeyStatus(status) {
-    const node = V.ui.$("#hotkey-status");
-    node.textContent = status.status;
-    node.dataset.state = status.state || "unknown";
-  }
-
-  V.views.settings = { showContext, showUnload, renderModels, renderAppearance, renderHotkeyStatus, init, render, renderThemes, renderColorWheel, initColorWheel, openColorPopover };
+  V.views.settings = { open, close, isOpen: () => isOpen, captureKey, showKey, showContext,
+    showUnload, renderModels, renderAppearance, renderHotkeyStatus, init, render, renderThemes,
+    renderColorWheel, initColorWheel, openColorPopover };
 })(window.Voisr);

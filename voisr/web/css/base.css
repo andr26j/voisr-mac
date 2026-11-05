@@ -1,11 +1,29 @@
+/* Instrument Serif ships in voisr/web/fonts (SIL OFL 1.1, see OFL.txt there).
+   It is never fetched: nothing leaves this Mac, and that includes font requests. */
+@font-face {
+  font-family: "Instrument Serif";
+  src: url("../fonts/InstrumentSerif-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Instrument Serif";
+  src: url("../fonts/InstrumentSerif-Italic.ttf") format("truetype");
+  font-weight: 400;
+  font-style: italic;
+  font-display: block;
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body { height: 100%; }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-  font-size: 14px;
-  line-height: 1.55;
+  font-family: var(--font-sans);
+  font-size: 14.5px;
+  line-height: 1.45;
   color: var(--ink);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -15,7 +33,7 @@ body {
 code {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 12px;
-  background: var(--bg);
+  background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 5px;
   padding: 1px 5px;
@@ -29,44 +47,49 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 /* ---------- Sidebar ---------- */
 
+/* Flat: the sidebar is the window's own background, and the panel sits inset
+   on it. The top padding clears the native traffic lights. */
 .sidebar {
-  width: 216px;
+  width: 204px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  padding: var(--titlebar-h) 14px 18px;
-  border-right: 1px solid var(--border);
-  background: var(--sidebar-bg);
+  padding: 56px 10px 12px 12px;
 }
-
-/* vibrancy fallback: when the native effect view is unavailable the shell
-   sets data-vibrancy="off" and the sidebar paints a solid tint instead */
-:root[data-vibrancy="off"] .sidebar { background: var(--surface-2); }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 0 10px 22px;
+  padding: 0 8px 22px;
 }
 
 .brand-mark {
-  width: 24px; height: 24px;
-  border-radius: 6px;
+  width: 26px; height: 26px;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 23%;
+  background: linear-gradient(165deg, var(--tile-from), var(--tile-to));
+  box-shadow: inset 0 .5px 0 var(--tile-edge);
+  color: var(--hero-wave);
 }
 
-.brand-name { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+.brand-mark svg { width: 78%; height: 78%; display: block; }
 
-.nav { position: relative; display: flex; flex-direction: column; gap: 2px; }
+.brand-name { font-family: var(--font-serif); font-size: 25px; line-height: 1; }
+
+/* Fills the sidebar so Settings can sit at the bottom and still be one of the
+   items the glide measures against this element. */
+.nav { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 4px; }
 
 /* the active item's surface: one element that glides between items
    (main.js glideTo), transitions on only after its first placement */
 .nav-glide {
   position: absolute; top: 0; left: 0; right: 0;
   border-radius: var(--radius-sm);
-  background: var(--surface);
-  box-shadow: var(--shadow);
+  background: var(--active);
   pointer-events: none;
 }
 .nav-glide.is-live { transition: transform 180ms var(--ease); }
@@ -75,53 +98,115 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   position: relative;  /* paints above .nav-glide */
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 44px;
-  padding: 0 12px;
+  gap: 11px;
+  height: 36px;
+  flex-shrink: 0;
+  padding: 0 10px;
   border-radius: var(--radius-sm);
-  font-weight: 500;
-  color: var(--muted);
-  transition: background .15s ease-out, color .15s ease-out;
+  font-size: 14px;
+  color: var(--ink);
 }
 
-.nav-item svg { width: 17px; height: 17px; }
+.nav-item svg { width: 17px; height: 17px; flex-shrink: 0; }
 
-.nav-item:hover { background: var(--accent-soft); color: var(--ink); }
+.nav-settings { margin-top: auto; }
+
+@media (hover: hover) and (pointer: fine) {
+  .nav-item:hover { background: color-mix(in srgb, var(--active) 55%, transparent); }
+}
 
 /* the surface is .nav-glide's; hovering the active item doesn't tint over it */
-.nav-item.active, .nav-item.active:hover { background: transparent; color: var(--ink); }
+.nav-item.active, .nav-item.active:hover { background: transparent; font-weight: 500; }
 
-/* the dock's mic is open (set by views/home.js); visible from every view */
+/* the mic is open (set by views/home.js); visible from every view */
 .nav-item[data-recording="true"]::after {
   content: ""; margin-left: auto;
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--accent);
 }
 
-.sidebar-foot {
-  margin-top: auto;
+.sidebar-foot { margin-top: 4px; display: flex; flex-direction: column; gap: 4px; }
+
+.commands-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  font-size: 12px;
+  justify-content: space-between;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
   color: var(--muted);
 }
 
-.sidebar-foot svg { width: 14px; height: 14px; flex-shrink: 0; }
+@media (hover: hover) and (pointer: fine) {
+  .commands-btn:hover { color: var(--ink); }
+}
 
-/* ---------- Main ---------- */
+.sidebar-note { padding: 2px 10px; font-size: 12px; line-height: 1.4; color: var(--muted); }
 
-/* --main-pad-b is shared with the sticky dock (views.css), whose edge is
-   inset by this padding */
-.main { --main-pad-b: 60px; flex: 1; overflow-y: auto;
-        padding: var(--titlebar-h) 44px var(--main-pad-b); background: var(--bg); }
+/* ---------- Panel ---------- */
 
-.page-head { margin-bottom: 26px; }
+/* .main is the one scroll container for every view. */
+.main {
+  --main-pad-b: 28px;
+  flex: 1;
+  min-width: 0;
+  margin: var(--titlebar-h) 8px 8px 0;
+  padding: 28px 36px var(--main-pad-b);
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
 
-.page-head h1 { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; }
+/* pages are a centred 720 px column; Home alone takes the panel's full width
+   for its stats column */
+.view { width: 100%; max-width: 720px; margin: 0 auto; }
+#view-home { max-width: none; }
 
-.sub { color: var(--muted); margin-top: 6px; max-width: 58ch; }
+/* a page title, and at most one black button on the right */
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 16px;
+  min-height: 36px;
+  margin-bottom: 18px;
+}
+
+.page-head h1 { font-size: 24px; font-weight: 600; line-height: 1.2; letter-spacing: -.015em; }
+
+.page-head > .sub, .page-head > .page-head-row { flex: 1 1 100%; }
+
+.sub { color: var(--muted); max-width: 58ch; }
+
+/* a label over a list, with room for one quiet action on the right */
+.date-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 18px;
+  margin: 22px 0 8px;
+}
+
+.date-label {
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* the serif at heading size: Settings headings, and first run at a larger size */
+.heading-serif {
+  font-family: var(--font-serif);
+  font-size: 36px;
+  font-weight: 400;
+  line-height: 1.06;
+  letter-spacing: -.01em;
+}
 
 /* ---------- Transitions ---------- */
 
@@ -150,12 +235,13 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 @keyframes row-in { from { opacity: 0; } to { opacity: 1; } }
 
-/* a new, restored or edited row: holds the accent for the first 35%, then
-   fades. It outranks the stagger, including reduced motion's `none` below:
-   a row that lands while a page opens still shows where it went. */
+/* a new, restored or edited row: holds a grey for the first 35%, then fades.
+   It outranks the stagger, including reduced motion's `none` below: a row
+   that lands while a page opens still shows where it went. Grey, because a
+   landing row doesn't need you. */
 .item-row.is-landed,
 .item-list.is-staggering .item-row.is-landed { animation: wash 1.6s linear; }
-@keyframes wash { 0%, 35% { background: var(--accent-soft); } 100% { background: transparent; } }
+@keyframes wash { 0%, 35% { background: var(--active); } 100% { background: transparent; } }
 
 @media (prefers-reduced-motion: reduce) {
   /* the wash stays: it is colour, not movement */

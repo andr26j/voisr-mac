@@ -17,7 +17,7 @@ DEFAULT_CONFIG = {"hotkey": "alt_r", "paste": True, "device": DEFAULT_DEVICE, "d
                   "appearance": "system", "launch_at_login": False, "model": None,
                   "event_tap": "active", "model_unload": "min5",
                   "use_screen_context": True, "learn_from_edits": True,
-                  "dictionary_auto_add": True, "snippets": {}}
+                  "dictionary_auto_add": True, "snippets": {}, "dismissed_banners": []}
 # Every config used to be saved with this, so it doesn't mean anyone chose it.
 _OLD_DEFAULT_DEVICE = ":0"
 LIST_DEVICES_HINT = 'To see the inputs: ffmpeg -f avfoundation -list_devices true -i ""'
@@ -54,6 +54,10 @@ def _is_dictionary(v):
         isinstance(k, str) and k and isinstance(w, str) for k, w in v.items())
 
 
+def _is_str_list(v):
+    return isinstance(v, list) and all(isinstance(item, str) for item in v)
+
+
 CONFIG_VALIDATORS = {
     "hotkey": _is_str, "paste": _is_bool, "device": _is_str,
     "dictionary": _is_dictionary, "show_widget": _is_bool,
@@ -63,6 +67,10 @@ CONFIG_VALIDATORS = {
     "event_tap": _is_tap_mode, "model_unload": _is_unload,
     "use_screen_context": _is_bool, "learn_from_edits": _is_bool,
     "dictionary_auto_add": _is_bool, "snippets": snippets.is_valid,
+    "dismissed_banners": _is_str_list,
+    # not in DEFAULT_CONFIG: missing means first run hasn't been decided yet
+    # (Api.first_run_pending), which is how an existing install is recognised
+    "first_run_done": _is_bool,
 }
 
 
