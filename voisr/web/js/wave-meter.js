@@ -17,21 +17,14 @@ window.Voisr = window.Voisr || {};
    wave itself can't be seen. Timers are injectable so Node can drive it frame by
    frame. */
 window.Voisr.waveMeter = (function () {
+  // the pill's gate and envelope (js/meter.js), so both recorders move alike
+  const { gate, ATTACK_MS, RELEASE_MS } = window.Voisr.meter;
   const POLL_MS = 1000 / 30;
-  // the pill's envelope (js/meter.js), so both recorders move alike
-  const GATE = 0.04;          // room hiss and fans stay at rest
-  const ATTACK_MS = 50;       // quick to rise, so syllables land
-  const RELEASE_MS = 220;     // slow to fall, so it doesn't chatter between them
   const SETTLE_MS = 180;
   const QUIET = 0.3;          // the wave's height in silence, of its full height
   const TRANSCRIBING = 0.45;  // ...and while the words come back
   const MID = 80;             // the wave's centre line, in wave.js's 160-unit box
   const NEAR = 0.002;
-
-  function gate(raw) {
-    if (!(raw > GATE)) return 0;  // also catches NaN
-    return Math.min(1, (raw - GATE) / (1 - GATE));
-  }
 
   function create(opts) {
     const el = opts.el;

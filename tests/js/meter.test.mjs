@@ -46,16 +46,17 @@ test("hump: low at the edges, full in the middle, symmetric", () => {
   }
 });
 
-test("weights: the pill's 17 bars take the design's 6.6-26 px silhouette; create gets a plain hump at any count", () => {
+test("pillWeights: the pill's 17 bars take the design's 6.6-26 px silhouette", () => {
   const w = M.pillWeights();
   assert.equal(w.length, 17);
   assert.equal(M.PILL_SPEAK.length, 17);
   assert.equal(w[8], 1);
   assert.ok(Math.abs(w[0] * 26 - 6.6) < 0.05, `edge ${w[0] * 26} px`);
-  const dock = M.weights(21);
-  assert.equal(dock.length, 21);
-  assert.ok(dock[10] > dock[0] && Math.abs(dock[0] - dock[20]) < 1e-9);
-  assert.ok(M.weights(17)[0] > w[0], "17 bars elsewhere don't turn into the pill");
+});
+
+test("the envelope's constants are the ones the sidebar wave shares", () => {
+  assert.equal(M.ATTACK_MS, 50);
+  assert.equal(M.RELEASE_MS, 220);
 });
 
 test("a voice moves each pill bar on its own rhythm, inside its share of the silhouette", () => {
@@ -80,23 +81,6 @@ test("a voice moves each pill bar on its own rhythm, inside its share of the sil
   assert.ok(frame.some((x, b) => b < 8 && Math.abs(x / w[b] - frame[b + 1] / w[b + 1]) > 0.05));
 });
 
-test("other bar counts stay within 16% of their hump", () => {
-  const meter = M.create(21);
-  const { out } = run(meter, 1, 1000);
-  const w = M.weights(21);
-  out.forEach((x, b) => {
-    assert.ok(x >= w[b] * 0.84 - 1e-9 && x <= Math.min(1, w[b] * 1.16) + 1e-9, `bar ${b}: ${x}`);
-  });
-});
-
-test("bars fall slower than they rise", () => {
-  const rise = run(M.create(21), 1, 100).out[10];
-  const m2 = M.create(21);
-  run(m2, 1, 2000);
-  const fall = 1 - run(m2, 0, 100).out[10];
-  assert.ok(rise > fall, `rise ${rise} vs fall ${fall}`);
-});
-
 test("reset puts the envelope back at rest", () => {
   const meter = M.createPill();
   run(meter, 1, 500);
@@ -105,7 +89,7 @@ test("reset puts the envelope back at rest", () => {
   assert.deepEqual(meter.frame(16, 10), new Array(17).fill(0));
 });
 
-test("paintBar scales a bar and pre-stretches its caps, for the pill and the dock alike", () => {
+test("paintBar scales a bar and pre-stretches its caps, for the pill", () => {
   const style = {};
   M.paintBar({ style }, 0.5);
   assert.equal(style.transform, "scaleY(0.500)");

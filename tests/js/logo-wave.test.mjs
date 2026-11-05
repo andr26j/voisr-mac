@@ -32,11 +32,24 @@ function load({ reduced = false, focused = true, visible = "visible", mark = tru
   win.performance = { now: () => now };
   win.setTimeout = (fn, ms) => { idleWait = { fn, at: now + ms }; return 1; };
 
+  // the shell's hidden state shows up as the mark having no boxes, and a
+  // ResizeObserver is what reports that changing
+  const resizeCallbacks = [];
+  win.ResizeObserver = class {
+    constructor(fn) { resizeCallbacks.push(fn); }
+    observe() {}
+  };
+
   doc.visibilityState = visible;
   let hasFocus = focused;
   doc.hasFocus = () => hasFocus;
-  const brand = { d: MARKUP, setAttribute(k, v) { assert.equal(k, "d"); this.d = v; this.paints += 1; }, paints: 0 };
+  const brand = {
+    d: MARKUP, paints: 0, shown: true,
+    setAttribute(k, v) { assert.equal(k, "d"); this.d = v; this.paints += 1; },
+    getClientRects() { return this.shown ? [{}] : []; },
+  };
   doc.getElementById = (id) => (mark && id === "brand-wave" ? brand : null);
+  const resized = () => resizeCallbacks.forEach((fn) => fn([]));
 
   (0, eval)(IDLE_SRC);
   (0, eval)(SRC);
@@ -65,11 +78,15 @@ function load({ reduced = false, focused = true, visible = "visible", mark = tru
     setVisibility(state) { doc.visibilityState = state; doc.dispatch("visibilitychange", {}); },
     setFocus(value) { hasFocus = value; win.dispatch(value ? "focus" : "blur", {}); },
     setReduced(value) { motion.matches = value; motion.listeners.forEach((fn) => fn()); },
+    /* first run hiding the shell, and showing it again */
+    hideShell() { brand.shown = false; resized(); },
+    showShell() { brand.shown = true; resized(); },
     /* The same changes with the event lost, as WebKit might lose one. */
     quietly: {
       setFocus(value) { hasFocus = value; },
       setVisibility(state) { doc.visibilityState = state; },
       setReduced(value) { motion.matches = value; },
+      hideShell() { brand.shown = false; },
     },
     /* Reads the clock back off the screen: the moment whose drawing this is. */
     clock() {
@@ -178,6 +195,38 @@ test("it starts again on the next event after a lost one", () => {
   assert.equal(h.frames.size, 0);
   h.setFocus(true);
   assert.equal(h.frames.size, 1);
+});
+
+test("with the shell hidden in first run it stops, and asks for nothing", () => {
+  const h = load();
+  h.run(200);
+  h.hideShell();
+  assert.equal(h.frames.size, 0);
+  const held = h.brand.d, paints = h.brand.paints;
+  h.run(5000);
+  assert.equal(h.brand.d, held);
+  assert.equal(h.brand.paints, paints);
+});
+
+test("a lost hide still stops it within a frame", () => {
+  const h = load();
+  h.run(200);
+  h.quietly.hideShell();
+  h.run(FRAME);
+  assert.equal(h.frames.size, 0);
+});
+
+test("input during first run doesn't start it, but the shell showing again does, with no other event", () => {
+  const h = load();
+  h.hideShell();
+  h.input();
+  h.run(1000);
+  assert.equal(h.frames.size, 0, "hidden, input alone must not start it");
+  h.showShell();
+  assert.equal(h.frames.size, 1);
+  const held = h.brand.d;
+  h.run(1000);
+  assert.ok(h.brand.d !== held && h.brand.paints > 0, "the wave moves again");
 });
 
 test("a lost reduced-motion event still goes back to the logo", () => {

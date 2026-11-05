@@ -4,17 +4,16 @@ window.Voisr = window.Voisr || {};
 /* Voice meter: turns the 30 Hz mic level Python pushes (0..1, already in
    dB space, see stream_recorder.level_from_int16) into per-bar heights, once
    per display frame. Pure maths, plus the one style write every scaled bar
-   shares (paintBar): the pill (widget.html) and the dashboard dock draw from
-   the same numbers the same way, so both recorders move alike.
+   shares (paintBar).
 
-   createPill: the pill's 17 bars take the design's silhouette, and each keeps
-   its own rhythm so a voice looks like speech rather than one shape swelling.
-   create: any count, a plain centre-weighted hump that varies by +-16%. */
+   The pill (widget.html) draws from createPill: its 17 bars take the design's
+   silhouette, and each keeps its own rhythm so a voice looks like speech rather
+   than one shape swelling. The sidebar wave (wave-meter.js) takes gate, ATTACK_MS
+   and RELEASE_MS from here too, so both recorders move alike. */
 window.Voisr.meter = (function () {
   const GATE = 0.04;          // room hiss and fans stay at rest
   const ATTACK_MS = 50;       // quick to rise, so syllables land
   const RELEASE_MS = 220;     // slow to fall, so bars don't chatter between them
-  const VARIANCE = 0.16;
   const PILL_BASE = 0.65;
   const PILL_VARIANCE = 0.7;
   /* [seconds per cycle, offset in seconds], bar by bar. The live meter uses
@@ -52,10 +51,6 @@ window.Voisr.meter = (function () {
     return Array.from({ length: n }, (_, i) => Math.sin(Math.PI * (i + 0.5) / n) ** 0.9);
   }
 
-  function weights(n) {
-    return Array.from({ length: n }, (_, i) => 0.42 + 0.58 * Math.sin(Math.PI * (i + 0.5) / n));
-  }
-
   function pillWeights() {
     return hump(PILL_SPEAK.length).map((s) => (4 + 22 * s) / 26);  // 6.6-26 px of 26
   }
@@ -91,11 +86,6 @@ window.Voisr.meter = (function () {
     };
   }
 
-  function create(n) {
-    const seeds = Array.from({ length: n }, (_, i) => [5 + i * 1.7, 8.3 + i * 2.3, i * 1.3, i * 2.1]);
-    return build(weights(n), seeds, 1, VARIANCE);
-  }
-
   /* The pill's bars sit lower on average and swing further, so they rarely
      all reach their full height at once. */
   function createPill() {
@@ -106,5 +96,5 @@ window.Voisr.meter = (function () {
     return build(pillWeights(), seeds, PILL_BASE, PILL_VARIANCE);
   }
 
-  return { gate, step, hump, weights, pillWeights, create, createPill, paintBar, PILL_SPEAK };
+  return { gate, step, hump, pillWeights, createPill, paintBar, ATTACK_MS, RELEASE_MS, PILL_SPEAK };
 })();

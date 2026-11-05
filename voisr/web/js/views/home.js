@@ -219,6 +219,7 @@ window.Voisr = window.Voisr || {};
     return el("section", { class: "banner banner-needs-you", "aria-label": "Permission problem" },
       el("h2", { class: "banner-title", text: heading }),
       el("p", { class: "banner-sub", text: body }),
+      el("p", { class: "banner-error", role: "alert", text: recordError }),
       el("div", { class: "banner-actions" }, actions),
       recover);
   }
@@ -407,8 +408,8 @@ window.Voisr = window.Voisr || {};
   async function renderPtt() {
     const res = await V.ui.tryApi(V.api().hotkey_display(), "Load shortcut");
     if (!res) return;
-    const shown = (res.display || "").replace(/\s*\([^)]*\)\s*$/, "");
-    V.ui.$("#ptt-key-name").textContent = shown && shown !== "unset" ? shown : "your key";
+    const shown = V.ui.keyLabel(res.display).name;
+    V.ui.$("#ptt-key-name").textContent = shown !== "unset" ? shown : "your key";
   }
 
   /* ---------- stats count up ----------
@@ -571,6 +572,7 @@ window.Voisr = window.Voisr || {};
   let doneTimer = null;
   let elapsed = 0;
   let meter = null;
+  let recordError = "";  // the last recording's outcome, until the next one starts
 
   const LISTENING_SPEED = 3.2;
 
@@ -631,21 +633,28 @@ window.Voisr = window.Voisr || {};
     syncBanners();
   }
 
-  async function toggleRecord() {
-    const $ = V.ui.$;
-    const errEl = $("#record-error");
+  /* Whichever banner is up has to carry it: the dark one is hidden under a blue
+     one, and the blue one is rebuilt whenever what it says changes, so its copy
+     is written from recordError each time (needsBanner). */
+  function showRecordError(text) {
+    recordError = text;
+    V.ui.$("#record-error").textContent = text;
+    const inBlue = V.ui.$("#perm-strip").querySelector(".banner-error");
+    if (inBlue) inBlue.textContent = text;
+  }
 
+  async function toggleRecord() {
     if (recState === "processing" || recState === "starting") return;
 
     if (recState === "idle") {
-      errEl.textContent = "";
+      showRecordError("");
       clearTimeout(doneTimer);
       recState = "starting";
       const res = await V.ui.tryApi(V.api().start_recording(), "Start recording");
       // tryApi owns the detail (and the throw path, which used to be able to
-      // strand recState). #record-error keeps its job as the persistent
-      // marker in the banner, since a 3.5s toast is easy to miss.
-      if (!res) { recState = "idle"; setRecordState(""); errEl.textContent = "Couldn't start."; return; }
+      // strand recState). The banner keeps the persistent marker, since a 3.5s
+      // toast is easy to miss.
+      if (!res) { recState = "idle"; setRecordState(""); showRecordError("Couldn't start."); return; }
       recState = "recording";
       elapsed = 0;
       showElapsed();
@@ -674,14 +683,14 @@ window.Voisr = window.Voisr || {};
     if (waveMeter()) waveMeter().idle();
     if (!res) {
       setRecordState("");
-      errEl.textContent = "Transcription failed.";
+      showRecordError("Transcription failed.");
       return;
     }
 
     // Rare, and "Copied" would send them off to paste whatever was there before.
     if (res.copied === false) {
       setRecordState("");
-      errEl.textContent = "Couldn't copy it. Copy it from the list below.";
+      showRecordError("Couldn't copy it. Copy it from the list below.");
       render();
       return;
     }
@@ -691,7 +700,7 @@ window.Voisr = window.Voisr || {};
     setRecordState("done");
     // unless History couldn't save it: then "Copied" alone would be the only
     // trace, and a wrong one
-    if (res.warning) errEl.textContent = "Copied, but not saved to History.";
+    if (res.warning) showRecordError("Copied, but not saved to History.");
     doneTimer = setTimeout(() => {
       if (recState !== "idle") return;
       setRecordState("");

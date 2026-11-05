@@ -1,8 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { loadVoisr } from "./load.mjs";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const { V } = loadVoisr(["js/wave-meter.js"]);
+const WEB = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "voisr", "web");
+
+const { V } = loadVoisr(["js/meter.js", "js/wave-meter.js"]);
 
 function fakePath() {
   const attrs = {};
@@ -50,6 +55,36 @@ function heightOf(path) {
   assert.ok(Math.abs(Number(dy) - 80 * (1 - Number(k))) < 0.05, `centre line moved: ${t}`);
   return Number(k);
 }
+
+test("the sidebar wave takes its attack from meter.js, not a copy of its own", async () => {
+  // a fresh window: meter.js loaded, its attack made effectively infinite,
+  // then wave-meter.js reads it
+  const { V: fresh } = loadVoisr(["js/meter.js"]);
+  fresh.meter.ATTACK_MS = 1e9;
+  (0, eval)(readFileSync(path.join(WEB, "js", "wave-meter.js"), "utf8"));
+  const paths = [fakePath()];
+  const el = { dataset: {}, style: {}, querySelectorAll: () => paths };
+  let poll = null, frame = null;
+  const meter = fresh.waveMeter.create({
+    el,
+    readLevel: () => Promise.resolve(levels.shift()),
+    every: (fn) => { poll = fn; return 1; }, stopEvery: () => { poll = null; },
+    raf: (fn) => { frame = fn; return 1; },
+    isReduced: () => false, isWatching: () => true, now: () => 0,
+  });
+  const levels = [0, 1];
+  let t = 0;
+  const settleFrames = () => { for (let i = 0; i < 300 && frame; i++) { t += 16; const fn = frame; frame = null; fn(t); } };
+  meter.start();
+  poll();
+  await new Promise((r) => setImmediate(r));
+  settleFrames();  // silence: the wave sits at its quiet height
+  poll();          // then a loud reading
+  await new Promise((r) => setImmediate(r));
+  settleFrames();
+  // with an infinite attack the wave stays at its quiet height, not full
+  assert.ok(heightOf(paths[0]) < 0.35, `rose to ${heightOf(paths[0])}`);
+});
 
 test("start polls the level at 30 Hz and the wave drops to its quiet height", () => {
   const r = rig();

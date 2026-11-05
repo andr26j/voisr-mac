@@ -8,7 +8,8 @@ window.Voisr = window.Voisr || {};
      logo itself and what reduced motion keeps showing.
 
      The app stays resident, so it stops whenever the window is hidden or not
-     focused, and holds its frame until it can resume. After V.idle's wait
+     focused, or while the mark has no box (first run hides the shell), and
+     holds its frame until it can resume. After V.idle's wait
      without input it eases to a stop as well. wave.js runs the banner under the
      same rules, but its loop is built around the banner's three lines.
 
@@ -51,7 +52,7 @@ window.Voisr = window.Voisr || {};
   let timer = 0, last = 0, clock = 0, speed = 1;
 
   const canRun = () => !motionQuery.matches && document.visibilityState !== "hidden"
-    && document.hasFocus();
+    && document.hasFocus() && path.getClientRects().length > 0;
 
   const goal = () => (V.idle.isIdle() ? 0 : 1);
 
@@ -92,6 +93,9 @@ window.Voisr = window.Voisr || {};
     if (!goal() && speed <= STOPPED) stop();
   }
 
+  // Nothing else fires when first run ends and the shell is shown again, but
+  // the mark's box coming back does: a resize from nothing to its size.
+  if (window.ResizeObserver) new window.ResizeObserver(sync).observe(path.ownerSVGElement || path);
   document.addEventListener("visibilitychange", sync);
   window.addEventListener("focus", sync);
   window.addEventListener("blur", sync);

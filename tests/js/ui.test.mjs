@@ -13,6 +13,40 @@ register("toast", toastHost);
 const toastText = () =>
   toastHost.children.map((c) => (typeof c === "string" ? c : c.textContent)).join(" ");
 
+/* ---------- the push-to-talk key ---------- */
+
+test("keyLabel reads every label the app can show as a name and a symbol", () => {
+  const { keyLabel } = V.ui;
+  assert.deepEqual(keyLabel("Right Option (⌥)"), { name: "Right Option", symbol: "⌥" });
+  assert.deepEqual(keyLabel("Left Control (⌃)"), { name: "Left Control", symbol: "⌃" });
+  assert.deepEqual(keyLabel("Fn / Globe"), { name: "Fn / Globe", symbol: "fn" });
+  assert.deepEqual(keyLabel("Caps Lock"), { name: "Caps Lock", symbol: "⇪" });
+  assert.deepEqual(keyLabel("Right Shift"), { name: "Right Shift", symbol: "⇧" });
+  for (const bare of ["F13", "Space", "Tab", "Return", "Esc", "unset", "something_raw"]) {
+    assert.deepEqual(keyLabel(bare), { name: bare, symbol: null });
+  }
+});
+
+test("keyLabel: a missing label is 'unset', and stray spaces don't change the answer", () => {
+  const { keyLabel } = V.ui;
+  for (const none of ["", null, undefined, "  "]) {
+    assert.deepEqual(keyLabel(none), { name: "unset", symbol: null });
+  }
+  assert.deepEqual(keyLabel(" Right Option (⌥) "), { name: "Right Option", symbol: "⌥" });
+});
+
+test("captureGuard: only the 300 ms after a capture counts", (t) => {
+  t.mock.timers.enable({ apis: ["Date"] });
+  const guard = V.ui.captureGuard();
+  assert.equal(guard.recent(), false, "nothing captured yet");
+  guard.ended();
+  assert.equal(guard.recent(), true);
+  t.mock.timers.tick(299);
+  assert.equal(guard.recent(), true);
+  t.mock.timers.tick(1);
+  assert.equal(guard.recent(), false);
+});
+
 /* ---------- formatDuration ---------- */
 
 test("formatDuration renders sub-minute durations", () => {

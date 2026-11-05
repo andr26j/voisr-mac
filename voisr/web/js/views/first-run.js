@@ -10,14 +10,14 @@ window.Voisr = window.Voisr || {};
   const LEVEL_MS = 200;       // only "is the mic open?", not the shape of a voice
   const LISTENING_SPEED = 3.2;  // wave.js's listening pace
   const LEAVE_MS = 240;       // --slow, the fade into Home
-  const AFTER_CAPTURE_MS = 300;
   const tickSvg = (cls) => `<svg class="${cls}" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 4.8"/></svg>`;
 
   /* What's on screen. `step` is 1, 2, 3 or "done". */
   let step = null, enterApp = null, leaving = false;
   let panes = null, fallback = false;
   let poll = 0, pollInFlight = false, levelPoll = 0, levelInFlight = false;
-  let listening = false, capturing = false, captureEndedAt = -Infinity, waveEl = null;
+  let listening = false, capturing = false, waveEl = null;
+  const capture = V.ui.captureGuard();
   let drawn = "";             // what the current step last drew, so polls stay quiet
   const granted = new Set();  // grants already shown as on: only a new one draws its tick
 
@@ -208,31 +208,13 @@ window.Voisr = window.Voisr || {};
 
   /* ---------- step 2: key ---------- */
 
-  const SYMBOLS = [["Option", "⌥"], ["Command", "⌘"], ["Shift", "⇧"], ["Control", "⌃"],
-                   ["Caps Lock", "⇪"], ["Fn", "fn"]];
-
-  /* "Right Option (⌥)" gives ⌥ on the cap and "Right Option" under it. A key with
-     no symbol wears its own name. */
-  function keyParts(display) {
-    const named = /^(.*\S)\s*\(([^)]+)\)$/.exec(display);
-    if (named) return { cap: named[2], name: named[1] };
-    const hit = SYMBOLS.find(([word]) => display.includes(word));
-    if (hit) return { cap: hit[1], name: display };
-    return { cap: display, name: display, word: display.length > 3 };
-  }
-
-  /* The same key press can reach the page just after Python has answered, as a
-     second event the capture never saw (Settings has the same guard). Return
-     mustn't then press Change again, or Continue. */
-  const justCaptured = () => Date.now() - captureEndedAt < AFTER_CAPTURE_MS;
-
   async function changeKey() {
-    if (capturing || justCaptured()) return;
+    if (capturing || capture.recent()) return;
     capturing = true;
     await drawKey(false);
     // tryApi says why a timeout failed; Esc cancelling it needs no comment
     await V.ui.tryApi(V.api().capture_hotkey(), "Change key");
-    captureEndedAt = Date.now();
+    capture.ended();
     if (step !== 2) return;
     capturing = false;
     await drawKey(false);
@@ -243,14 +225,16 @@ window.Voisr = window.Voisr || {};
   async function drawKey(entering) {
     const res = await V.ui.tryApi(V.api().hotkey_display(), "Load shortcut");
     if (step !== 2) return;
-    const parts = keyParts((res && res.display) || "unset");
+    const key = V.ui.keyLabel(res && res.display);
+    // the step is about this key, so a key with no symbol wears its own name
+    const isWord = !key.symbol && key.name.length > 3;
     const on = capturing ? " is-listening" : "";
     paint("Pick the key you'll hold",
       "Hold it in any app and talk. Let go and the text lands where you were typing.",
-      [el("kbd", { class: `first-run-keycap${parts.word ? " is-word" : ""}${on}`, text: parts.cap }),
-       el("span", { class: `first-run-key-name${on}`, text: capturing ? "Press a key…" : parts.name }),
+      [el("kbd", { class: `first-run-keycap${isWord ? " is-word" : ""}${on}`, text: key.symbol || key.name }),
+       el("span", { class: `first-run-key-name${on}`, text: capturing ? "Press a key…" : key.name }),
        button("btn-secondary", "Change…", changeKey, { disabled: capturing ? "disabled" : null })],
-      [button("btn-primary btn-full", "Continue", () => { if (!justCaptured()) goTo(3); },
+      [button("btn-primary btn-full", "Continue", () => { if (!capture.recent()) goTo(3); },
               { disabled: capturing ? "disabled" : null })],
       entering);
   }
@@ -328,6 +312,14 @@ window.Voisr = window.Voisr || {};
     if (open && open.focus) open.focus();
   }
 
+  /* ---------- the keyboard ----------
+
+     First run hides the whole app, so a button Tab can't reach is a dead end.
+     On the document, because a redrawn step can leave focus on the body. */
+  function onKey(e) {
+    if (e.key === "Tab" && step) V.ui.walkTab(e, $("#first-run"));
+  }
+
   /* ---------- in and out ---------- */
 
   async function finish() {
@@ -373,9 +365,10 @@ window.Voisr = window.Voisr || {};
     window.addEventListener("focus", () => {
       if (step === 1 || step === 3) tick();
     });
+    document.addEventListener("keydown", onKey);
     return true;
   }
 
   V.views = V.views || {};
-  V.views.firstRun = { start, keyParts };
+  V.views.firstRun = { start };
 })(window.Voisr);

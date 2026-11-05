@@ -228,17 +228,6 @@ test("a failed save still lets them in: it just shows again next launch", async 
   assert.deepEqual(h.entered, ["app"]);
 });
 
-test("keyParts: the raw label becomes a symbol and a name", () => {
-  const { V } = mount();
-  const { keyParts } = V.views.firstRun;
-  assert.deepEqual(keyParts("Right Option (⌥)"), { cap: "⌥", name: "Right Option" });
-  assert.deepEqual(keyParts("Fn / Globe"), { cap: "fn", name: "Fn / Globe" });
-  assert.deepEqual(keyParts("Caps Lock"), { cap: "⇪", name: "Caps Lock" });
-  assert.deepEqual(keyParts("F13"), { cap: "F13", name: "F13", word: false });
-  assert.deepEqual(keyParts("Space"), { cap: "Space", name: "Space", word: true });
-  assert.deepEqual(keyParts("unset"), { cap: "unset", name: "unset", word: true });
-});
-
 const toastText = (h) => h.all(h.toast).map((n) => n.textContent).filter(Boolean)
   .concat((h.toast.children || []).filter((c) => typeof c === "string"));
 
@@ -473,4 +462,149 @@ test("an error drawing step 2 still lets the app start", async () => {
   assert.equal(await h.start(), false);
   assert.equal(h.shell.hidden, false);
   assert.equal(h["first-run"].hidden, true);
+});
+
+/* ---------- the keyboard ----------
+
+   The fake DOM has no focus and no layout, and only takes single selectors, so
+   this mount adds what the walker reads: focus() moves document.activeElement,
+   anything not marked hidden has a box, and querySelectorAll answers for the
+   controls. The real selector and WebKit's own keys need a real page. */
+function mountKeys(state) {
+  const h = mount(state);
+  const create = h.document.createElement;
+  h.document.createElement = (tag) => {
+    const node = create(tag);
+    node.focus = () => { h.document.activeElement = node; };
+    node.getClientRects = () => (node.hidden ? [] : [{}]);
+    const setAttribute = node.setAttribute;
+    node.setAttribute = (k, v) => {
+      setAttribute(k, v);
+      if (k === "disabled") node.disabled = true;  // reflected, as in a browser
+    };
+    return node;
+  };
+  h["first-run"].append(h.box);
+  h["first-run"].querySelectorAll = (sel) => {
+    assert.equal(sel, "button, input, select, summary");
+    return h.all(h.box).filter((n) => n.tagName === "BUTTON");
+  };
+  const press = (over = {}) => {
+    const ev = { key: "Tab", shiftKey: false, preventDefault() { ev.prevented = true; }, ...over };
+    h.document.dispatch("keydown", ev);
+    return ev;
+  };
+  const focused = () => h.document.activeElement && h.document.activeElement.textContent;
+  return { ...h, press, focused };
+}
+
+for (const [display, cap, name, isWord] of [
+  ["Right Option (⌥)", "⌥", "Right Option", false],
+  ["Fn / Globe", "fn", "Fn / Globe", false],
+  ["Caps Lock", "⇪", "Caps Lock", false],
+  ["F13", "F13", "F13", false],
+  ["Space", "Space", "Space", true],
+]) {
+  test(`the key step always has a keycap: ${display}`, async () => {
+    const h = mount({ panes: [ACC_ON, MIC_ON], display });
+    await h.start();
+    const keycap = h.box.querySelector(".first-run-keycap");
+    assert.equal(keycap.textContent, cap);
+    assert.equal(keycap.className.includes("is-word"), isWord);
+    assert.equal(h.box.querySelector(".first-run-key-name").textContent, name);
+  });
+}
+
+test("each step opens with focus on its headline, for a screen reader", async () => {
+  const h = mountKeys({ panes: [ACC_ON, MIC_ON] });
+  await h.start();
+  assert.equal(h.document.activeElement.textContent, h.heading());
+  h.btn("Continue").click();
+  await flush();
+  assert.equal(h.heading(), "Hold your key and say something");
+  assert.equal(h.document.activeElement.textContent, h.heading());
+});
+
+test("Tab reaches every button in the permissions step and wraps inside first run", async () => {
+  const h = mountKeys();
+  await h.start();
+  assert.equal(h.heading(), "Two permissions first");
+  const ev = h.press();
+  assert.equal(ev.prevented, true, "WebKit's own Tab would skip the buttons");
+  assert.equal(h.focused(), "Open Settings");
+  h.press();
+  assert.equal(h.focused(), "Reset Accessibility");
+  h.press();
+  assert.equal(h.focused(), "Relaunch Voisr");
+  h.press();
+  assert.equal(h.focused(), "Set up later");
+  h.press();
+  assert.equal(h.focused(), "Open Settings", "wraps; a disabled Continue is skipped");
+});
+
+test("Shift-Tab walks back, and from the headline lands on the last button", async () => {
+  const h = mountKeys();
+  await h.start();
+  h.press({ shiftKey: true });
+  assert.equal(h.focused(), "Set up later");
+  h.press({ shiftKey: true });
+  assert.equal(h.focused(), "Relaunch Voisr");
+});
+
+test("Tab reaches the key step's buttons, and stays inside first run during a capture", async () => {
+  const h = mountKeys({ panes: [ACC_ON, MIC_ON] });
+  let release;
+  h.s.capture = new Promise((r) => { release = r; });
+  await h.start();
+  assert.equal(h.heading(), "Pick the key you'll hold");
+  h.press();
+  assert.equal(h.focused(), "Change…");
+  h.press();
+  assert.equal(h.focused(), "Continue");
+  h.press();
+  assert.equal(h.focused(), "Change…");
+
+  h.btn("Change…").click();
+  await flush();
+  const ev = h.press();
+  assert.equal(ev.prevented, true, "nothing to reach, and Tab still doesn't leave");
+  release({ vk: 63, label: "Fn / Globe" });
+  await flush();
+  assert.equal(h.focused(), "Change…", "the capture hands focus back to its button");
+});
+
+test("Tab reaches Skip on the dictation step and Open Voisr at the end", async () => {
+  const h = mountKeys({ panes: [ACC_ON, MIC_ON] });
+  await h.start();
+  h.btn("Continue").click();
+  await flush();
+  h.press();
+  assert.equal(h.focused(), "Skip");
+  h.press();
+  assert.equal(h.focused(), "Skip", "one button wraps to itself");
+  h.s.history = [{ id: "a", ts: 1, words: 2, text: "Hello there" }];
+  h.window.dispatch("voisr:new-dictation");
+  await flush();
+  assert.equal(h.focused(), "Open Voisr");
+  h.press();
+  assert.equal(h.focused(), "Open Voisr");
+});
+
+test("a focused button that a redraw took away doesn't lose the walk", async () => {
+  const h = mountKeys();
+  await h.start();
+  h.document.activeElement = h.document.body;
+  h.press();
+  assert.equal(h.focused(), "Open Settings");
+});
+
+test("other keys are left alone, and leaving ends the walk", async () => {
+  const h = mountKeys();
+  await h.start();
+  assert.equal(h.press({ key: "a" }).prevented, undefined);
+  assert.equal(h.press().prevented, true);
+
+  h.btn("Set up later").click();
+  await flush();
+  assert.equal(h.press().prevented, undefined, "the app has its own keys now");
 });
