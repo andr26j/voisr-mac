@@ -9,19 +9,26 @@ const WEB = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", 
 const SRC = readFileSync(path.join(WEB, "js", "logo-wave.js"), "utf8");
 const HTML = readFileSync(path.join(WEB, "index.html"), "utf8");
 const MARKUP = HTML.match(/id="brand-wave" d="([^"]+)"/)[1];
-const FRAME = 1000 / 60;
+const FRAME = 1000 / 20;
 
-/* logo-wave.js with a hand-cranked display. The app stays resident, so these
-   count frames: a stopped wave must ask for none. */
+/* logo-wave.js with a hand-cranked clock. The app stays resident, so these
+   count timers: a stopped wave must leave none running. */
 function load({ reduced = false, focused = true, visible = "visible", mark = true } = {}) {
   const { window: win, document: doc } = installDom();
   const motion = { matches: reduced, listeners: [], addEventListener(_, fn) { this.listeners.push(fn); } };
   win.matchMedia = () => motion;
 
-  let nextId = 1;
+  let nextId = 1, now = 1000;
   const frames = new Map();
-  win.requestAnimationFrame = (fn) => { const id = nextId++; frames.set(id, fn); return id; };
-  win.cancelAnimationFrame = (id) => frames.delete(id);
+  win.setInterval = (fn, ms) => {
+    assert.equal(ms, FRAME);
+    const id = nextId++;
+    frames.set(id, fn);
+    return id;
+  };
+  win.clearInterval = (id) => frames.delete(id);
+  win.requestAnimationFrame = () => assert.fail("a frame callback wakes the page on every display frame");
+  win.performance = { now: () => now };
 
   doc.visibilityState = visible;
   let hasFocus = focused;
@@ -31,7 +38,6 @@ function load({ reduced = false, focused = true, visible = "visible", mark = tru
 
   (0, eval)(SRC);
 
-  let now = 1000;
   const h = {
     V: win.Voisr,
     brand,
@@ -39,11 +45,13 @@ function load({ reduced = false, focused = true, visible = "visible", mark = tru
     run(ms) {
       for (const end = now + ms; now < end;) {
         now += FRAME;
-        if (!frames.size) continue;
-        const [[id, fn]] = frames;
-        frames.delete(id);
-        fn(now);
+        for (const fn of [...frames.values()]) fn();
       }
+    },
+    /* The timer firing late, after a stall. */
+    stall(ms) {
+      now += ms;
+      for (const fn of [...frames.values()]) fn();
     },
     setVisibility(state) { doc.visibilityState = state; doc.dispatch("visibilitychange", {}); },
     setFocus(value) { hasFocus = value; win.dispatch(value ? "focus" : "blur", {}); },
@@ -109,10 +117,10 @@ test("it drifts while Voisr is in front", () => {
   assert.ok(Math.abs(h.clock() - 1) < .08, `clock ${h.clock()}`);
 });
 
-test("it paints 20 times a second, not on every frame of the display", () => {
+test("it paints 20 times a second", () => {
   const h = load();
   h.run(1000);
-  assert.ok(h.brand.paints >= 18 && h.brand.paints <= 20, `${h.brand.paints} paints`);
+  assert.equal(h.brand.paints, 20);
 });
 
 test("hidden, it asks for no frames and resumes from where it was", () => {
@@ -126,7 +134,7 @@ test("hidden, it asks for no frames and resumes from where it was", () => {
   h.run(61300);
   assert.equal(h.brand.d, held);
   h.setVisibility("visible");
-  h.run(FRAME * 3);
+  h.run(FRAME);
   assert.equal(h.frames.size, 1);
   // one frame's step is at most about 2.3 units
   assert.ok(distance(h.brand.d, held) < 3, "resumed with a jump");
@@ -183,9 +191,7 @@ test("a stall resumes where it was instead of leaping ahead", () => {
   const h = load();
   h.run(FRAME * 4);
   const before = h.clock();
-  const [[id, fn]] = h.frames;
-  h.frames.delete(id);
-  fn(1000 + 3000);
+  h.stall(3000);
   const moved = h.clock() - before;
   assert.ok(moved <= .11, `moved ${moved}`);
 });
