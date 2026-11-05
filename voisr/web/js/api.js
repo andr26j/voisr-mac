@@ -12,6 +12,22 @@ window.Voisr = window.Voisr || {};
     const HOUR = 3600, startOfToday = new Date().setHours(0, 0, 0, 0) / 1000;
     const today = (hours) => startOfToday + hours * HOUR;
     const yesterday = (hours) => startOfToday - 24 * HOUR + hours * HOUR;
+    /* Preview only, to walk first run: index.html?firstrun=off starts with
+       Accessibility off. Also =granted (already on), =stale, =mic (mic refused),
+       =listen (three panes), =fallback. Open Settings or Reset switches a pane
+       on after a moment, and holding Option stands in for holding the key. */
+    const FIRST_RUN = new URLSearchParams((window.location && window.location.search) || "").get("firstrun");
+    const mockPanes = {
+      microphone: FIRST_RUN === "mic" ? false : FIRST_RUN ? null : true,
+      accessibility: !["off", "listen"].includes(FIRST_RUN),
+      input_monitoring: FIRST_RUN !== "listen",
+    };
+    let mockStale = FIRST_RUN === "stale" || FIRST_RUN === "fallback";
+    let holdingKey = false;
+    const grantSoon = (key) => setTimeout(() => {
+      mockPanes[key] = true;
+      if (key === "accessibility") mockStale = false;
+    }, 1500);
     let mockHistory = [
       { id: "a1", ts: Math.min(today(16.2), now - 120), text: "Running ten minutes late. The 96 has stopped in Brunswick East for reasons nobody has explained.", words: 15, duration_s: 6 },
       { id: "a2", ts: Math.min(today(14.78), now - 3600), text: "Can you send me the updated quote by Friday? I'll sign it off once Sam has checked the measurements.", words: 18, duration_s: 8 },
@@ -25,6 +41,19 @@ window.Voisr = window.Voisr || {};
     // and what gets a warning are in voisr/snippets.py and are not repeated here.
     // Save a snippet called "email" to see the warning.
     const SAMPLE_WARNING = "Sample warning: the real ones come from the app.";
+    if (FIRST_RUN) {
+      mockHistory = [];
+      mockCfg.first_run_done = false;
+      window.addEventListener("keydown", (e) => { if (e.key === "Alt") holdingKey = true; });
+      window.addEventListener("keyup", (e) => {
+        if (e.key !== "Alt") return;
+        holdingKey = false;
+        mockPanes.microphone = mockPanes.microphone === null ? true : mockPanes.microphone;
+        mockHistory.push({ id: "first", ts: Date.now() / 1000, words: 10, duration_s: 4,
+                           text: "Testing, testing. Is this thing writing down everything I say?" });
+        window.dispatchEvent(new Event("voisr:new-dictation"));
+      });
+    }
     let mockSnippets = { "my email": "you@example.com", "sign off": "Thanks, Sam", "my address": "12 Example Street, Brunswick East VIC 3057" };
     let mockSuggestions = [{ id: "s1", heard: "whisper cpp", written: "whisper.cpp", seen: 1 }];
     let recording = false;
@@ -38,15 +67,22 @@ window.Voisr = window.Voisr || {};
       { value: "f18", label: "F18" }, { value: "f19", label: "F19" },
     ];
     window.pywebview = { api: {
-      get_permissions: async () => ({ panes: [
-        { key: "microphone", label: "Microphone", granted: true,
-          settings_url: "x-apple.systempreferences:", hotkey: false, effective: true },
-        { key: "accessibility", label: "Accessibility", granted: true,
-          settings_url: "x-apple.systempreferences:", hotkey: true, effective: true },
-      ]}),
-      reset_permission: async () => ({ ok: true }),
+      get_permissions: async () => {
+        // the Input Monitoring tap carries the key in listen mode and on the fallback
+        const listen = FIRST_RUN === "listen" || FIRST_RUN === "fallback";
+        const pane = (key, label, hotkey) => ({ key, label, granted: mockPanes[key],
+          settings_url: "x-apple.systempreferences:", hotkey,
+          effective: !(mockStale && key === "accessibility") });
+        return { fallback: FIRST_RUN === "fallback" && mockStale, panes: [
+          pane("microphone", "Microphone", false),
+          ...(listen ? [pane("input_monitoring", "Input Monitoring", true)] : []),
+          pane("accessibility", "Accessibility", !listen),
+        ] };
+      },
+      get_first_run: async () => ({ pending: mockCfg.first_run_done === false }),
+      reset_permission: async (key) => { grantSoon(key); return { ok: true }; },
       relaunch_app: async () => ({ ok: false, error: "dev mode" }),
-      open_settings_pane: async () => ({ ok: true }),
+      open_settings_pane: async (key) => { if (FIRST_RUN) grantSoon(key); return { ok: true }; },
       get_history: async () => [...mockHistory].sort((a, b) => b.ts - a.ts),
       get_stats: async () => ({
         total_words: 41300, dictations: mockHistory.length, avg_wpm: 132,
@@ -154,7 +190,7 @@ window.Voisr = window.Voisr || {};
       // mirrors Api.get_level(): a simulated voice (syllables and pauses)
       // while recording, null otherwise
       get_level: async () => {
-        if (!recording) return null;
+        if (!recording && !holdingKey) return null;
         const t = Date.now() / 1000;
         const syllable = Math.max(0, Math.sin(t * 9.5)) * (Math.sin(t * 1.3) > -0.6 ? 1 : 0);
         return 0.03 + 0.85 * syllable * (0.75 + 0.25 * Math.sin(t * 3.1));

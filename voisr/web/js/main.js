@@ -201,7 +201,6 @@ window.Voisr = window.Voisr || {};
     V.views.dictionary.init();
     V.views.snippets.init();
     V.views.settings.init();
-    V.palette.init();
 
     // The app still has to start even if this read fails, so fall back to
     // "system" rather than block boot -- tryApi's toast is enough to say why
@@ -214,7 +213,9 @@ window.Voisr = window.Voisr || {};
     const notice = await V.ui.tryApi(V.api().take_config_notice(), "Check settings file");
     if (notice && notice.notice) V.ui.toast(notice.notice);
 
-    show("home");
+    // The palette waits too: first run has nothing it could jump to.
+    const enterApp = () => { V.palette.init(); show("home"); };
+    if (!await V.views.firstRun.start(enterApp)) enterApp();
   }
 
   window.addEventListener("pywebviewready", init);

@@ -68,6 +68,9 @@ CONFIG_VALIDATORS = {
     "use_screen_context": _is_bool, "learn_from_edits": _is_bool,
     "dictionary_auto_add": _is_bool, "snippets": snippets.is_valid,
     "dismissed_banners": _is_str_list,
+    # not in DEFAULT_CONFIG: missing means first run hasn't been decided yet
+    # (Api.first_run_pending), which is how an existing install is recognised
+    "first_run_done": _is_bool,
 }
 
 
