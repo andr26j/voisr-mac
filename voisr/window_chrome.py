@@ -56,11 +56,44 @@ def apply_chrome(native_window, appkit=None) -> dict:
     # transparent titlebar doesn't remove: a white or grey band over the flat
     # sidebar, and it follows the appearance, so this has to be the view's own
     # colour rather than a one-off change to its layer.
+    applied["band"] = False
     try:
-        for view in native_window.contentView().superview().subviews():
-            if "TitlebarContainer" in type(view).__name__:
-                view.setBackgroundColor_(appkit.NSColor.clearColor())
+        view = _titlebar_container(native_window, appkit)
+        if view is not None and view.respondsToSelector_("setBackgroundColor:"):
+            view.setBackgroundColor_(appkit.NSColor.clearColor())
+            applied["band"] = True
     except Exception:
         pass
 
     return applied
+
+
+def _titlebar_container(native_window, appkit):
+    """The view pywebview paints the band on: the traffic lights' ancestor that
+    sits directly under the window's frame view. Found from the close button,
+    so no private class name is needed; if the button isn't there, fall back
+    to the class name, which is what this used to depend on alone."""
+    frame = native_window.contentView().superview()
+    try:
+        view = native_window.standardWindowButton_(appkit.NSWindowCloseButton)
+        while view is not None and view.superview() is not None:
+            if view.superview() == frame:
+                return view
+            view = view.superview()
+    except Exception:
+        pass
+    for view in frame.subviews():
+        if "TitlebarContainer" in type(view).__name__:
+            return view
+    return None
+
+
+def band_status(chrome, cleared_before, final):
+    """(cleared, message) after one apply_chrome pass. The first pass can run
+    before the titlebar view exists, so a miss is only worth saying on the
+    final pass, and only if no earlier pass cleared the band."""
+    cleared = cleared_before or bool(chrome.get("band"))
+    if final and not cleared:
+        return cleared, ("Voisr chrome: titlebar band not cleared; a white or "
+                         "grey strip may show over the sidebar")
+    return cleared, None

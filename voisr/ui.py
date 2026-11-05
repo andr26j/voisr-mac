@@ -32,7 +32,7 @@ from voisr.snippets import (SnippetError, find_snippet, has_speech_evidence, nee
 from voisr.status_item import StatusItem
 from voisr.suggestions import (ACCEPTED, AUTO_ADDED, DISMISSED, PENDING, SuggestionStore,
                                dictionary_allows, ready_to_auto_add)
-from voisr.window_chrome import apply_chrome, launch_background
+from voisr.window_chrome import apply_chrome, band_status, launch_background
 
 
 def _window_background(api):
@@ -3137,12 +3137,18 @@ def main():
 
             from PyObjCTools import AppHelper
 
-            def apply_native_chrome(native):
+            band = {"cleared": False}
+
+            def apply_native_chrome(native, final=False):
                 # Chrome is AppKit and must be on the main thread. Cosmetic:
                 # failures are logged, not fatal.
                 chrome = apply_chrome(native)
                 if not chrome["titlebar"]:
                     print("Voisr chrome: titlebar setup failed", flush=True)
+                band["cleared"], problem = band_status(
+                    chrome, band["cleared"], final)
+                if problem:
+                    print(problem, flush=True)
 
             def native_setup():
                 apply_app_appearance(api.get_config().get("appearance", "system"))
@@ -3153,9 +3159,10 @@ def main():
                     apply_native_chrome(native)
                     try:
                         window.events.loaded += lambda *a: AppHelper.callAfter(
-                            apply_native_chrome, native)
+                            apply_native_chrome, native, True)
                     except Exception:
-                        pass
+                        # no second pass will come, so this one is the last
+                        apply_native_chrome(native, True)
                 status.create()
 
             AppHelper.callAfter(native_setup)
