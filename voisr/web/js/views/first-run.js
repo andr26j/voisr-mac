@@ -75,6 +75,8 @@ window.Voisr = window.Voisr || {};
       box.classList.remove("is-entering");
       void box.offsetWidth;  // force reflow, so the entrance restarts
       box.classList.add("is-entering");
+    } else {
+      box.classList.remove("is-entering");  // or the new children would play it
     }
     if (hadFocus) {
       const main = box.querySelector(".btn-primary");

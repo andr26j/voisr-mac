@@ -426,3 +426,20 @@ test("the level poll only runs on step 3", async () => {
   await flush();
   assert.equal(levelPoll(), undefined);
 });
+
+test("a repaint in place doesn't replay the step's entrance", async () => {
+  const h = await atKey();
+  assert.ok(h.box.classList.contains("is-entering"), "a new step does animate in");
+  h.btn("Change…").click();
+  await flush();
+  assert.equal(h.box.classList.contains("is-entering"), false);
+});
+
+test("a grant arriving on a poll doesn't replay the entrance either", async () => {
+  const h = mount();
+  await h.start();
+  h.s.panes = [ACC_ON, MIC_LATER];
+  h.window.dispatch("focus");
+  await flush();
+  assert.equal(h.box.classList.contains("is-entering"), false);
+});
