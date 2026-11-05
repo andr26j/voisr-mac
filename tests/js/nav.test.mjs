@@ -7,11 +7,21 @@ import { makeNode } from "./dom.mjs";
    active item. The fake DOM has no layout, so each item carries the
    offsetTop/offsetHeight a real sidebar would report. */
 const VIEWS = ["home", "history", "dictionary", "settings"];
+const PAGES = VIEWS.filter((v) => v !== "settings");
 
 function mountNav() {
   const env = loadVoisr(["js/ui.js", "js/main.js"]);
   const renders = [];
+  const opened = [];
+  let closes = 0;
   env.V.views = Object.fromEntries(VIEWS.map((v) => [v, { render: (o) => renders.push([v, o]) }]));
+  env.V.views.settings = {
+    open: (o) => opened.push(o),
+    close: () => {
+      closes += 1;
+      env.window.dispatch("voisr:settings-closed", {});
+    },
+  };
 
   const nav = makeNode("nav");
   const glide = makeNode("span");
@@ -35,13 +45,15 @@ function mountNav() {
     return b;
   });
   env.document.body.append(nav);
-  for (const v of VIEWS) {
+  const pages = {};
+  for (const v of PAGES) {
     const view = makeNode("section");
+    pages[v] = view;
     view.className = "view";
     env.register(`view-${v}`, view);
     env.document.body.append(view);
   }
-  return { ...env, glide, items, liveAt, renders };
+  return { ...env, glide, items, liveAt, renders, opened, pages, closes: () => closes };
 }
 
 test("the first paint places the highlight under Home without a glide", () => {
@@ -83,4 +95,59 @@ test("opening Home tells it so, so its stats show as they are", () => {
   const n = mountNav();
   n.V.show("home");
   assert.deepEqual(n.renders.at(-1), ["home", { entering: true }]);
+});
+
+test("Settings opens over the page, leaving the page as it was", () => {
+  const n = mountNav();
+  n.V.show("history");
+  const rendersBefore = n.renders.length;
+  n.V.show("settings", { section: "key" });
+  assert.deepEqual(n.opened, [{ section: "key" }]);
+  assert.equal(n.pages.history.hidden, false, "the page stays behind it");
+  assert.equal(n.renders.length, rendersBefore, "and isn't rendered again");
+  assert.ok(n.items[3].classList.contains("active"), "the sidebar shows where you are");
+  assert.equal(n.glide.style.transform, "translateY(138px)");
+});
+
+test("closing Settings puts the sidebar back on the page behind it", () => {
+  const n = mountNav();
+  n.V.show("history");
+  n.V.show("settings");
+  n.V.views.settings.close();
+  assert.ok(n.items[1].classList.contains("active"));
+  assert.ok(!n.items[3].classList.contains("active"));
+  assert.equal(n.glide.style.transform, "translateY(46px)");
+});
+
+test("closing Settings refreshes Home and Dictionary, which show what it changes", () => {
+  for (const page of ["home", "dictionary"]) {
+    const n = mountNav();
+    n.V.show(page);
+    n.renders.length = 0;
+    n.V.show("settings");
+    n.V.views.settings.close();
+    assert.deepEqual(n.renders.map((r) => r[0]), [page]);
+  }
+});
+
+test("closing Settings leaves History alone, so its selected row survives", () => {
+  const n = mountNav();
+  n.V.show("history");
+  n.renders.length = 0;
+  n.V.show("settings");
+  n.V.views.settings.close();
+  assert.deepEqual(n.renders, []);
+});
+
+test("the palette going to a page closes Settings on the way", () => {
+  const n = mountNav();
+  n.V.show("home");
+  n.V.show("settings");
+  const before = n.closes();
+  n.renders.length = 0;
+  n.V.show("history");
+  assert.equal(n.closes(), before + 1);
+  assert.deepEqual(n.renders.map((r) => r[0]), ["history"], "Home is being left, so it isn't redrawn");
+  assert.equal(n.pages.history.hidden, false);
+  assert.equal(n.pages.home.hidden, true);
 });

@@ -256,185 +256,234 @@
       <p class="page-note">In a sentence, the phrase stays as spoken. History shows only the phrase.</p>
     </section>
 
-    <!-- SETTINGS -->
-    <section class="view" id="view-settings" hidden>
-      <header class="page-head">
-        <h1>Settings</h1>
-        <p class="sub">Stored in <code>config.json</code>, shared with the command-line modes.</p>
-      </header>
+  </main>
+</div>
 
-      <div class="settings-section">
-        <h2 class="section-title">Dictation</h2>
-        <div class="setting-row">
-          <div>
-            <h3>Clipboard fallback</h3>
-            <p class="setting-desc">Copied when auto-paste is off or blocked. After a successful auto-paste your previous clipboard is put back, so the dictation is not left on it.</p>
-          </div>
-          <span class="pill">Automatic</span>
-        </div>
-        <div class="setting-row">
-          <div>
-            <h3>Auto-paste in hotkey mode</h3>
-            <p class="setting-desc">After a push-to-talk dictation, paste the text straight into the app you're in (Cmd-V). Needs Accessibility permission.</p>
-            <details class="more">
-              <summary>How consecutive dictations join</summary>
-              <p class="setting-desc">Dictations within five minutes of each other are joined with a space unless you typed in between; a mouse click alone does not count, so you may see a leading space after clicking into a new field.</p>
-            </details>
-          </div>
-          <label class="switch">
-            <input type="checkbox" id="paste-toggle">
-            <span class="slider" aria-hidden="true"></span>
-          </label>
-        </div>
-        <div class="setting-row setting-row-stack">
-          <div>
-            <h3>Transcription model</h3>
-            <p class="setting-desc">All models run on this Mac and are English only. Extra models are optional downloads. <span id="model-system"></span></p>
-          </div>
-        </div>
-        <div id="model-list" class="model-list"></div>
-        <div class="setting-row">
-          <div>
-            <h3>Keep model loaded</h3>
-            <p class="setting-desc">Voisr loads the model when you start talking and keeps it in memory, so the next dictation skips the model load. That saved roughly half a second to a second in tests, and varies. While it is loaded it uses about 0.7&nbsp;GB of memory for Small and 0.3&nbsp;GB for Base (more for bigger models), then frees it after the time you pick. &ldquo;Immediately&rdquo; reloads the model for every dictation and keeps no memory. Everything stays on this Mac.</p>
-          </div>
-          <select id="unload-select" class="select" aria-label="Keep model loaded">
-            <option value="never">Never unload</option>
-            <option value="immediately">Immediately</option>
-            <option value="min2">After 2 minutes</option>
-            <option value="min5">After 5 minutes</option>
-            <option value="min10">After 10 minutes</option>
-            <option value="min15">After 15 minutes</option>
-            <option value="hour1">After 1 hour</option>
-          </select>
-        </div>
-      </div>
+<!-- SETTINGS -->
+<!-- A pop-up over whichever page is open, not a page of its own. -->
+<div id="settings-scrim" class="settings-scrim" tabindex="-1" hidden>
+  <div id="settings-dialog" class="settings-dialog" role="dialog" aria-modal="true" aria-label="Settings" tabindex="-1">
+    <nav id="settings-nav" class="settings-nav" aria-label="Settings sections">
+      <span class="date-label settings-nav-title">Settings</span>
+      <button type="button" class="settings-nav-item" data-section="dictation">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+        Dictation
+      </button>
+      <button type="button" class="settings-nav-item" data-section="models">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M9 1v3"/><path d="M15 1v3"/><path d="M9 20v3"/><path d="M15 20v3"/><path d="M20 9h3"/><path d="M20 14h3"/><path d="M1 9h3"/><path d="M1 14h3"/></svg>
+        Models
+      </button>
+      <button type="button" class="settings-nav-item" data-section="key">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="5" rx="2"/><path d="M6 9h.01"/><path d="M10 9h.01"/><path d="M14 9h.01"/><path d="M18 9h.01"/><path d="M7 15h10"/></svg>
+        Push-to-talk
+      </button>
+      <button type="button" class="settings-nav-item" data-section="appearance">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 0 0 20z" fill="currentColor"/></svg>
+        Appearance
+      </button>
+      <button type="button" class="settings-nav-item" data-section="privacy">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.7 9a1 1 0 0 1-.6 0C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.2-2.7a1.2 1.2 0 0 1 1.6 0C14.5 3.8 17 5 19 5a1 1 0 0 1 1 1z"/></svg>
+        Privacy &amp; data
+      </button>
+      <p class="settings-foot">Stored in config.json, shared with the command-line modes.</p>
+    </nav>
 
-      <div class="settings-section">
-        <h2 class="section-title">Push-to-talk</h2>
-        <div class="setting-row">
-          <div>
-            <h3>Push-to-talk key</h3>
-            <p class="setting-desc">Hold this key in any app to dictate; release to transcribe and paste. Needs Accessibility permission (System Settings &rarr; Privacy &amp; Security).</p>
-            <p class="setting-status" id="hotkey-status"></p>
+    <div id="settings-body" class="settings-body">
+      <section class="settings-section" data-section="dictation">
+        <h1 class="heading-serif settings-title">Dictation</h1>
+        <div class="group">
+          <div class="setting-row has-more">
+            <div class="setting-copy">
+              <h3>Auto-paste in hotkey mode</h3>
+              <p class="setting-desc">Paste straight into the app you're in. Needs Accessibility.</p>
+              <details class="more">
+                <summary>How consecutive dictations join</summary>
+                <p class="setting-desc">Dictations within five minutes of each other are joined with a space unless you typed in between; a mouse click alone does not count, so you may see a leading space after clicking into a new field.</p>
+              </details>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="paste-toggle" aria-label="Auto-paste in hotkey mode">
+              <span class="slider" aria-hidden="true"></span>
+            </label>
           </div>
-          <div class="hotkey-control">
-            <span class="pill" id="hotkey-current">…</span>
-            <button type="button" class="btn-secondary" id="hotkey-capture">Change…</button>
+          <div class="setting-row">
+            <div class="setting-copy">
+              <h3>Clipboard fallback</h3>
+              <p class="setting-desc">Copied when auto-paste is off or blocked. After a successful auto-paste your previous clipboard is put back.</p>
+            </div>
+            <span class="pill">Automatic</span>
+          </div>
+          <div class="setting-row has-more">
+            <div class="setting-copy">
+              <h3>Keep model loaded</h3>
+              <p class="setting-desc">Keeps the next dictation from waiting on a model load. Holds about 0.7&nbsp;GB for Small while loaded.</p>
+              <details class="more">
+                <summary>More</summary>
+                <p class="setting-desc">Voisr loads the model when you start talking and keeps it in memory, so the next dictation skips the model load. That saved roughly half a second to a second in tests, and varies. While it is loaded it uses about 0.7&nbsp;GB of memory for Small and 0.3&nbsp;GB for Base (more for bigger models), then frees it after the time you pick. &ldquo;Immediately&rdquo; reloads the model for every dictation and keeps no memory. Everything stays on this Mac.</p>
+              </details>
+            </div>
+            <select id="unload-select" class="select" aria-label="Keep model loaded">
+              <option value="never">Never unload</option>
+              <option value="immediately">Immediately</option>
+              <option value="min2">After 2 minutes</option>
+              <option value="min5">After 5 minutes</option>
+              <option value="min10">After 10 minutes</option>
+              <option value="min15">After 15 minutes</option>
+              <option value="hour1">After 1 hour</option>
+            </select>
           </div>
         </div>
-        <div class="setting-row">
-          <div>
-            <h3>Recording widget</h3>
-            <p class="setting-desc">Show the floating pill at the bottom of your screen while you hold the push-to-talk key — waveform while listening, then a tick when your text is ready.</p>
-          </div>
-          <label class="switch">
-            <input type="checkbox" id="widget-toggle">
-            <span class="slider" aria-hidden="true"></span>
-          </label>
-        </div>
-        <div class="setting-row">
-          <div>
-            <h3>Launch at login</h3>
-            <p class="setting-desc">Start Voisr automatically so the push-to-talk key always works.</p>
-          </div>
-          <label class="switch">
-            <input type="checkbox" id="launch-toggle">
-            <span class="slider" aria-hidden="true"></span>
-          </label>
-        </div>
-      </div>
+      </section>
 
-      <div class="settings-section">
-        <h2 class="section-title">Appearance</h2>
-        <div class="setting-row setting-row-stack">
-          <div>
-            <h3>Theme</h3>
-            <p class="setting-desc">Follow macOS, or pin Voisr to light or dark. An appearance choice is the one control that should show its own result, so it is picked by picture — like the pill themes below.</p>
+      <section class="settings-section" data-section="models" hidden>
+        <h1 class="heading-serif settings-title">Models</h1>
+        <p class="settings-lead">All models run on this Mac and are English only. <span id="model-system"></span></p>
+        <div id="model-list" class="group model-list"></div>
+      </section>
+
+      <section class="settings-section" data-section="key" hidden>
+        <h1 class="heading-serif settings-title">Push-to-talk</h1>
+        <div class="group">
+          <div class="setting-row">
+            <div class="setting-copy">
+              <h3>Push-to-talk key</h3>
+              <p class="setting-desc">Hold it in any app to dictate; release to transcribe and paste.</p>
+              <p class="setting-status" id="hotkey-status"></p>
+            </div>
+            <div class="key-control" id="key-control">
+              <kbd class="keycap" id="hotkey-cap" hidden></kbd>
+              <span class="key-name" id="hotkey-current" aria-live="polite">…</span>
+              <button type="button" class="btn-quiet" id="hotkey-capture">Change</button>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div class="setting-copy">
+              <h3>Recording widget</h3>
+              <p class="setting-desc">Show the floating pill while you hold the key.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="widget-toggle" aria-label="Recording widget">
+              <span class="slider" aria-hidden="true"></span>
+            </label>
+          </div>
+          <div class="setting-row">
+            <div class="setting-copy">
+              <h3>Launch at login</h3>
+              <p class="setting-desc">Start Voisr automatically so the key always works.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="launch-toggle" aria-label="Launch at login">
+              <span class="slider" aria-hidden="true"></span>
+            </label>
           </div>
         </div>
-        <div id="appearance-grid" class="thumb-grid" role="radiogroup" aria-label="Theme"></div>
-        <div class="setting-row">
-          <div>
-            <h3>Pill theme</h3>
-            <p class="setting-desc">Color and animation of the recording pill while you dictate. Applies from your next dictation.</p>
+      </section>
+
+      <section class="settings-section" data-section="appearance" hidden>
+        <h1 class="heading-serif settings-title">Appearance</h1>
+        <div class="settings-block">
+          <h3 class="settings-subhead">Theme</h3>
+          <div class="group">
+            <div id="appearance-grid" class="pick-grid" role="radiogroup" aria-label="Theme"></div>
           </div>
         </div>
-        <div id="theme-grid" class="theme-grid" role="radiogroup" aria-label="Pill theme"></div>
-        <div class="setting-row">
-          <div>
-            <h3>Pill colour</h3>
-            <p class="setting-desc">Recolour the bars of any theme. The animation stays.</p>
-          </div>
-          <div class="color-control">
-            <button type="button" id="color-open" class="swatch-btn">
-              <span class="swatch" id="color-swatch"></span>
-              <code id="color-hex">theme default</code>
-            </button>
-            <div id="color-popover" class="popover" hidden>
-              <div class="wheel-wrap">
-                <canvas id="color-wheel" width="200" height="200" aria-label="Custom bar colour"></canvas>
-                <div id="wheel-thumb" hidden></div>
+        <div class="settings-block">
+          <h3 class="settings-subhead">Pill</h3>
+          <div class="group">
+            <div id="theme-grid" class="pick-grid" role="radiogroup" aria-label="Pill theme"></div>
+            <div class="setting-row">
+              <div class="setting-copy">
+                <h3>Pill colour</h3>
+                <p class="setting-desc">Recolour the bars, or Quiet's transcribing dots. The animation stays.</p>
               </div>
-              <div class="mini-pill" id="color-preview">
-                <span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span><span class="mb"></span>
-              </div>
-              <button type="button" class="btn-secondary" id="color-reset">Theme default</button>
+              <button type="button" id="color-open" class="btn-quiet swatch-btn" aria-expanded="false">
+                <span class="swatch" id="color-swatch"></span>
+                <span id="color-hex">Theme default</span>
+              </button>
             </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      <div class="settings-section">
-        <h2 class="section-title">Privacy & data</h2>
-        <div class="setting-row">
-          <div>
-            <h3>Privacy</h3>
-            <p class="setting-desc">Audio is recorded to a temp file, transcribed by whisper.cpp on this Mac, then deleted. No accounts, no telemetry, and your audio and text never leave this Mac.</p>
+      <section class="settings-section" data-section="privacy" hidden>
+        <h1 class="heading-serif settings-title">Privacy &amp; data</h1>
+        <div class="settings-block">
+          <div class="group">
+            <div class="setting-row has-more">
+              <div class="setting-copy">
+                <h3>Read the text around your cursor</h3>
+                <p class="setting-desc">Spells names on screen correctly and checks your paste landed. Never reads password fields or password managers.</p>
+                <details class="more">
+                  <summary>More</summary>
+                  <p class="setting-desc">While you dictate, Voisr reads the app you are in: the field you are typing in, the window title and nearby labels. That spells names on screen correctly and checks that your paste landed. The text stays in memory for that dictation and is never saved. It never reads password fields or password managers. Off: Voisr reads no text from other apps.</p>
+                </details>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="screen-context-toggle" aria-label="Read the text around your cursor">
+                <span class="slider" aria-hidden="true"></span>
+              </label>
+            </div>
+            <div class="setting-row has-more">
+              <div class="setting-copy">
+                <h3>Learn from my corrections</h3>
+                <p class="setting-desc">For up to a minute after a paste, re-reads that field to spot words you fixed. Only the corrected words are saved.</p>
+                <details class="more">
+                  <summary>More</summary>
+                  <p class="setting-desc">For up to a minute after a paste, Voisr re-reads that field to spot words you fixed, and suggests them in Dictionary. Only the corrected words are saved. Needs reading the text around your cursor.</p>
+                </details>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="learn-toggle" aria-label="Learn from my corrections">
+                <span class="slider" aria-hidden="true"></span>
+              </label>
+            </div>
+            <div class="setting-row has-more">
+              <div class="setting-copy">
+                <h3>Add safe corrections automatically</h3>
+                <p class="setting-desc">After the same fix twice, adds it if it only changes capitals or the spelling of one unusual word.</p>
+                <details class="more">
+                  <summary>More</summary>
+                  <p class="setting-desc">After you make the same fix twice, Voisr adds it to Dictionary without asking, if it only changes capitals or the spelling of one unusual word. Never common words or numbers. Everything else waits for you to accept it, and Dictionary marks what was added so you can remove it.</p>
+                </details>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="auto-add-toggle" aria-label="Add safe corrections automatically">
+                <span class="slider" aria-hidden="true"></span>
+              </label>
+            </div>
           </div>
-          <span class="pill pill-good">Local only</span>
         </div>
-        <div class="setting-row">
-          <div>
-            <h3>Read the text around your cursor</h3>
-            <p class="setting-desc">While you dictate, Voisr reads the app you are in: the field you are typing in, the window title and nearby labels. That spells names on screen correctly and checks that your paste landed. The text stays in memory for that dictation and is never saved. It never reads password fields or password managers. Off: Voisr reads no text from other apps.</p>
+        <div class="settings-block">
+          <div class="group">
+            <div class="setting-row">
+              <div class="setting-copy">
+                <h3>Audio stays here</h3>
+                <p class="setting-desc">Goes to a temp file, whisper.cpp transcribes it on this Mac, then it's deleted. No accounts, no telemetry.</p>
+              </div>
+              <span class="pill">Local only</span>
+            </div>
+            <div class="setting-row">
+              <div class="setting-copy">
+                <h3>Clear all history</h3>
+                <p class="setting-desc">Permanently delete every stored dictation. This cannot be undone.</p>
+              </div>
+              <button type="button" id="clear-history" class="btn-danger">Clear…</button>
+            </div>
           </div>
-          <label class="switch">
-            <input type="checkbox" id="screen-context-toggle">
-            <span class="slider" aria-hidden="true"></span>
-          </label>
         </div>
-        <div class="setting-row">
-          <div>
-            <h3>Learn from my corrections</h3>
-            <p class="setting-desc">For up to a minute after a paste, Voisr re-reads that field to spot words you fixed, and suggests them in Dictionary. Only the corrected words are saved. Needs reading the text around your cursor.</p>
-          </div>
-          <label class="switch">
-            <input type="checkbox" id="learn-toggle">
-            <span class="slider" aria-hidden="true"></span>
-          </label>
-        </div>
-        <div class="setting-row">
-          <div>
-            <h3>Add safe corrections automatically</h3>
-            <p class="setting-desc">After you make the same fix twice, Voisr adds it to Dictionary without asking, if it only changes capitals or the spelling of one unusual word. Never common words or numbers. Everything else waits for you to accept it, and Dictionary marks what was added so you can remove it.</p>
-          </div>
-          <label class="switch">
-            <input type="checkbox" id="auto-add-toggle">
-            <span class="slider" aria-hidden="true"></span>
-          </label>
-        </div>
-        <div class="setting-row">
-          <div>
-            <h3>Clear all history</h3>
-            <p class="setting-desc">Permanently delete every stored dictation. This cannot be undone.</p>
-          </div>
-          <button type="button" id="clear-history" class="btn-danger">Clear…</button>
-        </div>
-      </div>
-    </section>
+      </section>
+    </div>
+  </div>
 
-  </main>
+  <!-- Beside the dialog, not in it: the scrolling pane would cut it off. -->
+  <div id="color-popover" class="popover" role="dialog" aria-label="Pill colour" hidden>
+    <div class="wheel-wrap">
+      <canvas id="color-wheel" width="200" height="200" aria-label="Custom pill colour"></canvas>
+      <div id="wheel-thumb" hidden></div>
+    </div>
+    <div class="pill-preview" id="color-preview"></div>
+    <button type="button" class="btn-quiet" id="color-reset">Theme default</button>
+  </div>
 </div>
 
 <div id="palette" class="palette-scrim" hidden>

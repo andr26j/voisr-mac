@@ -185,7 +185,7 @@ HOTKEY_OPTIONS = [
 ]
 
 # Adding a theme? Also update: widget.html (theme CSS + THEME_VALUES), the
-# Settings picker's preview (.mini-pill in css/components.css), and the
+# Settings picker's preview (.pill-preview in css/views.css), and the
 # get_pill_themes mock in js/api.js.
 # test_widget_html_covers_all_pill_themes guards widget.html.
 PILL_THEMES = [
